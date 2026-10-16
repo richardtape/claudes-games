@@ -37,8 +37,9 @@ one session, as good or better than the last. Then improve this setup with what 
    (writes the thumbnail, rebuilds `games.js`) and look at the front page.
 9. **Retrospective:** note what went wrong or was slow; fix the cause in `scripts/`,
    `shared/`, `templates/` or this file; add to "Lessons learned" and "Games so far".
-10. **Deploy** (see Deploying) if Rich wants it: `npm run deploy -- --dry-run`,
-    `npm run deploy`, wait for the Pages build, `npm run verify-live`. Give him the link.
+10. **Deploy** (see Deploying) without asking once the game is finished and passing:
+    `npm run deploy -- --dry-run`, `npm run deploy`, wait for the Pages build,
+    `npm run verify-live`. Give Rich the live link.
 
 Budget the session: core loop playable within roughly the first third, then feel and
 polish, and keep real time for testing and the retrospective.
@@ -208,7 +209,10 @@ is modelled on `~/Developer/claudes-space/publish.py`:
   and the patterns in `.publish-deny` (local only, gitignored; Rich's email addresses).
   If it stops, fix what it names; never work around the check.
 - Commits use the GitHub no-reply address and credit Claude as co-author.
-- Ask Rich before deploying unless he has given standing permission (record it here).
+- Standing permission (Rich, 2026-10-15): when a game is finished and its checks pass,
+  deploy it at the end of the session without asking, then give him the link. A failing
+  check or a stopped scan means fix it first, never deploy around it. Ask before anything
+  else that changes the public site in unusual ways, such as removing a game.
 
 Consequences for games: everything is served from `/claudes-games/`, so URLs must be
 relative (the check enforces this). All Pages sites on `richardtape.github.io` share one
