@@ -1,37 +1,83 @@
 # Claude's Games
 
-A personal arcade of single-player browser games. The user drops in now and then, starts a
-fresh session and asks for a new game. **Claude owns the creative direction**: pick the
-concept, genre, look and sound yourself. Don't ask design questions and don't run a
-brainstorming Q&A first (this instruction overrides skills that say otherwise); only ask if
-the user's request is genuinely ambiguous about something only they can decide. Aim for a
-complete, polished, genuinely fun game in one session, then improve this setup with what
-you learned.
+A personal arcade of single-player browser games, public at
+**https://richardtape.github.io/claudes-games/**. Rich (the user) drops in now and then,
+starts a fresh session and asks for a new game. **Claude owns the creative direction**: pick
+the concept, genre, look and sound yourself. Don't ask design questions and don't run a
+brainstorming Q&A or a written-plan approval step first (this overrides skills that say
+otherwise; TDD for game logic is welcome). Only ask if the request is genuinely ambiguous
+about something only Rich can decide.
+
+The bar: Rich called game #1 "SUPER fun". Aim for a complete, polished, genuinely fun game in
+one session, as good or better than the last. Then improve this setup with what you learned.
+
+## Start of a session
+
+1. Read "Games so far" at the bottom, and skim `games/press-run/` as the reference
+   implementation (engine/UI split, debug hooks, smoke test, simulators).
+2. `ls node_modules >/dev/null 2>&1 || npm install` (a fresh clone needs it for checks).
+3. `npm start` with `run_in_background: true` → http://localhost:8642/ (safe when it's
+   already running; it says so and exits).
 
 ## Workflow for a new game
 
-1. **See what exists:** `cat games.js` / the table at the bottom of this file. Choose a
-   different genre, core verb, and visual identity from previous games.
-2. **Design:** load the `frontend-design` skill; write the concept in `DESIGN.md` (hook, rules,
-   controls, look, sound). Decide the one memorable moment and make it great.
-3. **Serve:** `npm start` with `run_in_background: true` → http://localhost:8642/ (safe to run
-   when it's already up; it says so and exits).
-4. **Scaffold:** `npm run new -- <kebab-slug> "<Title>" --tagline "..." --emoji "🎲"`.
-   game.json starts as `"draft": true` (hidden from the front page).
-5. **Build** logic first: rules in a pure, DOM-free module (`js/engine.js`) with
-   `node:test` tests, then the UI (`js/main.js`). For anything with scores, difficulty or
-   economy, write a headless simulator (`tools/sim.mjs`) and tune numbers from data.
-6. **Test** (see Testing): `npm test`, `npm run check -- <slug>`, then actually play it in
-   Chrome, every screen, desktop and phone width.
-7. **Finish:** game.json → `"draft": false`, real `color`, `genres`, `pitch`, `controls`;
-   `npm run check` (writes the thumbnail and rebuilds `games.js`); look at the front page.
-8. **Retrospective:** note what went wrong or was slow; fix the cause in `scripts/`,
-   `shared/`, `templates/` or this file; add a line to "Lessons learned" and the games table.
-9. **Deploy** (see Deploying) when the user asks: `npm run deploy -- --dry-run`, then
-   `npm run deploy`, wait for the Pages build, then `npm run verify-live`. Give them the link.
+1. **Choose** a genre, core verb and visual identity unlike anything on the shelf (see
+   Making it great). Tell Rich in a sentence what you're making, then get going.
+2. **Design:** load the `frontend-design` skill. Write `DESIGN.md` (hook, rules, controls,
+   look, sound) and name the one memorable moment you'll make great.
+3. **Scaffold:** `npm run new -- <kebab-slug> "<Title>" --tagline "..." --emoji "🎲"`.
+   `game.json` starts as `"draft": true` (hidden from the front page and never deployed).
+4. **Core loop first:** rules in a pure, DOM-free `js/engine.js` with `node:test` tests,
+   then an ugly-but-playable UI. Play it in Chrome as soon as the loop works.
+5. **Tune from data:** for anything with scores, difficulty or economy, write a headless
+   simulator in `tools/` and set the numbers from its output (see Balancing).
+6. **Make it feel great:** look, sound, juice, onboarding, phone layout, every screen.
+7. **Test** (see Testing): `npm test`, `npm run check -- <slug>`, and real play in Chrome.
+8. **Finish:** fill in `game.json` (fields below) with `"draft": false`, run `npm run check`
+   (writes the thumbnail, rebuilds `games.js`) and look at the front page.
+9. **Retrospective:** note what went wrong or was slow; fix the cause in `scripts/`,
+   `shared/`, `templates/` or this file; add to "Lessons learned" and "Games so far".
+10. **Deploy** (see Deploying) if Rich wants it: `npm run deploy -- --dry-run`,
+    `npm run deploy`, wait for the Pages build, `npm run verify-live`. Give him the link.
 
-Git: the repo is initialised. Don't commit unless the user asks. Never push this repo
-anywhere: its commits carry the user's personal email. Deploys go through `.site/`.
+Budget the session: core loop playable within roughly the first third, then feel and
+polish, and keep real time for testing and the retrospective.
+
+Git: this working repo is initialised but never pushed (its commits carry Rich's personal
+email). Don't commit in it unless he asks. Deploys go through `.site/` (see Deploying).
+
+## Making it great
+
+**Variety.** Each game should feel like a different cartridge: a new core verb (aim, time,
+stack, route, sort, bluff, steer, grow...), a new structure and a new look. Untried so far:
+real-time arcade/action on canvas, physics toys, rhythm/music, a daily logic puzzle,
+tactics/strategy, incremental/idle, interactive fiction, racing, platforming, card battlers,
+toybox simulations. Reuse the shared plumbing, never the last game's look.
+
+**Loops.** Design three: the moment (a few seconds: one input, instant feedback), the run
+(minutes: rising stakes toward a clear end) and the return (why come back: personal bests on
+the shelf, a daily seed, unlocks or a collection). Keep runs short enough for "one more".
+
+**Hooks that worked in Press Run:** an escalating target you can see; a meaningful choice
+every turn with a trade-off; a build or strategy that compounds; big numbers revealed step
+by step; bosses with a rule twist, announced in advance so players can plan; "the one that
+got away" (show the better move they missed); an end screen worth screenshotting (the
+broadside of your words); a daily seeded run; a collection counter.
+
+**Feel.** Every input answers within 100 ms with sound and motion. Spend boldness on one
+orchestrated moment (Press Run: the platen slam, then tiles scoring one by one, then the
+stamp). Scale shake and sound with the size of the event. Let players skip long animations
+(click/Enter fast-forwards). Under `prefers-reduced-motion`, keep the information and drop
+the motion.
+
+**Onboarding.** Playable within 10 seconds of loading. Teach by playing; keep a short
+"How to play" modal; show keyboard hints on buttons on desktop (hide them under
+`@media (hover: none)`). Early rounds should be generous so the first run gets far enough to
+see the cool stuff.
+
+**Look.** Ground the identity in the theme's real-world materials (letterpress gave walnut,
+maple wood type, gunmetal and process-colour inks) and let colour carry meaning. Two type
+families at most. The `frontend-design` skill lists the generic looks to avoid.
 
 ## Commands
 
@@ -40,42 +86,54 @@ anywhere: its commits carry the user's personal email. Deploys go through `.site
 | `npm start` | Dev server on :8642 with `Cache-Control: no-store` (no stale JS after edits) |
 | `npm run new -- slug "Title" --tagline ".." --emoji ".."` | Scaffold `games/<slug>/` from `templates/game/` |
 | `npm test` | All `node:test` files (`**/test/*.test.mjs`). One game: `node --test games/<slug>/test/*.test.mjs` (a bare directory argument does not work) |
-| `npm run check [-- slug]` | Headless Chrome: errors, ready signal, DOM audit, thumbnail, `smoke.mjs`, phone pass, front page |
+| `npm run check [-- slug]` | Headless Chrome, served under `/claudes-games/` like Pages: errors, ready signal, DOM audit, thumbnail, `smoke.mjs`, phone pass, front page |
 | `npm run gallery` | Rebuild `games.js` from every `games/*/game.json` |
 | `npm run words` | Rebuild `shared/words/*.txt` (downloads missing sources into `shared/words/src/`) |
 | `npm run deploy [-- --dry-run]` | Test + check, stage a clean copy in `.site/`, scan for secrets/personal data, push to GitHub Pages |
-| `npm run verify-live` | After a deploy has built (`gh api repos/richardtape/claudes-games/pages/builds/latest`), load the live front page and every game in headless Chrome |
+| `npm run verify-live` | After the Pages build finishes, load the live front page and every game in headless Chrome |
 
 ## Layout
 
 ```
 index.html            front page (cartridge shelf), reads games.js
 games.js              generated manifest; never edit by hand
-games/<slug>/         one folder per game: index.html, style.css, js/, game.json,
+games/<slug>/         one folder per game: index.html, style.css, main.js or js/, game.json,
                       DESIGN.md, smoke.mjs, test/, tools/, thumb.jpg (generated)
 shared/               arcade.js, sfx.js, juice.js, rng.js, words.js, words/ (lists + sources)
 templates/game/       what `npm run new` copies
-scripts/              serve, new-game, build-gallery, check, build-words
-.tmp/                 scratch + check screenshots (gitignored)
+scripts/              serve, new-game, build-gallery, check, build-words, deploy, verify-live
+.tmp/                 scratch scripts (gitignored); .tmp/check/ is wiped on every check run
 ```
+
+The template puts `main.js` beside `index.html` (imports `../../shared/...`). For bigger
+games move code into `js/` as Press Run does: imports become `../../../shared/...` and the
+script tag becomes `js/main.js`.
+
+`game.json` fields: `title`, `tagline` (one line, every card), `pitch` (2–3 sentences, shown
+while it's the newest game), `controls` (one line, shown with the pitch), `number`,
+`created`, `genres` (chips), `color` (the cartridge shell, so pick the game's signature
+colour), `emoji` (fallback art), `draft`.
 
 ## The game contract
 
-- Plain HTML/CSS/ES modules, no build step. Import shared code with relative paths
-  (`../../shared/arcade.js`, or `../../../shared/...` from `js/`). Must be served over http.
+- Plain HTML/CSS/ES modules, no build step, relative URLs only (no leading `/`). Must be
+  served over http.
 - `index.html` has a `<title>`, viewport meta, description and an inline SVG/emoji favicon.
 - Call `homeLink()` (pass `{ parent }` to place it in your own header) and
-  `recordPlay(slug)` / `recordBest(slug, value, label)` so the front page shows "Your best".
-- Persist with `store(slug)` (never raw localStorage); resume mid-run if the game is long.
-- Call `markReady(debugApi)` once interactive. `debugApi` becomes `window.__game`: expose
-  `state`, helpers that **go through the same code paths as real play** (set level, give
-  item, force win/lose), and `prepareThumbnail()` that sets up a good-looking mid-game screen.
+  `recordPlay(slug)` / `recordBest(slug, value, label)` so the shelf shows "Your best".
+- Persist with `store(slug)` (never raw localStorage). Save mid-run if runs are long, keep
+  RNG state in the saved state so resumes are deterministic, and version the save format.
+- Call `markReady(debugApi)` once interactive (after async data loads). `debugApi` becomes
+  `window.__game`: expose `state`, helpers that **go through the same code paths as real
+  play** (set level, give item, force win/lose), and `prepareThumbnail()`, which puts the
+  main play screen in a good-looking mid-game state. `npm run check` uses it for the
+  thumbnail and for the phone layout pass.
 - Keyboard and pointer/touch both work. Pause on blur (`onHidden`). Mute toggle (sfx).
-- 390px wide phones: no horizontal scroll, play area and main action visible without
+- 390px phones: no horizontal scroll, the play area and main action visible without
   scrolling, targets ≥ 40px. Respect `prefers-reduced-motion`.
-- No console errors. Fonts from Google Fonts are fine (with fallbacks); libraries only from a
-  CDN with an exact pinned version, or vendored under `shared/vendor/`.
-- `smoke.mjs` plays through every screen using `shot()` and `audit()`.
+- No console errors. Google Fonts are fine (with fallbacks). Libraries only from a CDN with
+  an exact pinned version, or vendored under `shared/vendor/`.
+- `smoke.mjs` plays through every screen, calling `shot(name)` and `audit(label)` on each.
 
 ## Shared modules
 
@@ -89,6 +147,9 @@ scripts/              serve, new-game, build-gallery, check, build-words
 - `words.js`: `loadDictionary()` (168k ENABLE words, validate input) and `loadCommon(n)`
   (frequency-ranked, profanity-filtered: use it for targets, hints, suggestions). See
   `shared/words/README.md`. Never suggest a word that isn't in the common list.
+
+When a game needs something generic (a helper you'd want again), add it to `shared/` and
+document it here rather than burying it in the game.
 
 ## Picking tech for the game type
 
@@ -106,12 +167,12 @@ scripts/              serve, new-game, build-gallery, check, build-words
 
 ## Testing
 
-- **Unit tests** for rules/scoring in `games/<slug>/test/*.test.mjs` (`node:test`).
-- **Simulate** progression/economy before tuning by feel (see `games/press-run/tools/`).
-  Bots that play perfectly overestimate humans, so tune for bots winning ~25–55%.
+- **Unit tests** for rules and scoring in `games/<slug>/test/*.test.mjs` (`node:test`),
+  including invariants such as "targets always climb".
 - **`npm run check`** catches what errors don't: the DOM audit flags `<button>` or `<a>`
   nested in another (the HTML parser silently splits these and wrecks layout), unlabeled
-  buttons and horizontal overflow. Review the screenshots in `.tmp/check/` with Read.
+  buttons and horizontal overflow, and anything requested outside `/claudes-games/` fails.
+  Read the screenshots in `.tmp/check/`.
 - **Claude in Chrome** for real play: `tabs_context_mcp`, then navigate to
   `http://localhost:8642/games/<slug>/`. Batch steps with `browser_batch`. Set up state
   through `window.__game` with `javascript_tool`; type with `computer` `type`. On layouts that
@@ -119,38 +180,55 @@ scripts/              serve, new-game, build-gallery, check, build-words
   rather than fixed coordinates. Right after a reload the first keystrokes can be dropped:
   confirm input landed by reading `__game` state. `read_console_messages` only records after
   its first call, so call it, reload, then read. Don't export GIFs (that downloads a file)
-  unless the user asks. localhost needed no extra extension permission.
+  unless Rich asks. localhost needed no extra extension permission.
+- That Chrome is Rich's own profile: when you finish, remove your test data (the game's
+  `cg:<slug>:` localStorage keys) so his first play starts fresh. Close tabs you opened.
+
+## Balancing
+
+- Simulate before tuning by feel. Press Run's `tools/sim.mjs` scores single rounds for fixed
+  builds; `tools/runsim.mjs` plays whole runs, shop included, with bots of different
+  vocabulary sizes standing in for skill.
+- Bots that always find their best move overestimate humans: aim for bots winning about
+  25–55%, and make the opening generous.
+- Probe one variable at a time (each boss/modifier in isolation against a fixed build) to
+  find outliers. Press Run's first Minimalist cut scores by two thirds while others did
+  nothing.
+- Then play it yourself: the sim said one Edition 1 word cleared the round, and playing it
+  confirmed that felt too easy.
 
 ## Deploying
 
-The arcade is public at **https://richardtape.github.io/claudes-games/** (repo
-`richardtape/claudes-games`, GitHub Pages from `main`, root). `scripts/deploy.mjs` is modelled
-on `~/Developer/claudes-space/publish.py`:
+The repo is `richardtape/claudes-games` (GitHub Pages from `main`, root). `scripts/deploy.mjs`
+is modelled on `~/Developer/claudes-space/publish.py`:
 
 - It refuses to deploy if `npm test` or `npm run check` fails (`--skip-checks` exists; avoid it).
 - It stages every file git would track, minus dotfiles and games with `"draft": true`.
 - It shortens home paths to `~`, then scans every staged file for keys, tokens, home paths
-  and the patterns in `.publish-deny` (local only, gitignored; the user's email addresses).
+  and the patterns in `.publish-deny` (local only, gitignored; Rich's email addresses).
   If it stops, fix what it names; never work around the check.
 - Commits use the GitHub no-reply address and credit Claude as co-author.
-- Ask before deploying unless the user has given standing permission (record it here).
+- Ask Rich before deploying unless he has given standing permission (record it here).
 
-What this means for games: everything is served from `/claudes-games/`, so every URL must be
-relative (no leading `/`). `npm run check` serves the arcade under the same prefix and 404s
-anything outside it, so an absolute URL fails locally before it can break the live site. All Pages sites on `richardtape.github.io` share one origin, so
-localStorage must go through `store(slug)` (namespaced `cg:`). Pages caches files for about
-10 minutes, so right after a deploy a returning player may briefly mix old and new files.
+Consequences for games: everything is served from `/claudes-games/`, so URLs must be
+relative (the check enforces this). All Pages sites on `richardtape.github.io` share one
+origin, so storage must go through `store(slug)` (keys are namespaced `cg:`). Pages caches
+files for about 10 minutes, so right after a deploy a returning player may briefly mix old
+and new files.
 
 ## Lessons learned (append after every game)
 
-- Nested interactive elements (`<button>` inside a button-card) render fine in code and
+- Nested interactive elements (a `<button>` inside a button-card) render fine in code and
   break silently in the browser: decorative copies of interactive things must be `<div>`s.
 - Check every screen (title, setup, play, shop/menus, modals, game over, win) at desktop
   and phone width; the phone pass once only checked the title screen and hid a broken layout.
 - On phones, flatten two-column layouts with `display: contents` + `order` so the play area
   comes first; desktop rules like `align-items: start` leak into flex columns, so reset them.
-- Unicode symbols (☕ ⚓ ✂ ⚡) render as colour emoji on macOS: append `︎` and use a
-  symbol font stack when you want text glyphs.
+- Unicode symbols (☕ ⚓ ✂ ⚡) render as colour emoji on macOS. Append the text variation
+  selector U+FE0E after the symbol (see `dingbatHTML` in `games/press-run/js/main.js`) and
+  use a symbol font stack.
+- When writing files with tools, a backslash escape like that one can be turned into the
+  invisible character itself; check with grep and prefer describing the code point in docs.
 - Don't `aria-live` a container you re-render on every keystroke; use a small `role="status"`.
 - Debug helpers that skip real side effects (e.g. timers) give false confidence: make them
   call the same functions the UI calls.
@@ -165,4 +243,4 @@ localStorage must go through `store(slug)` (namespaced `cg:`). Pages caches file
 
 | # | Slug | Genre | Look | Notes |
 |---|---|---|---|---|
-| 1 | press-run | Word roguelite (Balatro-style scoring) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Pure engine + run simulator for balance; daily seeded run; broadside of your words at the end |
+| 1 | press-run | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
