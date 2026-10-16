@@ -215,6 +215,7 @@ try {
   run('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: SITE });
   ensurePages();
   console.log(`deployed: ${SITE_URL} (GitHub Pages usually updates within a minute or two)`);
+  console.log('once it has built, confirm it with: npm run verify-live');
 } catch (e) {
   if (!(e instanceof DeployError)) throw e;
   console.error(`deploy stopped: ${e.message}`);

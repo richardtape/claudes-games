@@ -28,7 +28,7 @@ you learned.
 8. **Retrospective:** note what went wrong or was slow; fix the cause in `scripts/`,
    `shared/`, `templates/` or this file; add a line to "Lessons learned" and the games table.
 9. **Deploy** (see Deploying) when the user asks: `npm run deploy -- --dry-run`, then
-   `npm run deploy`. Give them the public link.
+   `npm run deploy`, wait for the Pages build, then `npm run verify-live`. Give them the link.
 
 Git: the repo is initialised. Don't commit unless the user asks. Never push this repo
 anywhere: its commits carry the user's personal email. Deploys go through `.site/`.
@@ -44,6 +44,7 @@ anywhere: its commits carry the user's personal email. Deploys go through `.site
 | `npm run gallery` | Rebuild `games.js` from every `games/*/game.json` |
 | `npm run words` | Rebuild `shared/words/*.txt` (downloads missing sources into `shared/words/src/`) |
 | `npm run deploy [-- --dry-run]` | Test + check, stage a clean copy in `.site/`, scan for secrets/personal data, push to GitHub Pages |
+| `npm run verify-live` | After a deploy has built (`gh api repos/richardtape/claudes-games/pages/builds/latest`), load the live front page and every game in headless Chrome |
 
 ## Layout
 

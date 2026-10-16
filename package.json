@@ -13,6 +13,7 @@
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "words": "node scripts/build-words.mjs",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "verify-live": "node scripts/verify-live.mjs"
   }
 }
