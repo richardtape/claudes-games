@@ -11,22 +11,29 @@ about something only Rich can decide.
 The bar: Rich called game #1 "SUPER fun". Aim for a complete, polished, genuinely fun game in
 one session, as good or better than the last. Then improve this setup with what you learned.
 
+**One new type of game per session.** Rich wants each game to be a different *kind* of game
+from everything already on the shelf, until there are no untried types left. Run
+`npm run types` first and build something whose type no game has claimed yet.
+
 ## Start of a session
 
-1. Read "Games so far" at the bottom, and skim `games/press-run/` as the reference
-   implementation (engine/UI split, debug hooks, smoke test, simulators).
+1. Run `npm run types` (taken vs untried game types), read "Games so far" at the bottom,
+   and skim `games/press-run/` as the reference implementation (engine/UI split, debug
+   hooks, smoke test, simulators).
 2. `ls node_modules >/dev/null 2>&1 || npm install` (a fresh clone needs it for checks).
 3. `npm start` with `run_in_background: true` → http://localhost:8642/ (safe when it's
    already running; it says so and exits).
 
 ## Workflow for a new game
 
-1. **Choose** a genre, core verb and visual identity unlike anything on the shelf (see
-   Making it great). Tell Rich in a sentence what you're making, then get going.
+1. **Choose** an untried type from `npm run types`, then a core verb and visual identity
+   unlike anything on the shelf (see Making it great). Tell Rich in a sentence what you're
+   making and which type it claims, then get going.
 2. **Design:** load the `frontend-design` skill. Write `DESIGN.md` (hook, rules, controls,
    look, sound) and name the one memorable moment you'll make great.
-3. **Scaffold:** `npm run new -- <kebab-slug> "<Title>" --tagline "..." --emoji "🎲"`.
-   `game.json` starts as `"draft": true` (hidden from the front page and never deployed).
+3. **Scaffold:** `npm run new -- <kebab-slug> "<Title>" --type <type-id> --tagline "..."
+   --emoji "🎲"`. It refuses a type another game has taken. `game.json` starts as
+   `"draft": true` (hidden from the front page, never deployed, but it holds its type).
 4. **Core loop first:** rules in a pure, DOM-free `js/engine.js` with `node:test` tests,
    then an ugly-but-playable UI. Play it in Chrome as soon as the loop works.
 5. **Tune from data:** for anything with scores, difficulty or economy, write a headless
@@ -49,11 +56,16 @@ email). Don't commit in it unless he asks. Deploys go through `.site/` (see Depl
 
 ## Making it great
 
-**Variety.** Each game should feel like a different cartridge: a new core verb (aim, time,
-stack, route, sort, bluff, steer, grow...), a new structure and a new look. Untried so far:
-real-time arcade/action on canvas, physics toys, rhythm/music, a daily logic puzzle,
-tactics/strategy, incremental/idle, interactive fiction, racing, platforming, card battlers,
-toybox simulations. Reuse the shared plumbing, never the last game's look.
+**Variety.** Each game is a new type from `game-types.json` (36 kinds, from shooters and
+pinball to deduction mysteries and cozy gardens, each with examples). Beyond the type, change
+the core verb (aim, time, stack, route, sort, bluff, steer, grow...), the structure (runs,
+levels, a daily puzzle, an endless toy) and the look. Reuse the shared plumbing, never the
+last game's look. If your idea is a genuinely new kind of game that the catalogue lacks, add
+a type for it (describe how it's played, not its theme) rather than forcing a near match.
+Repeat a type only when none are left, or when Rich asks for one:
+`npm run new -- ... --type <taken-id> --repeat --reason "Rich asked for ..."` (the script
+refuses other repeats while untried types remain). When all are taken, first try to invent a
+new type; otherwise repeat the type whose last game is oldest.
 
 **Loops.** Design three: the moment (a few seconds: one input, instant feedback), the run
 (minutes: rising stakes toward a clear end) and the return (why come back: personal bests on
@@ -85,7 +97,8 @@ families at most. The `frontend-design` skill lists the generic looks to avoid.
 | Command | What it does |
 |---|---|
 | `npm start` | Dev server on :8642 with `Cache-Control: no-store` (no stale JS after edits) |
-| `npm run new -- slug "Title" --tagline ".." --emoji ".."` | Scaffold `games/<slug>/` from `templates/game/` |
+| `npm run types` | Game types taken (and by which game) vs still untried; `-- --json` for a list |
+| `npm run new -- slug "Title" --type id --tagline ".." --emoji ".."` | Scaffold `games/<slug>/` from `templates/game/`; refuses a taken type unless `--repeat --reason` |
 | `npm test` | All `node:test` files (`**/test/*.test.mjs`). One game: `node --test games/<slug>/test/*.test.mjs` (a bare directory argument does not work) |
 | `npm run check [-- slug]` | Headless Chrome, served under `/claudes-games/` like Pages: errors, ready signal, DOM audit, thumbnail, `smoke.mjs`, phone pass, front page |
 | `npm run gallery` | Rebuild `games.js` from every `games/*/game.json` |
@@ -98,11 +111,13 @@ families at most. The `frontend-design` skill lists the generic looks to avoid.
 ```
 index.html            front page (cartridge shelf), reads games.js
 games.js              generated manifest; never edit by hand
+game-types.json       catalogue of game types; each game claims one (add new types here)
 games/<slug>/         one folder per game: index.html, style.css, main.js or js/, game.json,
                       DESIGN.md, smoke.mjs, test/, tools/, thumb.jpg (generated)
 shared/               arcade.js, sfx.js, juice.js, rng.js, words.js, words/ (lists + sources)
 templates/game/       what `npm run new` copies
-scripts/              serve, new-game, build-gallery, check, build-words, deploy, verify-live
+scripts/              serve, new-game, types, build-gallery, check, build-words, deploy,
+                      verify-live
 .tmp/                 scratch scripts (gitignored); .tmp/check/ is wiped on every check run
 ```
 
@@ -112,8 +127,9 @@ script tag becomes `js/main.js`.
 
 `game.json` fields: `title`, `tagline` (one line, every card), `pitch` (2–3 sentences, shown
 while it's the newest game), `controls` (one line, shown with the pitch), `number`,
-`created`, `genres` (chips), `color` (the cartridge shell, so pick the game's signature
-colour), `emoji` (fallback art), `draft`.
+`created`, `type` (an id from `game-types.json`), `genres` (chips), `color` (the cartridge
+shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, and
+`repeatReason` (only when a type was repeated on purpose).
 
 ## The game contract
 
@@ -245,6 +261,6 @@ and new files.
 
 ## Games so far
 
-| # | Slug | Genre | Look | Notes |
-|---|---|---|---|---|
-| 1 | press-run | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
+| # | Slug | Type | Genre | Look | Notes |
+|---|---|---|---|---|---|
+| 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |

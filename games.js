@@ -9,6 +9,7 @@ window.GAMES = [
     "pitch": "Compose words from wooden type and slam them through the press. Letters lay down Ink, dingbats pile on Pressure, and every deadline is bigger than the last. Survive six editions and the Editors who run them.",
     "number": 1,
     "created": "2026-10-15",
+    "type": "word",
     "genres": [
       "word",
       "roguelite"

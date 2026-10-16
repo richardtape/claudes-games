@@ -8,7 +8,8 @@ import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const gamesDir = join(root, 'games');
 
-const REQUIRED = ['title', 'tagline', 'number', 'created', 'genres', 'color'];
+const REQUIRED = ['title', 'tagline', 'number', 'created', 'type', 'genres', 'color'];
+const TYPE_IDS = new Set(JSON.parse(readFileSync(join(root, 'game-types.json'), 'utf8')).types.map((t) => t.id));
 
 export function loadGames({ warn = console.warn, includeDrafts = false } = {}) {
   const games = [];
@@ -30,6 +31,7 @@ export function loadGames({ warn = console.warn, includeDrafts = false } = {}) {
     const missing = REQUIRED.filter((k) => meta[k] === undefined || meta[k] === '');
     if (missing.length) warn(`games/${slug.name}/game.json is missing: ${missing.join(', ')}`);
     if (!existsSync(join(dir, 'index.html'))) warn(`games/${slug.name} has no index.html`);
+    if (meta.type && !TYPE_IDS.has(meta.type)) warn(`games/${slug.name}/game.json has type "${meta.type}", which isn't in game-types.json`);
     if (meta.draft && !includeDrafts) continue;
     games.push({
       slug: slug.name,
@@ -38,7 +40,12 @@ export function loadGames({ warn = console.warn, includeDrafts = false } = {}) {
       ...meta,
     });
   }
-  return games.sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+  const seen = new Map();
+  for (const g of games.sort((a, b) => (a.number ?? 0) - (b.number ?? 0))) {
+    if (g.type && seen.has(g.type) && !g.repeatReason) warn(`${g.slug} repeats the "${g.type}" type of ${seen.get(g.type)} without a repeatReason`);
+    if (g.type && !seen.has(g.type)) seen.set(g.type, g.slug);
+  }
+  return games;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

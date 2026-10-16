@@ -3,6 +3,7 @@
   "tagline": "{{TAGLINE}}",
   "number": {{NUMBER}},
   "created": "{{DATE}}",
+  "type": "{{TYPE}}",
   "genres": [],
   "color": "#888888",
   "emoji": "{{EMOJI}}",
