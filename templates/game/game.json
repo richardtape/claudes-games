@@ -1,0 +1,11 @@
+{
+  "title": "{{TITLE}}",
+  "tagline": "{{TAGLINE}}",
+  "number": {{NUMBER}},
+  "created": "{{DATE}}",
+  "genres": [],
+  "color": "#888888",
+  "emoji": "{{EMOJI}}",
+  "controls": "",
+  "draft": true
+}
