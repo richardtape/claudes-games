@@ -6,6 +6,7 @@
 //   npm run check -- --no-thumb   skip writing thumbnails
 //
 // For each game it:
+// The arcade is served under /claudes-games/ exactly as on GitHub Pages (requests outside it 404).
 //   1. loads it at desktop size, fails on console errors / page errors / failed requests,
 //   2. waits for the ready signal (document.documentElement.dataset.ready = "1", set by
 //      markReady() in shared/arcade.js),
@@ -18,6 +19,7 @@
 //      .tmp/check/<slug>-desktop.png, -mobile-start.png and -mobile.png for visual review.
 // Then rebuilds games.js. Exits 1 if anything errored.
 import { chromium } from 'playwright-core';
+import { createServer } from 'node:http';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,9 +38,20 @@ const outDir = join(ROOT, '.tmp/check');
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-const server = createArcadeServer({ quiet: true });
+// Serve under /claudes-games/ like GitHub Pages does; anything outside it is a 404, so a game
+// using an absolute URL ("/shared/...") fails here instead of after deploying.
+const PREFIX = '/claudes-games';
+const handle = createArcadeServer({ quiet: true }).listeners('request')[0];
+const server = createServer((req, res) => {
+  if (!req.url.startsWith(`${PREFIX}/`)) {
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    return res.end(`Outside ${PREFIX}/ (would 404 on GitHub Pages): ${req.url}`);
+  }
+  req.url = req.url.slice(PREFIX.length);
+  handle(req, res);
+});
 const port = await listen(server, 0);
-const base = `http://127.0.0.1:${port}/`;
+const base = `http://127.0.0.1:${port}${PREFIX}/`;
 const browser = await chromium.launch({ channel: 'chrome' });
 
 let failures = 0;

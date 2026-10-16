@@ -136,7 +136,8 @@ on `~/Developer/claudes-space/publish.py`:
 - Ask before deploying unless the user has given standing permission (record it here).
 
 What this means for games: everything is served from `/claudes-games/`, so every URL must be
-relative (no leading `/`). All Pages sites on `richardtape.github.io` share one origin, so
+relative (no leading `/`). `npm run check` serves the arcade under the same prefix and 404s
+anything outside it, so an absolute URL fails locally before it can break the live site. All Pages sites on `richardtape.github.io` share one origin, so
 localStorage must go through `store(slug)` (namespaced `cg:`). Pages caches files for about
 10 minutes, so right after a deploy a returning player may briefly mix old and new files.
 
@@ -154,6 +155,8 @@ localStorage must go through `store(slug)` (namespaced `cg:`). Pages caches file
 - Debug helpers that skip real side effects (e.g. timers) give false confidence: make them
   call the same functions the UI calls.
 - Guard input handlers until async data (word lists) has loaded.
+- A safety check you've never seen fail isn't proven: plant the problem (a leaked email, an
+  absolute URL, a nested button) once and watch the check catch it.
 - Shell: don't `cd` inside compound commands (the working directory persists and breaks later
   relative paths); use absolute paths. macOS `sed -i ''`. For multi-line edits a short
   `python3 - <<'EOF'` script with exact-match asserts is reliable.
