@@ -4,6 +4,7 @@
 //   sfx.tone({ freq: 660, to: 990, type: 'square', dur: 0.08 });
 //   sfx.noise({ dur: 0.15, freq: 800 });            // thud / whoosh / hit
 //   sfx.arp([523, 659, 784], { step: 0.06 });       // little fanfare
+//   sfx.tone({ freq: 110, at: sfx.now() + 0.5 });    // on the audio clock (see shared/seq.js)
 //   muteButton.onclick = () => sfx.toggleMute();
 //
 // The AudioContext is created lazily and unlocked on the first pointer/key press, so calls
@@ -46,10 +47,13 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   }
 
-  /** One oscillator note. `to` glides the pitch. Types: sine, square, sawtooth, triangle. */
-  function tone({ freq = 440, to = null, type = 'sine', dur = 0.12, vol = 0.25, attack = 0.005, delay = 0 } = {}) {
+  /**
+   * One oscillator note. `to` glides the pitch. Types: sine, square, sawtooth, triangle.
+   * `at` is an absolute audio-clock time (from now()) for sequencers; otherwise `delay` seconds.
+   */
+  function tone({ freq = 440, to = null, type = 'sine', dur = 0.12, vol = 0.25, attack = 0.005, delay = 0, at = null } = {}) {
     if (!ready()) return;
-    const t0 = ctx.currentTime + delay;
+    const t0 = at ?? ctx.currentTime + delay;
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = type;
@@ -62,14 +66,14 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
   }
 
   /** Filtered white noise: thuds (low freq), hiss/whoosh (high freq, `to` sweeps the filter). */
-  function noise({ dur = 0.15, vol = 0.3, freq = 1200, to = null, q = 1, type = 'lowpass', delay = 0, attack = 0.002 } = {}) {
+  function noise({ dur = 0.15, vol = 0.3, freq = 1200, to = null, q = 1, type = 'lowpass', delay = 0, attack = 0.002, at = null } = {}) {
     if (!ready()) return;
     if (!noiseBuf) {
       noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     }
-    const t0 = ctx.currentTime + delay;
+    const t0 = at ?? ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = noiseBuf;
     const f = ctx.createBiquadFilter();
@@ -101,6 +105,8 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
     arp,
     setMuted,
     toggleMute: () => (setMuted(!muted), muted),
+    /** Audio-clock time in seconds, or null before the first gesture / while muted. */
+    now: () => (ready() ? ctx.currentTime : null),
     get muted() {
       return muted;
     },

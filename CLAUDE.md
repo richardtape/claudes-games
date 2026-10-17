@@ -1,6 +1,6 @@
 # Claude's Games
 
-A personal arcade of single-player browser games, public at
+A personal arcade of browser games (all single-player so far), public at
 **https://richardtape.github.io/claudes-games/**. Rich (the user) drops in now and then,
 starts a fresh session and asks for a new game. **Claude owns the creative direction**: pick
 the concept, genre, look and sound yourself. Don't ask design questions and don't run a
@@ -13,7 +13,9 @@ one session, as good or better than the last. Then improve this setup with what 
 
 **One new type of game per session.** Rich wants each game to be a different *kind* of game
 from everything already on the shelf, until there are no untried types left. Run
-`npm run types` first and build something whose type no game has claimed yet.
+`npm run types` first and build something whose type no game has claimed yet. When Rich
+asks for "the randomizer", `npm run random` picks an untried type for you; tell him the pick
+and your concept before building if he asks to hear it first.
 
 ## Start of a session
 
@@ -50,12 +52,17 @@ from everything already on the shelf, until there are no untried types left. Run
 10. **Deploy** (see Deploying) without asking once the game is finished and passing:
     `npm run deploy -- --dry-run`, `npm run deploy`, wait for the Pages build,
     `npm run verify-live`. Give Rich the live link.
+11. **Commit** everything in this working repo so `git status` is clean at the end of the
+    session (see Git below).
 
 Budget the session: core loop playable within roughly the first third, then feel and
 polish, and keep real time for testing and the retrospective.
 
-Git: this working repo is initialised but never pushed (its commits carry Rich's personal
-email). Don't commit in it unless he asks. Deploys go through `.site/` (see Deploying).
+Git: this working repo is local only: it has no remote and is never pushed (its commits carry
+Rich's personal email). Rich wants it clean at the end of every session (2026-10-16): commit
+all the session's work locally, with the attribution line, after the deploy. You can also
+commit at milestones during the session. Never add a remote or push it. Deploys go through
+`.site/` (see Deploying).
 
 ## Making it great
 
@@ -101,6 +108,7 @@ families at most. The `frontend-design` skill lists the generic looks to avoid.
 |---|---|
 | `npm start` | Dev server on :8642 with `Cache-Control: no-store` (no stale JS after edits) |
 | `npm run types` | Game types taken (and by which game) vs still untried; `-- --json` for a list |
+| `npm run random` | The randomizer: picks one untried type at random |
 | `npm run new -- slug "Title" --type id --tagline ".." --emoji ".."` | Scaffold `games/<slug>/` from `templates/game/`; refuses a taken type unless `--repeat --reason` |
 | `npm test` | All `node:test` files (`**/test/*.test.mjs`). One game: `node --test games/<slug>/test/*.test.mjs` (a bare directory argument does not work) |
 | `npm run check [-- slug]` | Headless Chrome, served under `/claudes-games/` like Pages: errors, ready signal, DOM audit, thumbnail, `smoke.mjs`, phone pass, front page |
@@ -117,7 +125,8 @@ games.js              generated manifest; never edit by hand
 game-types.json       catalogue of game types; each game claims one (add new types here)
 games/<slug>/         one folder per game: index.html, style.css, main.js or js/, game.json,
                       DESIGN.md, smoke.mjs, test/, tools/, thumb.jpg (generated)
-shared/               arcade.js, sfx.js, juice.js, rng.js, loop.js, words.js, words/ (lists + sources)
+shared/               arcade.js, sfx.js, seq.js, juice.js, rng.js, loop.js, net.js, words.js,
+                      words/ (lists + sources)
 templates/game/       what `npm run new` copies
 scripts/              serve, new-game, types, build-gallery, check, build-words, deploy,
                       verify-live
@@ -159,8 +168,12 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
 
 - `arcade.js`: `store(slug)`, `recordPlay`, `recordBest`, `loadStats`, `homeLink`, `markReady`,
   `reducedMotion`, `onHidden`.
-- `sfx.js`: `createSfx(slug)` → `tone`, `noise`, `arp`, `toggleMute`; `note(semitones)`.
+- `sfx.js`: `createSfx(slug)` → `tone`, `noise`, `arp`, `toggleMute`, `now()`; `note(semitones)`.
   Synthesize every sound; no audio files needed. Unlocks on first gesture automatically.
+  `tone`/`noise` take `at` (an absolute audio-clock time from `now()`) for sequencing.
+- `seq.js`: `createSequencer(sfx, { bpm, steps, onStep(step, at) })` → `start`, `stop`, `bpm`.
+  Sixteenth-note steps scheduled ahead on the audio clock (no wobble). Background music:
+  stop it when the page is hidden and never start it into a hidden tab (Dead Drop's audio.js).
 - `juice.js`: `floatText`, `shake`, `pulse`, `countUp`, `toast`, `sleep`. Restyle via class names.
 - `rng.js`: `createRng(seed)` (`int`, `pick`, `shuffle`, `chance`, `weighted`, serializable
   `state`), `hashString`, `dailySeed()` for daily modes.
@@ -171,6 +184,11 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
 - `words.js`: `loadDictionary()` (168k ENABLE words, validate input) and `loadCommon(n)`
   (frequency-ranked, profanity-filtered: use it for targets, hints, suggestions). See
   `shared/words/README.md`. Never suggest a word that isn't in the common list.
+- `net.js`: peer-to-peer rooms (see Multiplayer). `joinRoom({ slug, code, transport })` →
+  `send(type, data, peerId?)`, `on(type, cb)`, `onPeerJoin`, `onPeerLeave`, `onError`,
+  `peers`, `leave()`. `transport: 'p2p'` (Trystero, lazy-imported) or `'local'`
+  (BroadcastChannel between tabs of one browser: tests and `?net=local`). `roomCode()`,
+  `cleanCode()`, and `createMemoryPair()` for node:test.
 
 When a game needs something generic (a helper you'd want again), add it to `shared/` and
 document it here rather than burying it in the game.
@@ -190,9 +208,35 @@ document it here rather than burying it in the game.
 - **3D:** three.js through an import map with an exact pinned version from cdn.jsdelivr.net
   (check the version exists first). Keep draw calls low; test on the phone pass.
 - **Physics:** a pinned CDN build of matter-js/planck, or hand-rolled for simple cases.
-- **Music:** a tiny WebAudio step sequencer built on `sfx.tone`. Keep it muteable.
+- **Music:** `shared/seq.js` on `sfx.tone`. Keep it muteable, separately from effects.
 - **Data:** download raw sources into their own folder under `shared/<topic>/src/` (or the
   game's `data/src/`), write a processing script in `scripts/`, document sources and licences.
+- **Multiplayer** (Rich chose this approach, 2026-10-16; use it for any multiplayer game):
+  live peer-to-peer WebRTC through Trystero (an exact pinned CDN build; v0.26.0 was current).
+  It finds peers through free public relays, so there is no server, account or key. One player
+  opens a room and shares a link or QR code, and 2–6 friends join; the host's browser is
+  authoritative. Prefer simultaneous turns (everyone commits secretly, then reveal together)
+  over twitch action, since they tolerate lag and dropped peers. Party-style play also works:
+  a laptop or TV shows the board and everyone plays on their phone. Always keep the game
+  playable solo against bots and on one shared screen, so it never feels broken when a relay
+  is down or a strict network (corporate, university, some carriers) blocks the connection.
+  Rooms are invite-only: no matchmaking with strangers and no free-text chat, because peers
+  see each other's IP addresses. Not a backend (Firebase, Supabase, Cloudflare) unless Rich
+  asks. Dead Drop is the worked example:
+  - `shared/net.js` carries messages; only join a room when the player picks online play
+    (the import and relay sockets are network traffic, and console noise if a relay is down).
+  - Host-authoritative: the host's browser owns the engine state and sends each guest
+    `viewFor(state, seat)`, a masked view with no rival hand or face-down identities;
+    guests send actions. A protocol version in `hello`, a per-browser token so a guest who
+    reloads gets their seat back, `nope` for a third browser, and the host saves its table
+    per room code so a host reload resumes (`games/dead-drop/js/session.js`).
+  - Invite link `#join=CODE`, host URL `#host=CODE`, a typed-code field on the title, and a
+    QR code (uqr from jsdelivr, pinned). Show the guest a "can't connect" hint after ~20 s.
+  - Trystero 0.26 changed its API: callbacks are properties (`room.onPeerJoin = fn`) and
+    `makeAction(name)` returns `{ send(data, { target }), onMessage }`. Read the README of the
+    pinned version rather than older examples.
+  - Simultaneous-turn games need a turn where nobody can act to resolve itself (Dead Drop
+    hung when both seats auto-passed). Test "no one can move" states.
 
 ## Testing
 
@@ -204,9 +248,15 @@ document it here rather than burying it in the game.
   It runs `smoke.mjs` twice, at desktop and at phone size (`ctx.phone` is true the second
   time), so every screen the smoke visits gets a phone screenshot and audit. Read the
   screenshots in `.tmp/check/` (`<slug>-NN-*` desktop, `<slug>-phone-NN-*` phone).
+- **Multiplayer games export `duo([host, guest], ctx)` from `smoke.mjs`.** `npm run check`
+  runs it with two pages in one browser joined over BroadcastChannel (`?net=local`), so the
+  check never depends on public relays; `npm run verify-live` runs it again on the live
+  site in two separate browsers through the real relays. Assert the guest's view never holds
+  the host's secrets.
 - **Smoke tests must not depend on timing.** Emulated phones move the mouse slowly, so
   freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops),
-  and wait for screens rather than sleeping a fixed time.
+  and wait for screens rather than sleeping a fixed time. Before a screenshot, wait for
+  entrance animations to finish (Dead Drop's `settle()`), or shots catch half-faded panels.
 - **Real-time games: play a whole run headless** with a bot on the manual clock and
   screenshot the key moments (`games/night-stitch/tools/night-shots.mjs`). The short smoke
   test never reached 2 AM, where the accumulated embroidery had made live moths unreadable.
@@ -223,6 +273,8 @@ document it here rather than burying it in the game.
   confirm input landed by reading `__game` state. `read_console_messages` only records after
   its first call, so call it, reload, then read. Don't export GIFs (that downloads a file)
   unless Rich asks. localhost needed no extra extension permission.
+- Sound plays through Rich's speakers: a game must not start music in a hidden tab, and
+  test runs there should leave the music off.
 - That Chrome is Rich's own profile: when you finish, remove your test data (the game's
   `cg:<slug>:` localStorage keys) so his first play starts fresh. Close tabs you opened.
 
@@ -242,6 +294,14 @@ document it here rather than burying it in the game.
   nothing.
 - Then play it yourself: the sim said one Edition 1 word cleared the round, and playing it
   confirmed that felt too easy.
+- Monte Carlo bots (Dead Drop's `bot.js`: fill in hidden cards at random, play each move out
+  many times) overrate the move they pick, because the best of many noisy estimates is
+  optimistic. Re-score the chosen move with fresh playouts before using the value for
+  bets or folds; without that, both bots "knew" they were winning and escalated every round.
+- Strictly optimal opponents can be no fun: Dead Drop's bots folded every lost round before
+  the final flip, the game's big moment. Make them play on most of the time.
+- Mirror decks are fair, but a card that swings rounds by 10+ points makes draws decide
+  games. `tools/sim.mjs --set sleeper.power=4` tries a tweak without editing the data.
 
 ## Deploying
 
@@ -301,6 +361,20 @@ and new files.
 - Two kinds of feedback taught the core rules best: a "close here" glow where finishing a
   loop would catch something, and settled moths twitching inside a faint ring as the needle
   nears. Show rules on the play field rather than in text.
+- Re-rendering a screen from a template string restarts its CSS entrance animations, so the
+  round result faded in again every time the bot moved. Give entrance animations a one-time
+  class (`enter`, `intro`) and play sweeps from the code that runs the moment, not the render.
+- Per-letter display type (`jitter()` in Dead Drop) breaks lines inside words because each
+  letter is an inline block: wrap every word in a `white-space: nowrap` span.
+- Never pulse a button's size forever: Playwright waits for it to stop moving and times out,
+  and people find it harder to hit. Pulse colour or brightness instead.
+- An async update that awaits an animation must hold a busy flag and re-read the latest state
+  afterwards; otherwise a later update renders, then the earlier one resumes and paints its
+  stale copy over it (Dead Drop showed round 1's result after round 2 began).
+- Parallel work: a subagent drew Dead Drop's 24 silhouettes from a tight spec (function
+  names, viewBox, `currentColor` plus one `.ac` accent class, sizes to check, the
+  one-Chrome-at-a-time rule) while the engine, net and UI were built. While it worked, a
+  Playwright route served placeholder art so screens could be checked early.
 
 ## Games so far
 
@@ -308,3 +382,4 @@ and new files.
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live |

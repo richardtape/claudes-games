@@ -15,6 +15,7 @@
     "words": "node scripts/build-words.mjs",
     "deploy": "node scripts/deploy.mjs",
     "verify-live": "node scripts/verify-live.mjs",
-    "types": "node scripts/types.mjs"
+    "types": "node scripts/types.mjs",
+    "random": "node scripts/types.mjs --random"
   }
 }

@@ -1,0 +1,13 @@
+{
+  "title": "Dead Drop",
+  "tagline": "A spy card duel for two: drop agents in secret, flip together, call the bluff.",
+  "pitch": "Two rival spymasters fight over three cities. Each turn you both drop an agent in secret, then the cards flip together and their tricks go off. Escalate to double the stake and dare your rival to fold. Play the computer, pass the device around, or send a friend a link and play online.",
+  "controls": "Tap a card, then a city, then Lock in. Keys: 1–7 pick a card, A S D a city, Enter locks in, E escalates, F folds.",
+  "number": 3,
+  "created": "2026-10-16",
+  "type": "card-duel",
+  "genres": ["card duel", "bluffing", "online 2-player"],
+  "color": "#e0a030",
+  "emoji": "🕵️",
+  "draft": false
+}

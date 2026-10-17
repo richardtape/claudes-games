@@ -18,7 +18,11 @@
 //      (on the start screen and again after prepareThumbnail()), saving
 //      .tmp/check/<slug>-desktop.png, -mobile-start.png and -mobile.png for visual review,
 //   6. runs smoke.mjs again at phone size (ctx.phone = true), so every screen it visits is
-//      audited and screenshotted on a phone too (.tmp/check/<slug>-phone-NN-<name>.png).
+//      audited and screenshotted on a phone too (.tmp/check/<slug>-phone-NN-<name>.png),
+//   7. for multiplayer games, runs smoke.mjs's `duo` export with two pages in one browser
+//      (export async function duo([pageA, pageB], ctx); ctx.shot(name, page), ctx.audit(label,
+//      page)). Pages in one context share BroadcastChannel, so games join with ?net=local and
+//      never touch the public relays (.tmp/check/<slug>-duo-NN-<name>.png).
 // Then rebuilds games.js. Exits 1 if anything errored.
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
@@ -245,7 +249,35 @@ async function checkGame(game) {
   }
   await mctx.close();
 
-  const all = [...new Set([...problems, ...mproblems])];
+  // Two-player pass for multiplayer games.
+  const dproblems = [];
+  if (existsSync(smokePath)) {
+    const { duo } = await import(pathToFileURL(smokePath).href + `?t=${Date.now()}`);
+    if (typeof duo === 'function') {
+      const dctx = await browser.newContext({ viewport: { width: 1100, height: 760 } });
+      await dctx.addInitScript(AUDIT_INIT);
+      const pages = [await dctx.newPage(), await dctx.newPage()];
+      pages.forEach((p) => dproblems.push(...[watch(p, game.slug)]));
+      let shots = 0;
+      try {
+        await duo(pages, {
+          base,
+          url,
+          outDir,
+          log: (m) => console.log(`    · duo: ${m}`),
+          shot: (name, p = pages[0]) => p.screenshot({ path: join(outDir, `${game.slug}-duo-${String(++shots).padStart(2, '0')}-${name}.png`) }),
+          audit: async (label, p = pages[0]) => (await audit(p)).forEach((f) => report(game.slug, 'warn', `duo ${label}: ${f}`)),
+        });
+        report(game.slug, 'ok', 'two-player pass (duo) passed');
+      } catch (e) {
+        report(game.slug, 'error', `duo failed: ${e.message.split('\n')[0]}`);
+        await Promise.all(pages.map((p, i) => p.screenshot({ path: join(outDir, `${game.slug}-duo-fail-${i}.png`) }).catch(() => {})));
+      }
+      await dctx.close();
+    }
+  }
+
+  const all = [...new Set([...problems, ...mproblems, ...dproblems.flat()])];
   if (all.length) all.forEach((p) => report(game.slug, 'error', p));
   else report(game.slug, 'ok', 'no console errors or failed requests');
 }

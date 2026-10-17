@@ -14,6 +14,7 @@
     { "id": "spatial-puzzle", "name": "Spatial puzzle", "about": "Handcrafted levels about moving or rotating things in space.", "examples": "Sokoban, sliding blocks, mirrors and lasers, pipe rotation" },
     { "id": "programming-puzzle", "name": "Programming puzzle", "about": "Build a program or machine that solves the level.", "examples": "Human Resource Machine-like, Opus Magnum-lite, conveyor factories" },
     { "id": "match-puzzle", "name": "Match and merge puzzle", "about": "Swap, slide or match tiles to clear or combine them.", "examples": "match-3 with a twist, 2048 or Threes-likes, mahjong solitaire" },
+    { "id": "card-duel", "name": "Head-to-head card game", "about": "Two players (or a player and a bot) outplay each other with hands of cards: simultaneous or alternating plays, bluffing, contested lanes or tricks.", "examples": "Battle Line, Lost Cities, Marvel Snap, two-player trick-taking" },
     { "id": "solitaire", "name": "Card solitaire", "about": "Patience-style games with a standard or custom deck.", "examples": "an original patience game, Golf, pyramid variants" },
     { "id": "deckbuilder", "name": "Deckbuilder", "about": "Fight or score with a deck you build during the run.", "examples": "Slay the Spire-lite, card battler" },
     { "id": "chance-builder", "name": "Dice and slot builder", "about": "Build an engine around luck: dice, reels or draws.", "examples": "Luck Be a Landlord, dice placement (Dicey Dungeons), push-your-luck" },
