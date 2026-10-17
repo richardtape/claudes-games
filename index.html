@@ -235,7 +235,8 @@
         outline-offset: 4px;
       }
 
-      .shelf h2 {
+      /* Direct child only: card titles inside the shelf keep their dark label colour. */
+      .shelf > h2 {
         font-family: var(--display);
         font-weight: 400;
         font-size: 20px;

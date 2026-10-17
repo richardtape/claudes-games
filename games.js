@@ -18,5 +18,25 @@ window.GAMES = [
     "emoji": "🖨️",
     "controls": "Type or tap letters. Enter prints, Shift+Enter redraws, Space shuffles.",
     "draft": false
+  },
+  {
+    "slug": "night-stitch",
+    "href": "games/night-stitch/",
+    "thumb": "games/night-stitch/thumb.jpg",
+    "title": "Night Stitch",
+    "tagline": "Loop the moths with needle and thread before they eat the sampler.",
+    "pitch": "Steer a needle around an embroidery hoop by lamplight; its thread trails behind you. Cross your own thread to cinch a loop and every moth inside is stitched into the linen, and the more in one loop, the bigger the multiplier. Moths that settle eat holes, beetles bite thread, and you have to keep the fabric whole until dawn.",
+    "controls": "Mouse, trackpad or finger steers the needle (no clicking). Arrow keys work too. P pauses, M mutes.",
+    "number": 2,
+    "created": "2026-10-16",
+    "type": "drawing",
+    "genres": [
+      "drawing",
+      "arcade",
+      "score attack"
+    ],
+    "color": "#b5362f",
+    "emoji": "🪡",
+    "draft": false
   }
 ];

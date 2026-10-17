@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Night Stitch</title>
+    <meta name="description" content="Loop the moths with needle and thread before they eat the sampler." />
+    <meta name="theme-color" content="#171c3a" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='%23dcd0b4' stroke='%23c48c52' stroke-width='9'/><path d='M30 62 L70 38 M30 38 L70 62' stroke='%23b5362f' stroke-width='9' stroke-linecap='round'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="wrap">
+      <canvas id="room" aria-hidden="true"></canvas>
+      <canvas id="stage" aria-label="The embroidery hoop. Move the needle to loop the moths."></canvas>
+    </div>
+    <header id="bar">
+      <div id="home-slot"></div>
+      <div class="bar-buttons">
+        <button class="tag icon" id="btn-help" data-action="help" aria-label="How to play" title="How to play">?</button>
+        <button class="tag icon" id="btn-mute" data-action="mute" aria-label="Mute sound" title="Sound (M)">♪</button>
+        <button class="tag icon" id="btn-pause" data-action="pause" aria-label="Pause" title="Pause (P)">II</button>
+      </div>
+    </header>
+    <section id="hud" aria-label="Night status" hidden>
+      <div class="hud-score">
+        <div class="hud-label">Score</div>
+        <div id="score" class="score-digits"></div>
+        <div id="loopnote" class="loopnote" role="status"></div>
+      </div>
+      <div class="hud-fabric">
+        <div class="hud-label">Fabric <span id="fabric-pct">100%</span></div>
+        <div id="fabric" class="fabric-row"></div>
+      </div>
+      <div class="hud-clock">
+        <svg id="clock" viewBox="-50 -50 100 100" aria-hidden="true"></svg>
+        <div class="clock-text">
+          <div id="clock-time" class="clock-time">10:00 PM</div>
+          <div id="clock-next" class="clock-next"></div>
+        </div>
+      </div>
+    </section>
+    <div id="banner" class="banner" aria-live="polite"></div>
+    <div id="overlay"></div>
+    <div id="modal-root"></div>
+  </body>
+</html>

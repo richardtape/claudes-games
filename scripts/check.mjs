@@ -16,7 +16,9 @@
 //      where ctx = { base, url, outDir, log(msg), shot(name), audit(label) },
 //   5. reloads at phone size (390x844, touch) and warns on horizontal overflow,
 //      (on the start screen and again after prepareThumbnail()), saving
-//      .tmp/check/<slug>-desktop.png, -mobile-start.png and -mobile.png for visual review.
+//      .tmp/check/<slug>-desktop.png, -mobile-start.png and -mobile.png for visual review,
+//   6. runs smoke.mjs again at phone size (ctx.phone = true), so every screen it visits is
+//      audited and screenshotted on a phone too (.tmp/check/<slug>-phone-NN-<name>.png).
 // Then rebuilds games.js. Exits 1 if anything errored.
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
@@ -220,6 +222,27 @@ async function checkGame(game) {
   mfindings.forEach((f) => report(game.slug, 'warn', `phone: ${f}`));
   if (!mfindings.length) report(game.slug, 'ok', 'phone layout fits 390px, DOM audit clean');
   await mpage.screenshot({ path: join(outDir, `${game.slug}-mobile.png`) });
+  if (existsSync(smokePath)) {
+    try {
+      await mpage.goto(url, { waitUntil: 'load' });
+      await waitReady(mpage);
+      const { default: smoke } = await import(pathToFileURL(smokePath).href + `?t=${Date.now()}`);
+      let shots = 0;
+      await smoke(mpage, {
+        base,
+        url,
+        outDir,
+        phone: true,
+        log: (m) => console.log(`    · phone: ${m}`),
+        shot: (name) => mpage.screenshot({ path: join(outDir, `${game.slug}-phone-${String(++shots).padStart(2, '0')}-${name}.png`) }),
+        audit: async (label) => (await audit(mpage)).forEach((f) => report(game.slug, 'warn', `phone ${label}: ${f}`)),
+      });
+      report(game.slug, 'ok', 'smoke.mjs passed at phone size');
+    } catch (e) {
+      report(game.slug, 'error', `smoke.mjs failed at phone size: ${e.message.split('\n')[0]}`);
+      await mpage.screenshot({ path: join(outDir, `${game.slug}-phone-smoke-fail.png`) }).catch(() => {});
+    }
+  }
   await mctx.close();
 
   const all = [...new Set([...problems, ...mproblems])];

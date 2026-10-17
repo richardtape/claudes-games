@@ -23,6 +23,9 @@ from everything already on the shelf, until there are no untried types left. Run
 2. `ls node_modules >/dev/null 2>&1 || npm install` (a fresh clone needs it for checks).
 3. `npm start` with `run_in_background: true` → http://localhost:8642/ (safe when it's
    already running; it says so and exits).
+4. Glance at `uptime`. This is Rich's working machine (calls, other sessions). Run one
+   headless Chrome job or simulator at a time, and if he says it's slow, stop everything you
+   started at once (headless Chrome, sims, the dev server) and close your Chrome tabs.
 
 ## Workflow for a new game
 
@@ -114,7 +117,7 @@ games.js              generated manifest; never edit by hand
 game-types.json       catalogue of game types; each game claims one (add new types here)
 games/<slug>/         one folder per game: index.html, style.css, main.js or js/, game.json,
                       DESIGN.md, smoke.mjs, test/, tools/, thumb.jpg (generated)
-shared/               arcade.js, sfx.js, juice.js, rng.js, words.js, words/ (lists + sources)
+shared/               arcade.js, sfx.js, juice.js, rng.js, loop.js, words.js, words/ (lists + sources)
 templates/game/       what `npm run new` copies
 scripts/              serve, new-game, types, build-gallery, check, build-words, deploy,
                       verify-live
@@ -161,6 +164,10 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
 - `juice.js`: `floatText`, `shake`, `pulse`, `countUp`, `toast`, `sleep`. Restyle via class names.
 - `rng.js`: `createRng(seed)` (`int`, `pick`, `shuffle`, `chance`, `weighted`, serializable
   `state`), `hashString`, `dailySeed()` for daily modes.
+- `loop.js`: `createLoop({ update(dt), render() })` runs requestAnimationFrame with a capped
+  dt and a manual clock for tests (`loop.manual = true`, `loop.advance(seconds, each)`);
+  `fixedSteps(DT)` is the fixed-timestep accumulator (`run(dt, step)`, `alpha` for
+  interpolation). Expose the loop and an `advance` helper on `window.__game`.
 - `words.js`: `loadDictionary()` (168k ENABLE words, validate input) and `loadCommon(n)`
   (frequency-ranked, profanity-filtered: use it for targets, hints, suggestions). See
   `shared/words/README.md`. Never suggest a word that isn't in the common list.
@@ -172,9 +179,14 @@ document it here rather than burying it in the game.
 
 - **Word, card, board, puzzle, idle, roguelite UI:** DOM + CSS. Render from state with template
   strings, use `data-action` attributes and one delegated click handler.
-- **Arcade/action/physics:** `<canvas>` 2D with a fixed-timestep loop (update at 60Hz,
+- **Arcade/action/physics:** `<canvas>` 2D with `shared/loop.js` (fixed 60 Hz engine steps,
   render with interpolation), scale by `devicePixelRatio`, pause when hidden, pointer events
-  with `touch-action: none` on the canvas, virtual buttons on touch.
+  with `touch-action: none` on the canvas, virtual buttons on touch. Paint static scenery
+  once into its own canvas behind the play canvas instead of copying it every frame (Night
+  Stitch: room, lamp and linen), and shake the wrapper so the layers move together.
+- **Persistent drawing that accumulates** (trails, paint, embroidery): draw it into an
+  offscreen layer incrementally from a history list in the state, so it can be redrawn at
+  any size (resize, end-screen poster).
 - **3D:** three.js through an import map with an exact pinned version from cdn.jsdelivr.net
   (check the version exists first). Keep draw calls low; test on the phone pass.
 - **Physics:** a pinned CDN build of matter-js/planck, or hand-rolled for simple cases.
@@ -189,9 +201,22 @@ document it here rather than burying it in the game.
 - **`npm run check`** catches what errors don't: the DOM audit flags `<button>` or `<a>`
   nested in another (the HTML parser silently splits these and wrecks layout), unlabeled
   buttons and horizontal overflow, and anything requested outside `/claudes-games/` fails.
-  Read the screenshots in `.tmp/check/`.
+  It runs `smoke.mjs` twice, at desktop and at phone size (`ctx.phone` is true the second
+  time), so every screen the smoke visits gets a phone screenshot and audit. Read the
+  screenshots in `.tmp/check/` (`<slug>-NN-*` desktop, `<slug>-phone-NN-*` phone).
+- **Smoke tests must not depend on timing.** Emulated phones move the mouse slowly, so
+  freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops),
+  and wait for screens rather than sleeping a fixed time.
+- **Real-time games: play a whole run headless** with a bot on the manual clock and
+  screenshot the key moments (`games/night-stitch/tools/night-shots.mjs`). The short smoke
+  test never reached 2 AM, where the accumulated embroidery had made live moths unreadable.
 - **Claude in Chrome** for real play: `tabs_context_mcp`, then navigate to
-  `http://localhost:8642/games/<slug>/`. Batch steps with `browser_batch`. Set up state
+  `http://localhost:8642/games/<slug>/`. Rich's Chrome window is often behind other windows,
+  and then `document.visibilityState` is `hidden` and requestAnimationFrame does not run:
+  nothing moves. Check it first; drive canvas games with `__game.loop.manual = true` and
+  `__game.advance(seconds)` (works hidden or visible), and dispatch real `PointerEvent`s on
+  the canvas to test the actual input path. Evaluations over ~45 s time out, so keep
+  each `javascript_tool` call short. Batch steps with `browser_batch`. Set up state
   through `window.__game` with `javascript_tool`; type with `computer` `type`. On layouts that
   change after each click, click via `element.click()` in `javascript_tool` or `find` refs
   rather than fixed coordinates. Right after a reload the first keystrokes can be dropped:
@@ -208,6 +233,10 @@ document it here rather than burying it in the game.
   vocabulary sizes standing in for skill.
 - Bots that always find their best move overestimate humans: aim for bots winning about
   25–55%, and make the opening generous.
+- For real-time games, make the bot human-ish before tuning: reaction delay, limited drawing
+  or aiming speed, aim noise, misjudged targets and the odd fumbled attempt, all scaled by a
+  `skill` parameter (see `games/night-stitch/js/bot.js`). Report results per skill level.
+  The same bot doubles as the title-screen demo.
 - Probe one variable at a time (each boss/modifier in isolation against a fixed build) to
   find outliers. Press Run's first Minimalist cut scores by two thirds while others did
   nothing.
@@ -258,9 +287,24 @@ and new files.
 - Shell: don't `cd` inside compound commands (the working directory persists and breaks later
   relative paths); use absolute paths. macOS `sed -i ''`. For multi-line edits a short
   `python3 - <<'EOF'` script with exact-match asserts is reliable.
+- Chained find-and-replace edits collide when one new value equals another old value
+  (tiger's new `eat: 3.4` matched rosy's old one). Key each replacement by its context.
+- Input guards ("ignore clicks for 350 ms after this screen opens") must use real time
+  (`performance.now()`), not the game clock, or a paused or manual clock blocks input forever.
+- Debug helpers that move things must get there the way real input does (Night Stitch's
+  `loopAround` once assumed the needle already sat on the circle and silently drew nothing).
+- A run that leaves a growing record on screen (here, the sampler) slowly buries the live
+  game. Show the record subdued during play and at full strength on the end screen.
+- Shared pages can break only when the shelf grows: the second game was the first card under
+  "Also on the shelf", and a `.shelf h2` rule turned its title white on a white label. Read
+  `index-desktop.png` after every game, not just the new card.
+- Two kinds of feedback taught the core rules best: a "close here" glow where finishing a
+  loop would catch something, and settled moths twitching inside a faint ring as the needle
+  nears. Show rules on the play field rather than in text.
 
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
+| 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |

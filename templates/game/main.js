@@ -1,7 +1,8 @@
 import { homeLink, markReady, recordBest, recordPlay, store } from '../../shared/arcade.js';
 import { createSfx } from '../../shared/sfx.js';
 // Also available: ../../shared/juice.js (floatText, shake, countUp, toast, pulse),
-// ../../shared/rng.js (seeded RNG, dailySeed), ../../shared/words.js (word lists).
+// ../../shared/rng.js (seeded RNG, dailySeed), ../../shared/words.js (word lists),
+// ../../shared/loop.js (canvas game loop with a manual clock for tests).
 
 const SLUG = '{{SLUG}}';
 const sfx = createSfx(SLUG);
