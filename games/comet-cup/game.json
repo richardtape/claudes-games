@@ -1,0 +1,13 @@
+{
+  "title": "Comet Cup",
+  "tagline": "Orbit golf on a star chart: sling a comet past singing planets into the cup.",
+  "pitch": "Pull back, let go, and watch your comet curl around pastel worlds on a nineteenth-century star chart until it drops into the gilded cup. Every planet rings a note as you pass, so each shot plays a little melody. Nine plates a course, a new course every day, and every plate can be aced: after each one you're shown how.",
+  "controls": "Drag back from anywhere on the plate and let go to launch; tap to fast-forward. Keys: arrows aim, Space launches, P pauses, M mutes.",
+  "number": 4,
+  "created": "2026-10-17",
+  "type": "trajectory",
+  "genres": ["orbit golf", "physics", "daily course"],
+  "color": "#2c3a6b",
+  "emoji": "☄️",
+  "draft": false
+}

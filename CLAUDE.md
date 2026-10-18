@@ -253,6 +253,13 @@ document it here rather than burying it in the game.
   check never depends on public relays; `npm run verify-live` runs it again on the live
   site in two separate browsers through the real relays. Assert the guest's view never holds
   the host's secrets.
+- **Debug helpers must not depend on where earlier steps left things.** Night Stitch's
+  `loopAround` walked the needle to the circle first, and the thread laid on that walk cut
+  across the circle and used up the 900-unit thread, so the smoke's boss loop failed only
+  when an earlier real-time step had left the needle far away (2026-10-18, under heavy
+  load). Make helpers start from a clean state (it now ties off the thread after the walk),
+  and find the root cause by logging state from inside the failing check, not a lookalike
+  harness.
 - **Smoke tests must not depend on timing.** Emulated phones move the mouse slowly, so
   freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops),
   and wait for screens rather than sleeping a fixed time. Before a screenshot, wait for
@@ -300,6 +307,10 @@ document it here rather than burying it in the game.
   bets or folds; without that, both bots "knew" they were winning and escalated every round.
 - Strictly optimal opponents can be no fun: Dead Drop's bots folded every lost round before
   the final flip, the game's big moment. Make them play on most of the time.
+- Golf-style par from bots (Comet Cup): bots that know exactly where a shot ends beat
+  people who see only the start of it, even with human-sized aim noise. Set par from a noisy
+  bot's mean plus a margin you check by playing (+0.6 strokes there), and keep par in a
+  stats field so it can be retuned without regenerating (`tools/bank.mjs --repar`).
 - Mirror decks are fair, but a card that swings rounds by 10+ points makes draws decide
   games. `tools/sim.mjs --set sleeper.power=4` tries a tweak without editing the data.
 
@@ -375,6 +386,30 @@ and new files.
   names, viewBox, `currentColor` plus one `.ac` accent class, sizes to check, the
   one-Chrome-at-a-time rule) while the engine, net and UI were built. While it worked, a
   Playwright route served placeholder art so screens could be checked early.
+- Other sessions can load Rich's machine heavily (Comet Cup's build saw load 140–170 from
+  other projects), and an offline generator then crawls: the first 240-hole bank run was
+  heading for an hour and was killed with everything still in memory. Make generators
+  resumable (append each accepted item to a file as it is made, like
+  `games/comet-cup/tools/bank.mjs`), iterate with a small run (`--per 12`), start the full
+  build early at `nice -n 19`, and do non-CPU work (copy, CSS, reviews) while it runs.
+- Cross-browser determinism for physics replays: a step that uses only `+ - * /` and
+  `Math.sqrt` gives bit-identical results in every JS engine, so a stored launch velocity
+  replays the same path everywhere. Keep `sin`/`cos`/`pow`/`**` out of the step.
+- An exception inside `render()` used to stop requestAnimationFrame for good (the game froze
+  with one console error); `shared/loop.js` now asks for the next frame first. Effects that
+  start in the future (`t0 > now`) must be skipped, not drawn with a negative radius.
+- When a title card sits over a canvas demo, fit the canvas view into the free space beside
+  (desktop) or above (phone) the card instead of drawing under it.
+- In italic serif faces and in Didones (hairline horizontals) the U+2212 minus reads as a
+  dash or vanishes. Draw it (a small bar) or say it in words ("two under par").
+- Save logic must key off the game state ("is this hole scored?"), not the screen name: the
+  result is recorded while the screen still says `play`, so a reload replayed a finished
+  hole.
+- Feel check for gravity games: compare the escape speed of the biggest body with the top
+  launch speed. Big worlds were traps until a 70% shot could escape them.
+- Generated content needs eyes: a `contact()` debug helper that draws every generated level
+  with its solution as miniatures (one `javascript_tool` call, one screenshot) made curating
+  the bank quick.
 
 ## Games so far
 
@@ -383,3 +418,4 @@ and new files.
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
 | 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live |
+| 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

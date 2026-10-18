@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Comet Cup</title>
+    <meta name="description" content="Orbit golf on a star chart: sling a comet past singing planets into the cup." />
+    <meta name="theme-color" content="#141c33" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23141c33'/><circle cx='60' cy='58' r='26' fill='%23a89dcc'/><path d='M14 22 Q30 30 44 44' stroke='%23eadfc4' stroke-width='7' stroke-linecap='round' fill='none' opacity='.6'/><circle cx='46' cy='46' r='8' fill='%23fffaf0'/><path d='M74 34 L74 14 L90 20 Z' fill='%23e9c35b'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..800;1,6..96,400..800&family=Old+Standard+TT:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header id="bar">
+        <div id="home-slot"></div>
+        <div id="plate" class="plate-caption" hidden>
+          <span id="plate-no" class="plate-no"></span>
+          <span id="plate-name" class="plate-name"></span>
+        </div>
+        <div id="hole-stats" class="hole-stats" hidden>
+          <div class="stat"><span class="stat-label">Par</span><span id="par" class="stat-num"></span></div>
+          <div class="stat"><span class="stat-label">Stroke</span><span id="strokes" class="stat-num"></span></div>
+          <div class="stat"><span class="stat-label">Total</span><span id="total" class="stat-num"></span></div>
+        </div>
+        <div class="bar-buttons">
+          <button class="icon-btn" data-action="help" aria-label="How to play" title="How to play (?)">?</button>
+          <button class="icon-btn" id="btn-mute" data-action="mute" aria-label="Mute sound" title="Sound (M)">♪</button>
+          <button class="icon-btn" id="btn-pause" data-action="pause" aria-label="Pause" title="Pause (P)" hidden>II</button>
+        </div>
+      </header>
+      <div id="wrap">
+        <canvas id="paper" aria-hidden="true"></canvas>
+        <canvas id="stage" aria-label="The plate. Pull back from anywhere to aim the comet, then let go to launch it."></canvas>
+        <div id="hint" class="hint" hidden></div>
+      </div>
+      <footer id="card" class="scorecard" aria-label="Scorecard" hidden></footer>
+    </div>
+    <div id="banner" class="banner" role="status"></div>
+    <div id="overlay"></div>
+    <div id="modal-root"></div>
+  </body>
+</html>

@@ -999,6 +999,10 @@ markReady({
       tickState(s, { target: start });
       handleEvents(s);
     }
+    // Tie off the thread laid on the walk over: it can cut across the circle and, with the
+    // 900-unit thread, a long walk left too little for the loop to close (smoke failed when
+    // an earlier step had left the needle far away).
+    s.thread.splice(0, s.thread.length, { x: s.needle.x, y: s.needle.y });
     const pts = [];
     for (let i = 0; i <= 100; i++) pts.push({ x: x + Math.cos((i / 90) * Math.PI * 2) * r, y: y + Math.sin((i / 90) * Math.PI * 2) * r });
     this.drive(pts);

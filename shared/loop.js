@@ -17,11 +17,13 @@ export function createLoop({ update, render, maxDt = 0.1 }) {
   let last = null;
   let manual = false;
   function frame(now) {
+    // Ask for the next frame first, so one exception (logged to the console) can't stop the
+    // game for good.
+    requestAnimationFrame(frame);
     const dt = last === null ? 0 : Math.min(maxDt, (now - last) / 1000);
     last = now;
     if (!manual) update(dt);
     render(dt);
-    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
   return {
