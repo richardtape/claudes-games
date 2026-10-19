@@ -261,7 +261,10 @@ document it here rather than burying it in the game.
   and find the root cause by logging state from inside the failing check, not a lookalike
   harness.
 - **Smoke tests must not depend on timing.** Emulated phones move the mouse slowly, so
-  freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops),
+  freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops;
+  Dead Drop's smoke makes the rival lock in at once with `__game.rivalLocks()` and freezes
+  cards and reveals with `holdCard()` and `holdReveal()`, because under load the bot moved
+  first),
   and wait for screens rather than sleeping a fixed time. Before a screenshot, wait for
   entrance animations to finish (Dead Drop's `settle()`), or shots catch half-faded panels.
 - **Real-time games: play a whole run headless** with a bot on the manual clock and
@@ -313,6 +316,19 @@ document it here rather than burying it in the game.
   stats field so it can be retuned without regenerating (`tools/bank.mjs --repar`).
 - Mirror decks are fair, but a card that swings rounds by 10+ points makes draws decide
   games. `tools/sim.mjs --set sleeper.power=4` tries a tweak without editing the data.
+- A sim harness for volume: `games/dead-drop/tools/sim.mjs` (flags in its doc comment, every
+  run logged in `tools/SIMLOG.md`) plays batches on worker threads. Seed each match by its
+  index and keep the shortest in-order prefix of batches that reaches the volume, so the
+  worker count and finish order can't change a result, and a rerun with the same seed replays
+  the same deals (a paired comparison). Save a baseline JSON, compare every change
+  `--against` it, and print a 95% margin beside every rate.
+- Volume: 20,000 rounds gave ±1.0 point on each agent's win rate, 5,000 about ±1.3–2.0, and
+  one point of power moves an agent only about a point, so short probes can't rank agents.
+- What Dead Drop's baseline taught: escalation was automatic (99% of rounds) and stake 4 was
+  reached in 78%, so escalating was not yet a real decision. Cheap bots (8 Monte Carlo
+  samples instead of 24, about twice as fast) broadly carry agent and city numbers over, but
+  not stake numbers (they fold more): tune agents cheaply and confirm stakes at the bots' own
+  samples.
 
 ## Deploying
 
@@ -320,7 +336,9 @@ The repo is `richardtape/claudes-games` (GitHub Pages from `main`, root). `scrip
 is modelled on `~/Developer/claudes-space/publish.py`:
 
 - It refuses to deploy if `npm test` or `npm run check` fails (`--skip-checks` exists; avoid it).
-- It stages every file git would track, minus dotfiles and games with `"draft": true`.
+- It stages every file git would track, minus dotfiles, `docs/` (specs, plans, the relay log)
+  and games with `"draft": true`. That rule is `publishable()` in `scripts/publish-filter.mjs`
+  (tested).
 - It shortens home paths to `~`, then scans every staged file for keys, tokens, home paths
   and the patterns in `.publish-deny` (local only, gitignored; Rich's email addresses).
   If it stops, fix what it names; never work around the check.
@@ -381,7 +399,10 @@ and new files.
   and people find it harder to hit. Pulse colour or brightness instead.
 - An async update that awaits an animation must hold a busy flag and re-read the latest state
   afterwards; otherwise a later update renders, then the earlier one resumes and paints its
-  stale copy over it (Dead Drop showed round 1's result after round 2 began).
+  stale copy over it (Dead Drop showed round 1's result after round 2 began). If a whole turn
+  resolved behind the awaited card or flash, mark the update dirty and return, so the next
+  pass reveals that turn from the board still on screen (`upToDate()` in Dead Drop's
+  `showLatest`).
 - Parallel work: a subagent drew Dead Drop's 24 silhouettes from a tight spec (function
   names, viewBox, `currentColor` plus one `.ac` accent class, sizes to check, the
   one-Chrome-at-a-time rule) while the engine, net and UI were built. While it worked, a
@@ -404,12 +425,39 @@ and new files.
   dash or vanishes. Draw it (a small bar) or say it in words ("two under par").
 - Save logic must key off the game state ("is this hole scored?"), not the screen name: the
   result is recorded while the screen still says `play`, so a reload replayed a finished
-  hole.
+  hole. Likewise detect a new match by an id the host stamps on every view, not by the screen:
+  Dead Drop's guest sat on the dossier through a rematch. Reset per-match UI in one function
+  (`freshMatchUi()`) when the id changes, and count each id once (`countMatch` in
+  `js/meta.js`) so reloads and resumes never count a match twice.
 - Feel check for gravity games: compare the escape speed of the biggest body with the top
   launch speed. Big worlds were traps until a 70% shot could escape them.
 - Generated content needs eyes: a `contact()` debug helper that draws every generated level
   with its solution as miniatures (one `javascript_tool` call, one screenshot) made curating
   the bank quick.
+- Size `clip-path` cut corners in px on panels that can grow tall: a % inset grows with the
+  element and became a 90px wedge through Dead Drop's help text. `--cut-px` and `--cut-2-px`
+  (`games/dead-drop/style.css`) keep every inset at 12px or less; % cuts stay on small slips.
+- A clipped element can be a rule written for another screen: Dead Drop's help `.cities`
+  grid (240px minimum columns) also matched a `<span class="cities">` on the dossier and pushed
+  "+2 Agent Wren" past the clip to "+2 Agen". Name classes by what they are (`.city-list`),
+  and read the computed styles before restyling.
+- Make skippable waits re-timeable: Dead Drop's reveal `wait()` keeps each pending wait's
+  remaining time, and `pace({ speed, skip })` re-arms them all, so Speed up or Skip lands at
+  once rather than after the 750 ms wait already running. CSS keeps pace through a `--pace`
+  variable and WAAPI through `dur(ms)` (`games/dead-drop/js/main.js`).
+- One helper for full-screen interstitials (`showCard(html, cls, ms)` in Dead Drop): one card
+  at a time, resolved by its timer or a skip. Keys skip at once, taps only after 400 ms (a
+  double-click on Next round skipped the new round's card). It shows nothing when animations
+  are skipped or a modal is open, and leaving tears it down and resolves its promise.
+- Seat a bot after whatever should hold it is up: `attachBot`'s first `tick()` runs
+  synchronously and checks its hold only then, so in round 1 the rival locked in behind the
+  title card. Dead Drop's `startSolo` calls `beginMatch()` first, and debug helpers that seat
+  a bot (`toFinalTurn()`) hold it themselves; `stop()` doesn't cancel a decision in flight.
+- Web Audio: a new GainNode starts at gain 1, so a note that starts exactly on a sample frame
+  (sequencer grids often do) leaks one full-volume sample before its envelope: 31% of
+  grid-timed hats clicked. `shared/sfx.js` now sets `gain.setValueAtTime(0, 0)` first (the
+  `.value` setter can race `currentTime`). When you can't listen, render to an
+  `OfflineAudioContext` and compare levels in dBFS with what the game played before.
 
 ## Games so far
 
@@ -417,5 +465,5 @@ and new files.
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
-| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye) |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

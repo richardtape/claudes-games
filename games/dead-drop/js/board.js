@@ -27,13 +27,14 @@ export function chipHTML(cv, { ghost = false } = {}) {
     <b class="pow${powClass(cv)}">${cv.power}</b><span class="art">${agentSVG(cv.kind)}</span><span class="nm">${esc(a.name)}</span>${cv.faceDown ? '<i class="fd-mark" aria-hidden="true"></i>' : ''}</div>`;
 }
 
-/** A card in your hand. */
+/** A card in your hand. A turned asset (a rival's agent that came over to you) says so. */
 export function cardHTML(cv, i, { selected = false, disabled = false } = {}) {
   const a = AGENT[cv.kind];
-  return `<button class="card${selected ? ' sel' : ''} k-${cv.kind}" data-action="pick" data-uid="${cv.uid}" ${disabled ? 'disabled' : ''}
-      aria-pressed="${selected}" aria-label="${esc(`${a.name}, power ${a.power}. ${a.text}`)}">
+  const turned = cv.origin !== undefined && cv.origin !== cv.owner;
+  return `<button class="card${selected ? ' sel' : ''}${turned ? ' turned-asset' : ''} k-${cv.kind}" data-action="pick" data-uid="${cv.uid}" ${disabled ? 'disabled' : ''}
+      aria-pressed="${selected}" aria-label="${esc(`${a.name}, power ${a.power}${turned ? ', a turned asset' : ''}. ${a.text}`)}">
     <b class="pow">${a.power}</b><span class="art">${agentSVG(cv.kind)}</span><span class="nm">${esc(a.name)}</span>
-    <span class="tx">${esc(a.text)}</span><kbd>${i + 1}</kbd></button>`;
+    <span class="tx">${esc(a.text)}</span>${turned ? '<span class="turned">Turned</span>' : ''}<kbd>${i + 1}</kbd></button>`;
 }
 
 /** Board-row slots: real cards plus empty sockets up to the city's capacity. */
@@ -82,13 +83,30 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
 
 // ── reveal animation ────────────────────────────────────────────────────────
 
+/** A reveal ignores taps this long after it starts: a stray tap from locking in can't skip it. */
+export const REVEAL_GUARD_MS = 400;
+/** The first tap after the guard plays the reveal this many times faster. */
+export const FAST = 3;
+
+/**
+ * What a tap (or Space, Enter, Escape) does to a reveal that started at `at` and is playing at
+ * `speed`, at time `now` (all from performance.now()): 'ignore' inside the guard, then 'fast',
+ * then 'skip' once it is already fast.
+ */
+export function revealTap({ at, speed }, now) {
+  if (now - at < REVEAL_GUARD_MS) return 'ignore';
+  return speed >= FAST ? 'skip' : 'fast';
+}
+
 const NAME = (kind) => (kind ? AGENT[kind].name : 'a face-down agent');
 
 /**
  * Plays `events` (from the new view) over the board currently rendered from the previous
  * view. `ctx` supplies: root (board element), me (seat at the bottom), names, cityName(ci),
- * cardOf(uid) (the card in the new view, if it is still on the board), wait(ms), say(text),
- * sfx hooks (drop, flip, out, trick, swap), and finale(result) for the end of a round.
+ * cardOf(uid) (the card in the new view, if it is still on the board), wait(ms) (the reveal's
+ * clock, which follows speed-ups and skips), dur(ms) (a WAAPI duration at the pace of the moment
+ * it starts), cancelled(), say(text), sound(what, arg) (an effect of js/audio.js, or 'chord': the
+ * spy chord on the final flip), shake(n), and finale(result) for the end of a round.
  */
 export async function playEvents(events, ctx) {
   const { root, wait, say, sound } = ctx;
@@ -114,7 +132,7 @@ export async function playEvents(events, ctx) {
     const a = el.getBoundingClientRect();
     placeInRow(parent, el);
     const b = el.getBoundingClientRect();
-    el.animate([{ transform: `translate(${a.left - b.left}px, ${a.top - b.top}px)` }, { transform: 'none' }], { duration: ctx.fast ? 1 : ms, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    el.animate([{ transform: `translate(${a.left - b.left}px, ${a.top - b.top}px)` }, { transform: 'none' }], { duration: ctx.dur(ms), easing: 'cubic-bezier(.2,.8,.2,1)' });
     await wait(ms);
   };
   const flipTo = async (el, cv) => {
@@ -152,6 +170,8 @@ export async function playEvents(events, ctx) {
     sound('drop');
     await wait(520);
     sound('slam');
+    // The final flip (the round ends with this turn): the spy chord rings out as the cards land.
+    if (events.some((e) => e.t === 'round')) sound('chord');
     ctx.shake(1);
     await wait(160);
     await Promise.all(
@@ -224,8 +244,8 @@ export async function playEvents(events, ctx) {
         const bottom = rowEl(e.city, ctx.me);
         if (top && bottom) {
           const [a, b] = [top.getBoundingClientRect(), bottom.getBoundingClientRect()];
-          top.animate([{ transform: 'none' }, { transform: `translateY(${b.top - a.top}px)` }], { duration: ctx.fast ? 1 : 600, easing: 'ease-in-out' });
-          bottom.animate([{ transform: 'none' }, { transform: `translateY(${a.top - b.top}px)` }], { duration: ctx.fast ? 1 : 600, easing: 'ease-in-out' });
+          top.animate([{ transform: 'none' }, { transform: `translateY(${b.top - a.top}px)` }], { duration: ctx.dur(600), easing: 'ease-in-out' });
+          bottom.animate([{ transform: 'none' }, { transform: `translateY(${a.top - b.top}px)` }], { duration: ctx.dur(600), easing: 'ease-in-out' });
         }
         await wait(650);
         break;

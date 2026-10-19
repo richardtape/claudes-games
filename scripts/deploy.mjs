@@ -10,6 +10,7 @@
 // local git identity. Instead .site/ holds a separate checkout of the public repo, wiped (except
 // .git) and restaged on every run with:
 //   - every file git would track here (so .gitignore applies), minus dotfiles and draft games,
+//     (docs/ (specs, plans, relay log) never deploys),
 //   - .nojekyll so GitHub Pages serves files as-is.
 // Every staged file has the home folder shortened to ~ and is scanned for private keys, tokens,
 // home paths and the patterns in .publish-deny (local only, one per line; deploy refuses to run
@@ -20,6 +21,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, re
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { publishable } from './publish-filter.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = join(ROOT, '.site');
@@ -79,9 +81,7 @@ function filesToPublish() {
     .filter(Boolean);
   const drafts = draftSlugs();
   return listed.filter((rel) => {
-    const parts = rel.split('/');
-    if (parts.some((p) => p.startsWith('.'))) return false; // dotfiles and dot-folders stay local
-    if (parts[0] === 'games' && drafts.has(parts[1])) return false;
+    if (!publishable(rel, drafts)) return false;
     const abs = join(ROOT, rel);
     return existsSync(abs) && !lstatSync(abs).isSymbolicLink();
   });

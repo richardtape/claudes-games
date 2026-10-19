@@ -42,6 +42,11 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
   const ready = () => unlocked && !muted && ensure();
 
   function env(gain, t0, attack, dur, vol) {
+    // Silent until t0. Left at its default of 1, a gain can let one full-volume sample through
+    // when t0 falls on a sample frame (a sequencer's grid often does): an audible click on noise.
+    // The event sits at time 0, always before t0 (the `.value` setter would put it at currentTime,
+    // which can tick past t0 and silence the attack).
+    gain.gain.setValueAtTime(0, 0);
     gain.gain.setValueAtTime(0.0001, t0);
     gain.gain.exponentialRampToValueAtTime(Math.max(vol, 0.0002), t0 + attack);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);

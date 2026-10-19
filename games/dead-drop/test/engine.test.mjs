@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
-import { DECK, START_HAND, TURNS } from '../js/data.js';
+import { DECK, MAX_HAND, RULES, START_HAND, TURNS } from '../js/data.js';
 
 const uidOf = (s, seat, kind) => Object.values(s.round.cards).find((c) => c.origin === seat && c.id0 === kind).uid;
 /** Make sure `seat` holds `kind` (pulling it from the deck if needed) and return its uid. */
@@ -318,7 +318,50 @@ test('invariant: random play never loses a card and always finishes', () => {
       assert.equal(new Set(seen).size, 2 * DECK.length, `seed ${seed}: duplicates`);
       for (const c of R.cities) c.sides.forEach((side, seat) => assert.ok(side.length <= E.capacityOf(c.id) && side.every((u) => R.cards[u].owner === seat)));
       assert.ok(R.turn <= TURNS);
+      assert.ok(R.hands.every((h) => h.length <= MAX_HAND), `seed ${seed}: hand size`);
     }
     assert.equal(s.phase, 'match-over', `seed ${seed} finished`);
   }
+});
+
+test('tie-break totals: Lisbon left out, inverted, or counted', () => {
+  const ids = ['lisbon', 'helsinki', 'berlin'];
+  const totals = [[6, 0], [1, 3], [0, 0]];
+  assert.deepEqual(E.tiebreakTotals(ids, totals, 'all'), [7, 3]);
+  assert.deepEqual(E.tiebreakTotals(ids, totals, 'out'), [1, 3]);
+  assert.deepEqual(E.tiebreakTotals(ids, totals, 'invert'), [-5, 3]);
+});
+
+test('a round tied on cities uses the tie-break mode', () => {
+  const run = (mode, layout) => {
+    const saved = RULES.lisbonTiebreak;
+    RULES.lisbonTiebreak = mode;
+    try {
+      const s = match(['lisbon', 'helsinki', 'berlin']);
+      for (const [a, b] of layout) play(s, a, b);
+      while (s.phase === 'plan') play(s, null, null);
+      return s.round.result.winner;
+    } finally {
+      RULES.lisbonTiebreak = saved;
+    }
+  };
+  // Seat 0 alone in Lisbon with Heavy (holds it); Helsinki: rival Jammer 3 beats Lookout 1.
+  const lone = [[['heavy', 0], ['jammer', 1]], [['lookout', 1], null]];
+  assert.deepEqual(['all', 'out', 'invert'].map((m) => run(m, lone)), [0, 1, 1]);
+  // Both in Lisbon (Heavy 6 vs Lookout 1: seat 1 holds it); seat 0's Jammer alone in Helsinki.
+  const both = [[['heavy', 0], ['lookout', 0]], [['jammer', 1], null]];
+  assert.deepEqual(['all', 'out', 'invert'].map((m) => run(m, both)), [0, 0, 1]);
+  assert.equal(RULES.lisbonTiebreak, 'out', 'the default leaves Lisbon out');
+});
+
+test('a Getaway in Havana can pull a defected rival agent into your hand (a turned asset)', () => {
+  const s = match(['havana', 'monaco', 'tangier']);
+  play(s, ['heavy', 1], ['mole', 0]);
+  play(s, ['handler', 1], ['lookout', 0]);
+  play(s, ['veteran', 1], ['assassin', 2]);
+  play(s, ['sleeper', 2], ['jammer', 2]); // Monaco is full; end of turn 4: the Mole and Lookout in Havana are seat 0's now
+  play(s, ['getaway', 0], ['heavy', 2]);
+  const turned = s.round.hands[0].map((u) => s.round.cards[u]).find((c) => c.origin === 1);
+  assert.ok(turned, 'a rival-origin agent is in seat 0’s hand');
+  assert.equal(turned.owner, 0);
 });

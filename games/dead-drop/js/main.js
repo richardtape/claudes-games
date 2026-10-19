@@ -1,14 +1,16 @@
 // Dead Drop UI: screens, the four ways to play (computer, pass and play, host, guest), input,
 // and the reveal flow that animates each turn's events before re-rendering from the new view.
-import { homeLink, markReady, onHidden, recordBest, recordPlay, store } from '../../../shared/arcade.js';
+import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, store } from '../../../shared/arcade.js';
 import { createSfx } from '../../../shared/sfx.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
 import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, TURNS } from './data.js';
 import { attachBot, createTable, guestSession, hostSession, restoreTable } from './session.js';
-import { cardHTML, chipHTML, cityHTML, esc, playEvents } from './board.js';
-import { agentSVG, spySVG } from './art.js';
+import { cardHTML, chipHTML, cityHTML, esc, FAST, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
+import { agentSVG, citySVG, spySVG } from './art.js';
 import { createAudio } from './audio.js';
+import { levelFor } from './music.js';
+import { countMatch, countWin } from './meta.js';
 
 const SLUG = 'dead-drop';
 const saved = store(SLUG);
@@ -40,24 +42,80 @@ const ui = {
   target: null,
   animating: false,
   dirty: false,
+  // Reveal pacing (see wait()): the reveal started at revealAt (performance.now()) and plays at
+  // speed 1 or FAST; skip runs the rest of it out at once. alwaysSkip (__game.skipAnimations)
+  // skips every reveal for the rest of the session.
+  revealAt: 0,
+  speed: 1,
   skip: false,
+  alwaysSkip: false,
+  peek: false, // See the board: the round result shrinks to a strip so the final board shows
   modal: null, // help | fold | escalated | quit
+  helpTab: 'rules', // rules | agents | cities | keys: the help sheet's open tab, kept between openings
   cover: null, // pass and play: { seat, why }
   prevSpectator: null,
   caption: '',
   inspect: null,
-  net: null,
+  net: null, // online: { role, code, status, room, session, peer: null | 'here' | 'gone' (lost connection) | 'left' (said bye), leftName }
   rival: null,
   flashSeen: null,
   updating: false, // onUpdate() in progress (reveal or flash playing)
   matchDone: false,
+  resultShown: null, // round result already shown (its entrance animation plays once)
   sentPlan: null, // guest: the drop we sent, shown until the host's view confirms it
+  drag: null, // a card being dragged to a city: null or { uid, ghost, over } (over: the city index under the pointer, or null)
+  card: null, // the title card or flash on screen (showCard): null or { el, at, skip(), hold() }
+  roundKey: null, // `${matchId}:${roundNo}` of the last round whose title card was due
+  finalKey: null, // the same for the last round whose final turn's card was due
+  stampLand: false, // the final card has just gone: the ×2 stamp lands on the stake at the next render
+  initShown: null, // the seat whose First flip token was last drawn (it flips across when this changes)
 };
 let table = null;
 let bot = null;
 let unwatch = null;
+let modalShown = ''; // the HTML last put in #modal-root
 
-const wait = (ms) => new Promise((r) => setTimeout(r, ui.skip ? 0 : ms));
+/**
+ * The reveal's clock. wait(ms) resolves after ms / ui.speed, or at once when ui.skip is set or
+ * no reveal is running any more (leaveMatch ended it). dur(ms) is the same for a WAAPI duration.
+ * After changing ui.speed, ui.skip or ui.animating, call pace(): every wait in flight is
+ * re-timed, so a speed-up or a skip lands now rather than when the current beat ends.
+ * A quick wait resolves on the spot, with no timer: a hidden tab holds every timer back to about
+ * once a second, so a skipped reveal of 30 waits would otherwise take half a minute.
+ */
+const waits = new Set();
+const quick = () => ui.skip || !ui.animating;
+const dur = (ms) => (quick() ? 1 : ms / ui.speed);
+function arm(w) {
+  if (quick()) {
+    // Its awaiting code runs as a microtask, after whatever called wait() or pace() returns.
+    waits.delete(w);
+    w.resolve();
+    return;
+  }
+  w.from = performance.now();
+  w.speed = ui.speed;
+  w.timer = setTimeout(() => {
+    waits.delete(w);
+    w.resolve();
+  }, w.left / ui.speed);
+}
+function wait(ms) {
+  return new Promise((resolve) => {
+    const w = { left: ms, resolve };
+    waits.add(w);
+    arm(w);
+  });
+}
+function pace({ speed = ui.speed, skip = ui.skip } = {}) {
+  ui.speed = speed;
+  ui.skip = skip;
+  for (const w of waits) {
+    clearTimeout(w.timer);
+    w.left = Math.max(0, w.left - (performance.now() - w.from) * w.speed);
+    arm(w);
+  }
+}
 const toast = (msg) => cgToast(msg, { className: 'toast' });
 const view = () => ui.view;
 const me = () => (ui.mode === 'pass' ? (ui.seat ?? 0) : ui.mode === 'guest' ? 1 : 0);
@@ -85,12 +143,13 @@ function persist() {
   if (ui.mode === 'host' && ui.net?.code) saved.set(`host-${ui.net.code}`, { table: table.toJSON(), at: Date.now() });
 }
 
-function resetMatchUi() {
-  bot?.stop();
-  bot = null;
-  ui.view = null;
-  ui.remote = null;
+/**
+ * The one place per-match UI state is cleared: everything a new match (a fresh start or a
+ * rematch in any mode) must not inherit from the last one. Add new per-match fields here.
+ */
+function freshMatchUi() {
   ui.shownSeq = 0;
+  ui.view = null;
   ui.selected = null;
   ui.target = null;
   ui.modal = null;
@@ -99,6 +158,49 @@ function resetMatchUi() {
   ui.inspect = null;
   ui.flashSeen = null;
   ui.prevSpectator = null;
+  ui.matchDone = false;
+  ui.resultShown = null;
+  ui.sentPlan = null;
+  ui.peek = false;
+  ui.speed = 1;
+  ui.skip = ui.alwaysSkip;
+  ui.roundKey = null;
+  ui.finalKey = null;
+  ui.stampLand = false;
+  ui.initShown = null;
+  cancelDrag();
+  clearOverlays();
+}
+
+/** Leaving a mode altogether: a fresh match screen, no host view kept, no computer rival. */
+function resetMatchUi() {
+  freshMatchUi();
+  ui.remote = null;
+  bot?.stop();
+  bot = null;
+}
+
+/**
+ * Rebuild a saved table into `table` (call once ui.mode, ui.rival and ui.net are set). A save
+ * from before match ids gets a new id from restoreTable: save it straight back so the id stays
+ * the same across reloads, and mark it seen without counting, since it was counted when it began.
+ */
+function restoreSaved(json) {
+  table = restoreTable(json);
+  if (json.matchId === table.matchId) return;
+  persist();
+  const matches = meta.matches;
+  countMatch(meta, table.matchId);
+  meta.matches = matches;
+  saveMeta();
+}
+
+/** Count a match the first time this browser sees its id, so reloads and rejoins never recount it. */
+function countOnce(id) {
+  if (id && countMatch(meta, id)) {
+    recordPlay(SLUG);
+    saveMeta();
+  }
 }
 
 function startSolo(rivalId, resume = null) {
@@ -106,10 +208,13 @@ function startSolo(rivalId, resume = null) {
   resetMatchUi();
   ui.mode = 'solo';
   ui.rival = RIVALS.find((r) => r.id === rivalId) || RIVALS[0];
-  table = resume ? restoreTable(resume) : createTable({ names: [meta.codename, ui.rival.name] });
+  if (resume) restoreSaved(resume);
+  else table = createTable({ names: [meta.codename, ui.rival.name] });
   watch(table);
+  beginMatch();
+  // Seated once the table is up: the round's title card holds the rival (ui.updating) from its
+  // very first move, as it does in every later round.
   bot = attachBot(table, 1, ui.rival, { hold: () => ui.updating });
-  beginMatch(!resume);
 }
 
 function startPass(resume = null) {
@@ -117,51 +222,61 @@ function startPass(resume = null) {
   resetMatchUi();
   ui.mode = 'pass';
   ui.rival = null;
-  table = resume ? restoreTable(resume) : createTable({ names: ['Red', 'Teal'] });
+  if (resume) restoreSaved(resume);
+  else table = createTable({ names: ['Red', 'Teal'] });
   watch(table);
   ui.seat = null;
-  beginMatch(!resume);
+  beginMatch();
 }
 
 async function startHost({ code = roomCode(), resume = null } = {}) {
   leaveMatch();
   resetMatchUi();
   ui.mode = 'host';
-  ui.net = { role: 'host', code, status: 'connecting', peer: null, error: null, qr: null };
+  const net = (ui.net = { role: 'host', code, status: 'connecting', peer: null, leftName: null, error: null, qr: null });
   ui.screen = 'lobby';
   history.replaceState(null, '', `#host=${code}`);
   render();
-  table = resume ? restoreTable(resume) : createTable({ names: [meta.codename, 'Your rival'] });
+  if (resume) restoreSaved(resume);
+  else table = createTable({ names: [meta.codename, 'Your rival'] });
   table.names[0] = meta.codename;
   watch(table);
+  let room;
   try {
-    ui.net.room = await joinRoom({ slug: SLUG, code, transport: NET });
+    room = await joinRoom({ slug: SLUG, code, transport: NET });
   } catch (err) {
-    ui.net.status = 'error';
-    ui.net.error = 'Couldn’t load the connection library. Check your internet connection and try again.';
+    if (ui.net !== net) return;
+    net.status = 'error';
+    net.error = 'Couldn’t load the connection library. Check your internet connection and try again.';
     render();
     return;
   }
-  const room = ui.net.room;
+  // Left (or started over) while the room was opening.
+  if (ui.net !== net) return room.leave();
+  net.room = room;
   room.onError = (m) => {
-    ui.net.error = m;
+    if (ui.net !== net) return;
+    net.error = m;
     render();
   };
-  ui.net.session = hostSession({
+  net.session = hostSession({
     room,
     table,
     onStatus: (s, name) => {
+      if (ui.net !== net) return;
       if (s === 'joined' || s === 'back') {
-        ui.net.peer = 'here';
-        if (ui.screen === 'lobby') beginMatch(!resume);
-        else toast(`${name} is back.`);
-      } else if (s === 'left') {
-        ui.net.peer = 'gone';
-        render();
+        net.peer = 'here';
+        if (ui.screen === 'lobby') return beginMatch();
+        toast(`${name} is back.`);
+      } else if (s === 'left') net.peer = 'gone';
+      else if (s === 'bye') {
+        net.peer = 'left';
+        net.leftName = name;
       }
+      render();
     },
   });
-  ui.net.status = 'waiting';
+  net.status = 'waiting';
   render();
   makeQR();
 }
@@ -170,44 +285,51 @@ async function startGuest(code) {
   leaveMatch();
   resetMatchUi();
   ui.mode = 'guest';
-  ui.net = { role: 'guest', code, status: 'connecting', peer: null, error: null, slow: false };
+  const net = (ui.net = { role: 'guest', code, status: 'connecting', peer: null, leftName: null, error: null, slow: false });
   ui.screen = 'lobby';
   history.replaceState(null, '', `#join=${code}`);
   render();
+  let room;
   try {
-    ui.net.room = await joinRoom({ slug: SLUG, code, transport: NET });
+    room = await joinRoom({ slug: SLUG, code, transport: NET });
   } catch {
-    ui.net.status = 'error';
-    ui.net.error = 'Couldn’t load the connection library. Check your internet connection and try again.';
+    if (ui.net !== net) return;
+    net.status = 'error';
+    net.error = 'Couldn’t load the connection library. Check your internet connection and try again.';
     render();
     return;
   }
-  const net = ui.net;
-  net.room.onError = (m) => {
+  // Left (or started over) while the room was opening.
+  if (ui.net !== net) return room.leave();
+  net.room = room;
+  room.onError = (m) => {
+    if (ui.net !== net) return;
     net.error = m;
     render();
   };
   net.session = guestSession({
-    room: net.room,
+    room,
     name: meta.codename,
     token: meta.token,
     onView: (v) => {
+      // A goodbye is still on its way out: views from the old room no longer belong on screen.
+      if (ui.net !== net) return;
       ui.remote = v;
-      if (ui.screen === 'lobby') beginMatch(true);
+      if (ui.screen === 'lobby') beginMatch();
       else onUpdate();
     },
     onStatus: (s, name) => {
+      if (ui.net !== net) return;
       if (s === 'joined') {
         net.peer = 'here';
         net.status = 'joined';
         if (ui.screen === 'play') toast(`Back in ${name}’s game.`);
-      } else if (s === 'left') {
-        net.peer = 'gone';
-        render();
-      } else if (s === 'full' || s === 'version') {
-        net.status = s;
-        render();
-      }
+      } else if (s === 'left') net.peer = 'gone';
+      else if (s === 'bye') {
+        net.peer = 'left';
+        net.leftName = name;
+      } else if (s === 'full' || s === 'version') net.status = s;
+      render();
     },
   });
   net.status = 'searching';
@@ -220,29 +342,42 @@ async function startGuest(code) {
   }, 20000);
 }
 
-function beginMatch(fresh = true) {
+/** Bookkeeping as a match comes on screen: count it (once per match id). */
+function matchStarts(id) {
+  countOnce(id);
+}
+
+/** The first view of a match (a new one or a resumed one) is ready: show the table. */
+function beginMatch() {
   ui.screen = 'play';
-  if (fresh) {
-    recordPlay(SLUG);
-    meta.matches++;
-    saveMeta();
-  }
-  audio.music(true);
+  matchStarts(latestView()?.matchId);
   onUpdate();
 }
 
 /** Stop the current match: bot, network room, saved solo game (unless resuming it). */
 function leaveMatch({ keepSave = false } = {}) {
+  // A reveal still playing is over. With ui.animating false its waits are zero (wait()), so it
+  // runs out (and releases ui.updating) at once even after freshMatchUi() resets ui.skip for the
+  // next match, and it neither paints nor sounds (animateTurn).
+  if (ui.animating) {
+    ui.animating = false;
+    pace();
+  }
+  // Flashes and title cards go with the table; a card's promise resolves, so nothing waits on it.
+  clearOverlays();
   bot?.stop();
   bot = null;
   unwatch?.();
   unwatch = null;
-  if (ui.net?.room) ui.net.room.leave();
+  const { room, session } = ui.net || {};
   ui.net = null;
+  // Say goodbye before leaving the room, so the other side reads "left the table", not a lost
+  // connection. bye() settles within 400 ms even if the message never goes out.
+  if (room) Promise.resolve(session?.bye()).finally(() => (session ? session.close() : room.leave()));
   if (!keepSave && (ui.mode === 'solo' || ui.mode === 'pass') && table && table.state.phase === 'match-over') saved.remove('match');
   table = null;
-  audio.music(false);
-  audio.tension(0);
+  audio.level(0);
+  audio.hush(false);
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 
@@ -284,44 +419,7 @@ async function onUpdate() {
   }
   ui.updating = true;
   try {
-    if (ui.mode === 'pass' && table && table.turnSeq > ui.shownSeq) ui.seat = null;
-    let v = latestView();
-    if (!v) return;
-    const prev = ui.view;
-    if (v.turnSeq > ui.shownSeq && prev && v.round.events.length) {
-      ui.shownSeq = v.turnSeq;
-      ui.selected = null;
-      ui.target = null;
-      ui.inspect = null;
-      const from = ui.mode === 'pass' && ui.prevSpectator ? ui.prevSpectator : prev;
-      await animateTurn(from, v);
-      v = latestView();
-    }
-    ui.shownSeq = Math.max(ui.shownSeq, v.turnSeq);
-    // An escalation just landed: flash it once.
-    const pend = v.round.pending;
-    if (pend && v.phase === 'plan' && ui.flashSeen !== `${v.roundNo}-${pend.by}`) {
-      ui.flashSeen = `${v.roundNo}-${pend.by}`;
-      ui.view = v;
-      render();
-      await flashEscalate(v, pend.by);
-      v = latestView();
-    }
-    const folded = v.round.result?.folded;
-    if (ui.view && ui.view.phase === 'plan' && v.phase !== 'plan' && folded !== null && folded !== undefined && v.roundNo === ui.view.roundNo) {
-      ui.view = v;
-      render();
-      await flashFold(v, folded);
-      v = latestView();
-    }
-    ui.view = v;
-    if (ui.mode === 'pass') passCover(v);
-    audio.tension(v.phase === 'plan' && (v.round.turn === TURNS || v.round.stake > 1) ? 1 : 0);
-    if (v.phase === 'match-over' && !ui.matchDone) {
-      ui.matchDone = true;
-      finishMatch(v);
-    }
-    if (v.phase !== 'match-over') ui.matchDone = false;
+    await showLatest();
   } finally {
     ui.updating = false;
   }
@@ -330,6 +428,100 @@ async function onUpdate() {
     ui.dirty = false;
     onUpdate();
   }
+}
+
+/** One pass of onUpdate(): bring the screen up to the latest view, animating what happened. */
+async function showLatest() {
+  if (ui.mode === 'pass' && table && table.turnSeq > ui.shownSeq) ui.seat = null;
+  let v = latestView();
+  if (!v) return;
+  // A new match id is a rematch (in every mode): leave the dossier for a clean table.
+  if (ui.view && v.matchId !== ui.view.matchId) {
+    freshMatchUi();
+    ui.screen = 'play';
+    matchStarts(v.matchId);
+  }
+  // See the board belongs to one round's result: the next round's opens in full.
+  if (ui.view && v.roundNo !== ui.view.roundNo) ui.peek = false;
+  const matchId = v.matchId;
+  // After every await, read the latest view again. If a new match began meanwhile, stop here
+  // without showing it: the next pass (ui.dirty) sees the new id and starts it cleanly.
+  const reread = () => {
+    v = latestView();
+    if (v && v.matchId === matchId) return true;
+    if (v) ui.dirty = true;
+    return false;
+  };
+  // After a flash or a title card, stop as well if a turn resolved meanwhile (the rival locked in
+  // while it was up; this player can't, since a card or flash takes every tap and key). The board
+  // on screen (ui.view) is still the one from before that turn, so the next pass (ui.dirty)
+  // reveals it from there instead of jumping to the new view unrevealed.
+  const upToDate = () => {
+    if (!reread()) return false;
+    if (v.turnSeq <= ui.shownSeq) return true;
+    ui.dirty = true;
+    return false;
+  };
+  const prev = ui.view;
+  if (v.turnSeq > ui.shownSeq && prev && v.round.events.length) {
+    ui.shownSeq = v.turnSeq;
+    ui.selected = null;
+    ui.target = null;
+    ui.inspect = null;
+    const from = ui.mode === 'pass' && ui.prevSpectator ? ui.prevSpectator : prev;
+    await animateTurn(from, v);
+    if (!reread()) return;
+  }
+  ui.shownSeq = Math.max(ui.shownSeq, v.turnSeq);
+  // An escalation just landed: flash it once.
+  const pend = v.round.pending;
+  if (pend && v.phase === 'plan' && ui.flashSeen !== `${v.roundNo}-${pend.by}`) {
+    ui.flashSeen = `${v.roundNo}-${pend.by}`;
+    ui.view = v;
+    render();
+    await flashEscalate(v, pend.by);
+    if (!upToDate()) return;
+  }
+  const folded = v.round.result?.folded;
+  if (ui.view && ui.view.phase === 'plan' && v.phase !== 'plan' && folded !== null && folded !== undefined && v.roundNo === ui.view.roundNo) {
+    ui.view = v;
+    render();
+    await flashFold(v, folded);
+    if (!upToDate()) return;
+  }
+  // A new round opens on its title card, once per round. The new table goes up behind it, and
+  // whatever arrived while it showed (a rival locking in, say) is read afterwards.
+  const roundKey = `${v.matchId}:${v.roundNo}`;
+  if (v.phase === 'plan' && v.round.turn === 1 && ui.roundKey !== roundKey) {
+    ui.roundKey = roundKey;
+    ui.view = v;
+    render();
+    await roundCard(v);
+    if (!upToDate()) return;
+  }
+  // The final turn opens on its own card, once per round: night falls, and the stake doubles on
+  // this flip. Under reduced motion there is no card (the night colours and the ×2 stamp carry the
+  // news). Whatever arrived while it showed is read afterwards, as for the round card.
+  const finalKey = `${v.matchId}:${v.roundNo}`;
+  if (v.phase === 'plan' && v.round.turn === TURNS && ui.finalKey !== finalKey) {
+    ui.finalKey = finalKey;
+    if (!reducedMotion()) {
+      ui.view = v;
+      render();
+      audio.level(levelFor(v)); // the band drops to a heartbeat as night falls
+      await finalCard();
+      ui.stampLand = true;
+      if (!upToDate()) return;
+    }
+  }
+  ui.view = v;
+  if (ui.mode === 'pass') passCover(v);
+  audio.level(levelFor(v));
+  if (v.phase === 'match-over' && !ui.matchDone) {
+    ui.matchDone = true;
+    finishMatch(v);
+  }
+  if (v.phase !== 'match-over') ui.matchDone = false;
 }
 
 /** Pass and play: decide whose hands the device should be in, and show the cover if it changes. */
@@ -357,7 +549,9 @@ function passCover(v) {
 
 async function animateTurn(from, next) {
   ui.animating = true;
-  ui.skip = false;
+  ui.revealAt = performance.now();
+  ui.speed = 1;
+  ui.skip = ui.alwaysSkip;
   ui.caption = '';
   const seatAtBottom = ui.mode === 'pass' ? (ui.prevSpectator ? 0 : (ui.seat ?? 0)) : me();
   ui.view = from;
@@ -369,6 +563,14 @@ async function animateTurn(from, next) {
   const nextOnBoard = new Map();
   for (const c of next.round.cities) for (const side of c.sides) for (const cv of side) nextOnBoard.set(cv.uid, cv);
   const events = next.round.events;
+  // The final flip: the music falls silent while the last cards land, and the spy chord rings out
+  // as they slam down (playEvents asks for it with sound('chord')).
+  const final = events.some((e) => e.t === 'round') && from.round.turn === TURNS;
+  if (final) audio.hush(true);
+  // The reveal owns ui.animating until it ends. Leaving the table clears it early (leaveMatch),
+  // and from then on nothing here may paint or sound: the title, or the next table, is up.
+  // (onUpdate runs one reveal at a time, so no newer reveal can set it again meanwhile.)
+  const cancelled = () => !ui.animating;
   const kinds = new Map();
   for (const e of events) {
     if (e.t === 'drop' && e.kind) kinds.set(e.uid, e.kind);
@@ -379,19 +581,25 @@ async function animateTurn(from, next) {
       root,
       me: seatAtBottom,
       names: next.names.map((_, s) => label(s, next)),
-      fast: false,
       wait,
-      say: (text) => say(text),
-      sound: (what, arg) => audio[what]?.(arg),
-      shake: (n) => shake(root, n),
+      dur,
+      cancelled,
+      say: (text) => cancelled() || say(text),
+      sound: (what, arg) => cancelled() || (what === 'chord' ? audio.spyChord() : audio[what]?.(arg)),
+      shake: (n) => cancelled() || shake(root, n),
       cityName: (ci) => cityName(next, ci),
       cardOf: (uid) => nextOnBoard.get(uid) || null,
       kindOf: (uid) => kinds.get(uid) || known.get(uid)?.kind || null,
       ownerOf: (uid) => (nextOnBoard.get(uid) || known.get(uid))?.owner ?? from.round.cities.flatMap((c) => c.sides.flat()).find((c) => c.uid === uid)?.owner ?? 0,
-      finale: (e) => finale(e, next, seatAtBottom),
+      finale: (e) => finale(e, next, seatAtBottom, cancelled),
     });
   } catch (err) {
     console.warn('reveal animation skipped', err);
+  }
+  if (final) {
+    // The band comes back for the result (unless the table was left: the next one sets its own).
+    if (!cancelled()) audio.level(levelFor(next));
+    audio.hush(false);
   }
   ui.animating = false;
   ui.prevSpectator = null;
@@ -399,10 +607,11 @@ async function animateTurn(from, next) {
 }
 
 /** The final flip: every city resolves in turn, then the stake slides to the winner. */
-async function finale(e, next, bottom) {
+async function finale(e, next, bottom, cancelled) {
   say('The final flip.');
   await wait(500);
   for (let ci = 0; ci < 3; ci++) {
+    if (cancelled()) return;
     const sec = $(`#board .city[data-city="${ci}"]`);
     if (!sec) continue;
     sec.classList.add('resolving');
@@ -415,15 +624,19 @@ async function finale(e, next, bottom) {
       }
       audio.tick(step);
       await wait(55);
+      if (cancelled()) return;
     }
     const w = e.cityWinners[ci];
     sec.classList.add(w === null ? 'won-none' : w === bottom ? 'won-me' : 'won-them', 'sweeping');
     if (w === null) audio.nobody();
-    else audio.city(ui.mode === 'pass' ? w === 0 : w === me());
+    // Each flourish takes about 1.2 s, so it plays only at full speed. Sped up, the cities come
+    // about 0.45 s apart, and a skipped reveal resolves them all at once: no flourishes piled up.
+    else if (!ui.skip && ui.speed === 1) audio.flourish(next.round.cities[ci].id, ui.mode === 'pass' ? w === 0 : w === me());
     say(w === null ? `${cityName(next, ci)}: nobody holds it.` : `${cityName(next, ci)} goes to ${labelLower(w, next)}.`);
-    await wait(750);
+    await wait(1000);
     sec.classList.remove('resolving');
   }
+  if (cancelled()) return;
   if (e.winner !== null) {
     const mine = ui.mode === 'pass' ? true : e.winner === me();
     (mine ? audio.roundWon : audio.roundLost)();
@@ -432,25 +645,108 @@ async function finale(e, next, bottom) {
   await wait(500);
 }
 
-async function flashEscalate(v, by) {
+/**
+ * The escalate and fold flashes are title cards (showCard), so they take every tap and key as a
+ * card does: nothing reaches the escalation prompt or the table underneath while one is up.
+ * Enter, Space or Escape skip a flash at once, a tap once it has been up for 400 ms; leaving the
+ * table takes it down, and with every animation skipped (or a modal up) none shows.
+ */
+function flashEscalate(v, by) {
   audio.escalate();
-  const el = document.createElement('div');
-  el.className = `flash esc own-${by}`;
-  el.innerHTML = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div><p class="big">${jitter('Escalate')}</p><p class="small">${esc(label(by, v))} doubled the stake</p>`;
-  app.append(el);
-  shake(app, 2);
-  await new Promise((r) => setTimeout(r, ui.skip ? 300 : 1300));
-  el.remove();
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div><p class="big">${jitter('Escalate')}</p><p class="small">${esc(label(by, v))} doubled the stake</p>`;
+  const done = showCard(html, `flash esc own-${by}`, ui.skip ? 300 : 1300, { label: `Escalate: ${label(by, v)} doubled the stake` });
+  if (ui.card) shake(app, 2);
+  return done;
 }
 
-async function flashFold(v, seat) {
+function flashFold(v, seat) {
   audio.fold();
+  const walk = `${label(seat, v)} ${ui.mode !== 'pass' && seat === me() ? 'walk' : 'walks'} away from the round`;
+  return showCard(`<p class="big">${jitter('Fold')}</p><p class="small">${esc(walk)}</p>`, `flash fold own-${seat}`, 1000, { label: `Fold: ${walk}` });
+}
+
+// ── title cards ─────────────────────────────────────────────────────────────
+
+/** How long a round's title card stays up (a tap, Enter, Space or Escape skips it). */
+const ROUND_CARD_MS = 2500;
+
+/**
+ * Put up a title card: a full-screen `<div class="cine ${className}" role="dialog">` on #app
+ * holding `html`, which takes every tap (the click and key handlers check ui.card first). It
+ * resolves when the card goes: after `ms`, or at once when Enter, Space or Escape skips it, or a
+ * tap once the card has been up for REVEAL_GUARD_MS (a tap before that, such as the second click
+ * of a double-click, is swallowed). It shows nothing and resolves at once with ui.alwaysSkip or while a modal is
+ * up. Only one card is ever up: a new one ends the last first (its promise resolves), and leaving
+ * the table or starting a match ends it (clearOverlays). The timer is a plain setTimeout, so in a
+ * hidden tab a card can outstay `ms` by about a second, but it always ends.
+ */
+function showCard(html, className, ms, { label = '' } = {}) {
+  ui.card?.skip();
+  if (ui.alwaysSkip || ui.modal) return Promise.resolve();
+  cancelDrag();
   const el = document.createElement('div');
-  el.className = `flash fold own-${seat}`;
-  el.innerHTML = `<p class="big">${jitter('Fold')}</p><p class="small">${esc(label(seat, v))} ${ui.mode !== 'pass' && seat === me() ? 'walk' : 'walks'} away from the round</p>`;
+  el.className = `cine ${className}`;
+  el.setAttribute('role', 'dialog');
+  if (label) el.setAttribute('aria-label', label);
+  el.innerHTML = html;
   app.append(el);
-  await new Promise((r) => setTimeout(r, 1000));
-  el.remove();
+  return new Promise((resolve) => {
+    const card = { el, at: performance.now(), skip: () => end(), hold: () => clearTimeout(timer) };
+    const end = () => {
+      clearTimeout(timer);
+      el.remove();
+      if (ui.card === card) ui.card = null;
+      resolve();
+    };
+    const timer = setTimeout(end, ms);
+    ui.card = card;
+  });
+}
+
+/** Take down every overlay a match put up: the title card or flash on screen (one at a time). */
+function clearOverlays() {
+  ui.card?.skip();
+}
+
+/** The player skips the card on screen (a tap past its guard, or Enter, Space or Escape). */
+function skipCard() {
+  audio.place();
+  ui.card.skip();
+}
+
+/**
+ * The round's opening credits: "Round N", then each city in turn (its skyline, name and rule),
+ * sliding in 250 ms apart over the Saul Bass bars. Under reduced motion it stands still.
+ */
+function roundCard(v) {
+  const n = v.roundNo + 1;
+  const cities = v.round.cities.map((c) => CITY[c.id]);
+  const lines = cities
+    .map((c, i) => `<div class="line" style="--i:${i}"><span class="sky" aria-hidden="true">${citySVG(c.id)}</span><h3>${esc(c.name)}</h3><p>${esc(c.rule)}</p></div>`)
+    .join('');
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <h2 class="big">${jitter(`Round ${n}`, n + 4)}</h2>
+    <div class="slate">${lines}</div>`;
+  return showCard(html, 'title-card', ROUND_CARD_MS, { label: `Round ${n}: ${cities.map((c) => c.name).join(', ')}` });
+}
+
+/** How long the final turn's card stays up (skipped like the round card). */
+const FINAL_CARD_MS = 1200;
+
+/**
+ * The final turn's card, as the lights go down: Saul Bass bars slam in from both sides, then
+ * "Final drop" lands in a spotlight over the news that the stake doubles. Everything is in by
+ * about 0.7 s of its 1.2 s. showLatest never shows it under reduced motion.
+ */
+function finalCard() {
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="beam" aria-hidden="true"></div>
+    <h2 class="big">${jitter('Final drop', 11)}</h2>
+    <p class="small">The stake doubles on the flip</p>`;
+  const done = showCard(html, 'final-card', FINAL_CARD_MS, { label: 'Final drop: the stake doubles on the flip' });
+  // The bars slam in with a slam (an effect, so it sounds with the music off as well).
+  if (ui.card) audio.slam();
+  return done;
 }
 
 function say(text) {
@@ -478,8 +774,8 @@ function finishMatch(v) {
     audio.victory();
   } else {
     if (v.winner === me()) {
-      meta.onlineWins++;
-      saveMeta();
+      // Once per match: reloading a finished match shows its dossier again without a second win.
+      if (countWin(meta, v.matchId)) saveMeta();
       audio.victory();
     } else audio.defeat();
   }
@@ -639,7 +935,7 @@ function statusText(v) {
 function hintText(v) {
   if (meta.matches > 2 || v.phase !== 'plan' || v.roundNo > 1) return '';
   const t = v.round.turn;
-  if (v.roundNo === 0 && t === 1) return 'You and your rival both drop an agent in secret. Then the cards flip together.';
+  if (v.roundNo === 0 && t === 1) return 'You and your rival both drop an agent in secret. Then the cards flip together, and the First flip token shows whose tricks go first.';
   if (v.roundNo === 0 && t === 2) return 'Higher total holds a city. Hold two of the three cities after six drops to win the round.';
   if (v.roundNo === 0 && t === 3) return 'Feeling strong? Escalate doubles the stake: your rival must fold or play on.';
   if (v.roundNo === 0 && t === TURNS) return 'Final turn: the stake doubles when the cards flip. Folding now costs only the current stake.';
@@ -661,6 +957,8 @@ function inspectText(v) {
   if (cv.power !== null && cv.power !== a.power) extra.push(`power ${cv.power} right now`);
   if (cv.tricks === false && !['heavy', 'sleeper'].includes(cv.kind)) extra.push('tricks switched off here');
   if (cv.id0 && cv.id0 !== cv.kind) extra.push('an Impostor in disguise');
+  // Everyone in Havana switches sides, so there "turned" says nothing new.
+  if (cv.city !== null && cv.origin !== cv.owner && v.round.cities[cv.city].id !== 'havana') extra.push('a turned asset');
   return `${a.name} (${a.power}): ${a.text}${extra.length ? ` Now: ${extra.join(', ')}.` : ''}`;
 }
 
@@ -668,13 +966,31 @@ function scorebarHTML(v, bottom) {
   const top = 1 - bottom;
   const R = v.round;
   const stake = R.stake;
+  // On the final turn (and after its flip, though not after a fold) a ×2 stamp stands in for the
+  // "at the final flip" line. It lands once, at the first render after the final card goes.
+  const x2 = R.turn === TURNS && (v.phase === 'plan' || R.result?.folded === null);
+  const land = x2 && ui.stampLand;
+  if (x2) ui.stampLand = false;
+  const stakeNote = x2 ? `<i class="x2-stamp${land ? ' land' : ''}" title="The stake doubles on the final flip">×2</i>` : v.phase === 'plan' ? `<small>${stake * 2} at the final flip</small>` : '';
+  // The First flip token sits beside the seat whose flip tricks fire first this turn (during a
+  // reveal the board is the view from before it, so the token stays with the turn being flipped).
+  // When it changes hands it flips across once (.moved); an empty slot keeps the names still.
+  const holder = v.phase === 'plan' ? R.initiative : null;
+  const moved = holder !== null && holder !== ui.initShown;
+  if (holder !== null) ui.initShown = holder;
+  const token = (seat) => {
+    if (seat !== holder) return '<i class="ff-slot" aria-hidden="true"></i>';
+    const name = label(seat, v);
+    const whose = ui.mode !== 'pass' && seat === me() ? 'your' : `${name}’s`;
+    return `<span class="first-flip${moved ? ' moved' : ''}" role="img" aria-label="First flip: ${esc(name)}" title="First flip: ${esc(whose)} flip tricks go first this turn">1st</span>`;
+  };
   return `<div class="scorebar">
-    <div class="side s-${top}"><span class="who">${esc(label(top, v))}</span><b class="score" data-score="${top}">${v.scores[top]}</b></div>
+    <div class="side s-${top}"><span class="tag"><span class="who">${esc(label(top, v))}</span>${token(top)}</span><b class="score" data-score="${top}">${v.scores[top]}</b></div>
     <div class="mid">
-      <span class="stake${stake > 1 ? ' hot' : ''}" title="Points this round is worth">Stake <b>${stake}</b>${v.phase === 'plan' ? `<small>${stake * 2} at the final flip</small>` : ''}</span>
+      <span class="stake${stake > 1 ? ' hot' : ''}" title="Points this round is worth">Stake <b>${stake}</b>${stakeNote}</span>
       <span class="turn">${v.phase === 'plan' ? `Turn ${R.turn} of ${TURNS}` : `Round ${v.roundNo + 1}`} · first to ${v.target}</span>
     </div>
-    <div class="side s-${bottom}"><b class="score" data-score="${bottom}">${v.scores[bottom]}</b><span class="who">${esc(label(bottom, v))}</span></div>
+    <div class="side s-${bottom}"><b class="score" data-score="${bottom}">${v.scores[bottom]}</b><span class="tag">${token(bottom)}<span class="who">${esc(label(bottom, v))}</span></span></div>
   </div>`;
 }
 
@@ -736,15 +1052,35 @@ function resultHTML(v, bottom) {
   const key = `${v.roundNo}:${v.scores.join(',')}`;
   const enter = ui.resultShown !== key;
   ui.resultShown = key;
+  const peekBtn = `<button class="slip quiet" data-action="peek">${ui.peek ? 'Back to the result' : 'See the board'}<kbd>B</kbd></button>`;
+  // See the board: a slim strip pinned to the bottom, with only the heading and the buttons.
+  if (ui.peek) {
+    return `<div class="result peek" role="dialog" aria-label="Round result">
+    <h2>${jitter(head, v.roundNo + 3)}</h2>
+    <div class="btns">${peekBtn}${btn}</div>
+  </div>`;
+  }
   return `<div class="result${enter ? ' enter' : ''}" role="dialog" aria-label="Round result">
     <h2>${jitter(head, v.roundNo + 3)}</h2>
     <div class="lines">${lines.map((l) => `<p>${l}</p>`).join('')}</div>
     <p class="tally">${esc(label(bottom, v))} ${v.scores[bottom]} · ${v.scores[1 - bottom]} ${esc(label(1 - bottom, v))}</p>
-    ${btn}
+    <div class="btns">${peekBtn}${btn}</div>
   </div>`;
 }
 
+/** Online: the rival lost connection (they may come back) or said goodbye (they won't). */
+function peerBannerHTML() {
+  const n = ui.net;
+  if (n?.peer === 'left') return `<p class="banner" role="alert"><span>${esc(n.leftName || 'Your rival')} left the table.</span> <button class="link" data-action="title">Back to the title</button></p>`;
+  if (n?.peer === 'gone') return `<p class="banner" role="alert"><span>${ui.mode === 'host' ? 'Your rival lost connection. The game waits for them to come back.' : 'The host lost connection. Waiting for them to come back.'}</span> <button class="link" data-action="title">Leave</button></p>`;
+  return '';
+}
+
+/** The reveal's button: a tap speeds the reveal up, the next one skips it (tapReveal). */
+const revealLabel = () => `${ui.speed >= FAST ? 'Skip' : 'Speed up'}<kbd>Space</kbd>`;
+
 function renderPlay({ board = view(), hand = board, revealing = false, bottom = null } = {}) {
+  if (ui.drag && (revealing || !canDrag())) cancelDrag();
   const v = board;
   const b = bottom ?? (ui.mode === 'pass' ? (ui.seat ?? 0) : me());
   const R = v.round;
@@ -770,16 +1106,17 @@ function renderPlay({ board = view(), hand = board, revealing = false, bottom = 
     .join('');
   const colours = ui.mode === 'pass' ? ['red', 'teal'] : me() === 0 ? ['red', 'teal'] : ['teal', 'red'];
   const caption = revealing ? ui.caption : ui.caption || inspectText(v) || hintText(v);
-  const peerGone = ui.net?.peer === 'gone';
+  syncNight();
   $('#screen').innerHTML = `<div class="play c0-${colours[0]} c1-${colours[1]}${revealing ? ' revealing' : ''}" data-bottom="${b}">
-    ${peerGone ? `<p class="banner" role="alert">${ui.mode === 'host' ? 'Your rival lost connection. The game waits for them to come back.' : 'The host lost connection. Waiting for them to come back.'} <button class="link" data-action="title">Leave</button></p>` : ''}
+    ${peerBannerHTML()}
     ${scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
     <p class="ticker" id="ticker" role="status">${esc(caption)}</p>
-    ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="skip">Skip<kbd>Space</kbd></button></div></div>` : controlsHTML(v)}
+    ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : controlsHTML(v)}
     ${handHTML(hand, revealing)}
     ${!revealing && v.phase !== 'plan' ? resultHTML(v, b) : ''}
   </div>`;
+  markDrag();
 }
 
 function overHTML() {
@@ -797,8 +1134,10 @@ function overHTML() {
     .join('');
   const ri = ui.rival ? RIVALS.findIndex((r) => r.id === ui.rival.id) : -1;
   const nextRival = ui.mode === 'solo' && won && ri >= 0 && ri < RIVALS.length - 1 ? RIVALS[ri + 1] : null;
-  const rematchWait = (ui.mode === 'host' || ui.mode === 'guest') && v.rematch[me()] && !v.rematch[1 - me()];
-  const rivalWants = (ui.mode === 'host' || ui.mode === 'guest') && v.rematch[1 - me()] && !v.rematch[me()];
+  const online = ui.mode === 'host' || ui.mode === 'guest';
+  const rematchWait = online && v.rematch[me()] && !v.rematch[1 - me()];
+  const rivalWants = online && v.rematch[1 - me()] && !v.rematch[me()];
+  const rivalLeft = online && ui.net?.peer === 'left';
   return `<div class="over ${won || ui.mode === 'pass' ? 'won' : 'lost'}">
     <div class="dossier">
       <p class="stamp-line">Dossier · ${esc(v.names[0])} vs ${esc(v.names[1])}</p>
@@ -810,30 +1149,92 @@ function overHTML() {
     </div>
     <div class="actions">
       ${nextRival ? `<button class="slip primary" data-action="rival" data-id="${nextRival.id}">Next rival: ${esc(nextRival.name)}</button>` : ''}
-      ${rematchWait ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(1 - me(), v))} to accept…</p>` : `<button class="slip ${nextRival ? '' : 'primary'}" data-action="rematch">${rivalWants ? 'Accept rematch' : 'Rematch'}</button>`}
+      ${
+        rivalLeft
+          ? `<p class="wait">${esc(ui.net.leftName || 'Your rival')} left the table.</p>`
+          : rematchWait
+            ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(1 - me(), v))} to accept…</p>`
+            : `<button class="slip ${nextRival ? '' : 'primary'}" data-action="rematch">${rivalWants ? 'Accept rematch' : 'Rematch'}</button>`
+      }
       <button class="slip quiet" data-action="title">Title screen</button>
     </div>
   </div>`;
 }
 
+const HELP_TABS = [
+  ['rules', 'Rules'],
+  ['agents', 'Agents'],
+  ['cities', 'Cities'],
+  ['keys', 'Keys'],
+];
+const HELP_RULES = [
+  'Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.',
+  'After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.',
+  'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire.',
+  'Escalate once per round, by whoever calls it first, to double the stake. Your rival must fold (giving you the current stake) or play on. You can fold any time. If the round reaches the final flip, the stake doubles again.',
+  'First to 10 points wins the match.',
+];
+/** Keys tab: [keys, what they do]. The text reads as one line joined with " · ". */
+const HELP_KEYS = [
+  [['1–7'], 'pick an agent · or drag a card onto a city'],
+  [['A', 'S', 'D'], 'pick a city'],
+  [['Enter'], 'locks in'],
+  [['Esc'], 'takes it back'],
+  [['E'], 'escalates'],
+  [['F'], 'folds'],
+  [['Space'], 'speeds up a reveal, twice skips it'],
+  [['B'], 'shows the board behind a result'],
+  [['←', '→'], 'switch tabs here'],
+  [['M'], 'sound'],
+  [['?'], 'help'],
+];
+
+/** Help tabs this device shows: touch screens (no hover) have no keyboard, so no Keys tab. */
+function helpTabs() {
+  const touch = typeof matchMedia === 'function' && matchMedia('(hover: none)').matches;
+  return HELP_TABS.filter(([id]) => id !== 'keys' || !touch);
+}
+
+function helpBodyHTML(tab) {
+  if (tab === 'agents') return `<ul class="agent-list">${AGENTS.map((a) => `<li><span class="art">${agentSVG(a.id)}</span><b>${esc(a.name)} <i>${a.power}</i></b><span>${esc(a.text)}</span></li>`).join('')}</ul>`;
+  if (tab === 'cities') return `<ul class="city-list">${CITIES.map((c) => `<li><b>${esc(c.name)}</b> ${esc(c.rule)}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</li>`).join('')}</ul>`;
+  if (tab === 'keys') return `<ul class="key-list">${HELP_KEYS.map(([keys, text]) => `<li><span class="keys">${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')}</span> <span>${esc(text)}</span></li>`).join('')}</ul>`;
+  return `<ol class="rules">${HELP_RULES.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`;
+}
+
+/**
+ * The help sheet: a header with the tabs (an ARIA tablist), one scrolling body (the tabpanel)
+ * and a footer. Only the body scrolls, so the sheet's cut corners never cross its text.
+ */
 function helpHTML() {
-  return `<div class="modal" data-action="close-modal"><div class="sheet" role="dialog" aria-label="How to play" data-stop>
-    <h2>${jitter('How to play', 1)}</h2>
-    <ol class="rules">
-      <li>Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.</li>
-      <li>After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.</li>
-      <li>Agents have tricks. Flip tricks fire as the card turns over; the player with initiative (it alternates each turn) goes first. Face-down agents have no tricks, except the Tripwire.</li>
-      <li>Escalate once per round, by whoever calls it first, to double the stake. Your rival must fold (giving you the current stake) or play on. You can fold any time. If the round reaches the final flip, the stake doubles again.</li>
-      <li>First to 10 points wins the match.</li>
-    </ol>
-    <h3>Agents</h3>
-    <ul class="agents">${AGENTS.map((a) => `<li><span class="art">${agentSVG(a.id)}</span><b>${esc(a.name)} <i>${a.power}</i></b><span>${esc(a.text)}</span></li>`).join('')}</ul>
-    <h3>Cities</h3>
-    <ul class="cities">${CITIES.map((c) => `<li><b>${esc(c.name)}</b> ${esc(c.rule)}</li>`).join('')}</ul>
-    <h3>Keys</h3>
-    <p>1–7 pick an agent · A S D pick a city · Enter locks in · Esc takes it back · E escalates · F folds · Space skips a reveal · M sound</p>
-    <button class="slip primary" data-action="close-modal">Back to the table</button>
+  const tabs = helpTabs();
+  if (!tabs.some(([id]) => id === ui.helpTab)) ui.helpTab = 'rules';
+  const tab = ui.helpTab;
+  return `<div class="modal" data-action="close-modal"><div class="sheet help" role="dialog" aria-label="How to play" data-stop>
+    <header class="sheet-head">
+      <h2>${jitter('How to play', 1)}</h2>
+      <div class="tabs" role="tablist" aria-label="Help topics">${tabs
+        .map(([id, name]) => `<button class="tab" role="tab" id="help-tab-${id}" aria-selected="${id === tab}" aria-controls="help-panel" tabindex="${id === tab ? 0 : -1}" data-action="help-tab" data-tab="${id}">${name}</button>`)
+        .join('')}</div>
+    </header>
+    <div class="sheet-body" id="help-panel" role="tabpanel" aria-labelledby="help-tab-${tab}" tabindex="0">${helpBodyHTML(tab)}</div>
+    <footer class="btns"><button class="slip primary" data-action="close-modal">Back to the table</button></footer>
   </div></div>`;
+}
+
+/** Open a help tab and keep keyboard focus on it (the re-render replaces the old button). */
+function showHelpTab(id) {
+  if (!helpTabs().some(([t]) => t === id)) return;
+  ui.helpTab = id;
+  render();
+  $('#modal-root [role=tab][aria-selected=true]')?.focus({ preventScroll: true });
+}
+
+/** ← and → step through the tabs this device shows, wrapping round. */
+function stepHelpTab(dir) {
+  const ids = helpTabs().map(([id]) => id);
+  const i = ids.indexOf(ui.helpTab);
+  showHelpTab(ids[(i + dir + ids.length) % ids.length]);
 }
 
 function modalHTML() {
@@ -867,15 +1268,35 @@ function modalHTML() {
   return '';
 }
 
+/**
+ * Night falls on a round's final turn: its planning, its reveal and its result, on the table only
+ * (title, cover and dossier stay by day). style.css redefines the colour tokens under
+ * body[data-night='1']; the phone's browser bar follows.
+ */
+const DAY_THEME = document.querySelector('meta[name=theme-color]')?.getAttribute('content') || '#e0a030';
+const NIGHT_THEME = '#571914'; // the oxblood glow at the top of the night table
+function syncNight() {
+  const night = ui.screen === 'play' && ui.view?.round.turn === TURNS ? '1' : '0';
+  if (document.body.dataset.night === night) return;
+  document.body.dataset.night = night;
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', night === '1' ? NIGHT_THEME : DAY_THEME);
+}
+
+/** The music each screen plays: the title theme, the lobby bossa, the table's score, or none. */
+const SCENE = { title: 'title', rivals: 'title', lobby: 'lobby', cover: 'table', play: 'table', over: null };
+
 function render() {
   const s = ui.screen;
+  audio.scene(SCENE[s] ?? null); // a no-op while that piece plays
   if (!$('#top')) {
     app.innerHTML = `<div id="top"></div><main id="screen"></main><div id="modal-root"></div>`;
+    modalShown = '';
   }
   $('#top').innerHTML = renderTop();
   homeLink({ parent: $('#top .home-slot') });
   document.body.dataset.screen = s;
   document.body.dataset.flip = ui.mode === 'guest' ? '1' : '0';
+  syncNight();
   if (s === 'title') $('#screen').innerHTML = titleHTML();
   else if (s === 'rivals') $('#screen').innerHTML = rivalsHTML();
   else if (s === 'lobby') $('#screen').innerHTML = lobbyHTML();
@@ -885,7 +1306,10 @@ function render() {
     if (!ui.animating) renderPlay();
   }
   const m = ui.screen === 'play' || ui.modal === 'help' ? modalHTML() : '';
-  $('#modal-root').innerHTML = m;
+  // Leave an unchanged modal alone, so a rival's move doesn't scroll the help sheet back up.
+  if (m !== modalShown) $('#modal-root').innerHTML = modalShown = m;
+  // A new screen, a modal or a reveal ends a drag in progress (the card stays selected).
+  if (ui.drag && (!canDrag() || modalShown)) cancelDrag();
   const focus = $('#modal-root .slip.primary');
   if (focus && document.activeElement?.closest?.('#modal-root') === null) focus.focus({ preventScroll: true });
 }
@@ -946,6 +1370,169 @@ function lockIn() {
   if (ui.mode === 'guest') render();
 }
 
+// Drag to drop: press a playable card and move it 8px, and it lifts out of the hand as a ghost
+// that follows the pointer. Let go over a highlighted city to choose it (Lock in still locks);
+// let go anywhere else and the card simply stays selected. Picking re-renders the hand under the
+// pointer, so the drag listens on document and finds cards by uid, never by a kept DOM node.
+const DRAG_PX = 8;
+/** The click that follows a drag's release is not a tap on a card: ignored for this long. */
+const DRAG_CLICK_MS = 300;
+let press = null; // { uid, id, x, y, dx, dy }: a pointer down on a playable card, until it lifts
+let dragEndedAt = -Infinity; // performance.now() when the last drag ended
+
+/** A drag may start, or go on: the table is up, nothing covers it, and I still have a drop to make. */
+function canDrag() {
+  const v = view();
+  if (ui.screen !== 'play' || ui.modal || ui.card || ui.animating || !v || v.phase !== 'plan' || myPlan(v)) return false;
+  if (ui.mode === 'pass' && ui.seat === null) return false;
+  return v.round.legal.length > 0;
+}
+
+const handCard = (uid) => $(`#hand .card[data-uid="${CSS.escape(uid)}"]`);
+
+/** The city a drop at (x, y) would choose: a highlighted one under the pointer, or null. */
+function cityAt(x, y) {
+  const el = document.elementFromPoint(x, y)?.closest('.city.target');
+  return el ? Number(el.dataset.city) : null;
+}
+
+/** Mark the dragged card in the hand and the city under the pointer (again after each render). */
+function markDrag() {
+  for (const el of document.querySelectorAll('.drop-over, .card.dragging')) el.classList.remove('drop-over', 'dragging');
+  const d = ui.drag;
+  if (!d) return;
+  handCard(d.uid)?.classList.add('dragging');
+  if (d.over !== null) $(`#board .city.target[data-city="${d.over}"]`)?.classList.add('drop-over');
+}
+
+/** The press has moved far enough: select the card (unless it is already) and lift a ghost of it. */
+function startDrag() {
+  const { uid } = press;
+  if (ui.selected === uid) audio.pick();
+  else pick(uid);
+  const card = ui.selected === uid && handCard(uid);
+  if (!card) {
+    press = null;
+    return;
+  }
+  const ghost = document.createElement('div');
+  ghost.className = card.className;
+  ghost.classList.remove('sel', 'dragging');
+  ghost.classList.add('drag-ghost');
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.innerHTML = card.innerHTML;
+  // Out of the hand, the ghost keeps the card's size, colours and whatever the hand hides.
+  ghost.style.width = `${card.offsetWidth}px`;
+  ghost.style.height = `${card.offsetHeight}px`;
+  // It shrinks toward the point you hold it by, so the city under it stays in view.
+  ghost.style.transformOrigin = `${press.dx}px ${press.dy}px`;
+  const cs = getComputedStyle(card);
+  for (const prop of ['--me-col', '--them-col']) ghost.style.setProperty(prop, cs.getPropertyValue(prop));
+  [...card.children].forEach((el, i) => {
+    if (getComputedStyle(el).display === 'none') ghost.children[i].style.display = 'none';
+  });
+  document.body.append(ghost);
+  ui.drag = { uid, ghost, over: null };
+  markDrag();
+}
+
+function moveDrag(x, y) {
+  const d = ui.drag;
+  d.ghost.style.translate = `${x - press.dx}px ${y - press.dy}px`;
+  const over = cityAt(x, y);
+  if (over !== d.over) {
+    d.over = over;
+    markDrag();
+  }
+}
+
+/**
+ * End a drag without dropping: the ghost goes and the marks clear, the card stays selected, and
+ * the click that follows the release is ignored. Also ends a press that has not become a drag.
+ */
+function cancelDrag() {
+  press = null;
+  const d = ui.drag;
+  if (!d) return;
+  ui.drag = null;
+  d.ghost.remove();
+  dragEndedAt = performance.now();
+  markDrag();
+}
+
+document.addEventListener('pointerdown', (ev) => {
+  // Mid-drag, another press (a second finger, say) leaves the drag alone.
+  if (ui.drag || !ev.isPrimary || ev.button !== 0) return;
+  const card = ev.target.closest?.('.hand .card:not([disabled])');
+  if (!card || !canDrag()) return;
+  const r = card.getBoundingClientRect();
+  press = { uid: card.dataset.uid, id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+  // A touch is captured by the card it lands on, and picking re-renders that card. Let it go,
+  // so the moves reach document from whatever is under the finger.
+  if (card.hasPointerCapture(ev.pointerId)) card.releasePointerCapture(ev.pointerId);
+});
+
+document.addEventListener('pointermove', (ev) => {
+  if (!press || ev.pointerId !== press.id) return;
+  // A mouse let go outside the window: the pointerup never came.
+  if (ev.pointerType === 'mouse' && !(ev.buttons & 1)) return cancelDrag();
+  if (!ui.drag) {
+    if (Math.hypot(ev.clientX - press.x, ev.clientY - press.y) < DRAG_PX) return;
+    if (!canDrag()) return cancelDrag();
+    startDrag();
+    if (!ui.drag) return;
+  }
+  moveDrag(ev.clientX, ev.clientY);
+});
+
+document.addEventListener('pointerup', (ev) => {
+  if (!press || ev.pointerId !== press.id) return;
+  // No drag yet: a plain tap, and the click that follows picks the card.
+  if (!ui.drag) return (press = null);
+  const ci = cityAt(ev.clientX, ev.clientY);
+  cancelDrag();
+  if (ci !== null) chooseCity(ci);
+});
+
+document.addEventListener('pointercancel', (ev) => {
+  if (press && ev.pointerId === press.id) cancelDrag();
+});
+window.addEventListener('blur', () => cancelDrag());
+
+/**
+ * A tap, Space, Enter or Escape during a reveal (revealTap): ignored in its first 400 ms, so a
+ * stray tap can't skip the flip; then the reveal plays at FAST; the next one skips the rest.
+ */
+function tapReveal() {
+  if (!ui.animating) return;
+  const what = revealTap({ at: ui.revealAt, speed: ui.speed }, performance.now());
+  if (what === 'fast') {
+    pace({ speed: FAST });
+    // CSS animations that start from now on (flips, takedowns) keep pace with the waits.
+    $('#screen .play')?.style.setProperty('--pace', String(1 / FAST));
+    const btn = $('#screen [data-action=reveal-tap]');
+    if (btn) btn.innerHTML = revealLabel();
+    audio.pick();
+  } else if (what === 'skip') {
+    pace({ skip: true });
+    audio.place();
+  }
+}
+
+/** See the board (B): the round result shrinks to a strip at the bottom, or comes back. */
+function togglePeek() {
+  const v = view();
+  if (ui.animating || ui.screen !== 'play' || !v || v.phase === 'plan' || !v.round.result) return;
+  const refocus = document.activeElement?.dataset?.action === 'peek';
+  ui.peek = !ui.peek;
+  audio.place();
+  render();
+  const panel = $('#screen .result');
+  if (refocus) panel?.querySelector('[data-action=peek]')?.focus({ preventScroll: true });
+  // The slide plays from here, not from the render, so a rival's move can't restart it.
+  if (panel && !reducedMotion()) panel.animate([{ opacity: 0, translate: ui.peek ? '0 24px' : '0 -12px' }, { opacity: 1, translate: '0 0' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
+}
+
 const actions = {
   rivals: () => {
     ui.screen = 'rivals';
@@ -979,6 +1566,7 @@ const actions = {
     ui.modal = null;
     render();
   },
+  'help-tab': (el) => showHelpTab(el.dataset.tab),
   rename: () => {
     meta.codename = pickCodename(meta.codename);
     saveMeta();
@@ -1053,28 +1641,32 @@ const actions = {
     ui.screen = 'over';
     render();
   },
+  // Every mode: the new match id reaches onUpdate(), which clears the dossier for the table.
   rematch: () => {
     act({ a: 'rematch' });
-    if (ui.mode === 'solo' || ui.mode === 'pass') {
-      ui.shownSeq = 0;
-      ui.view = null;
-      ui.screen = 'play';
-      recordPlay(SLUG);
-      meta.matches++;
-      saveMeta();
-      onUpdate();
-    } else render();
+    render();
   },
-  skip: () => {
-    ui.skip = true;
-  },
+  'reveal-tap': tapReveal,
+  peek: togglePeek,
 };
 
 document.addEventListener('click', (ev) => {
-  if (ui.animating && !ev.target.closest('.top')) {
-    ui.skip = true;
+  // A title card takes every tap, and does nothing else with it. Past its first 400 ms a tap
+  // skips the card; before that it is a stray (the second click of a double-click, or one more
+  // tap through the reveal before it) and changes nothing.
+  if (ui.card) {
+    if (performance.now() - ui.card.at >= REVEAL_GUARD_MS) skipCard();
     return;
   }
+  // During a reveal a click is a tap on it (speed up, then skip), except in the header and
+  // inside the help sheet.
+  if (ui.animating && !ev.target.closest('.top') && !(ui.modal === 'help' && ev.target.closest('#modal-root'))) {
+    tapReveal();
+    return;
+  }
+  // The click that follows a drag's release on its own card is not a tap: it must not toggle the
+  // card off. (A quick tap on a city right after a drop still chooses it.)
+  if (performance.now() - dragEndedAt < DRAG_CLICK_MS && ev.target.closest('.card')) return;
   const el = ev.target.closest('[data-action]');
   if (!el || el.disabled) return;
   if (el.dataset.action === 'close-modal' && ev.target.closest('[data-stop]') && ev.target.closest('[data-action]') !== el) return;
@@ -1095,13 +1687,40 @@ document.addEventListener('submit', (ev) => {
 });
 
 document.addEventListener('keydown', (ev) => {
+  // A title card takes every key. Enter, Space or Escape skips it; a key held down since before
+  // it came up does not.
+  if (ui.card) {
+    // preventDefault also keeps Enter and Space from pressing a focused button underneath (the
+    // escalation prompt's Play on) as the card goes.
+    if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Escape') {
+      ev.preventDefault();
+      if (!ev.repeat) skipCard();
+    }
+    return;
+  }
   if (ev.target.closest?.('input, textarea')) return;
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const k = ev.key;
+  // Mid-drag, keys wait for the drop, except Escape, which puts the ghost back (still selected).
+  if (ui.drag) {
+    if (k === 'Escape') cancelDrag();
+    return;
+  }
+  // The help sheet can be open over a reveal (its button sits in the header).
+  if (ui.modal === 'help' && (k === 'ArrowRight' || k === 'ArrowLeft')) {
+    ev.preventDefault();
+    return stepHelpTab(k === 'ArrowRight' ? 1 : -1);
+  }
+  if (ui.modal === 'help' && k === 'Escape') {
+    ev.preventDefault();
+    return actions['close-modal']();
+  }
+  // During a reveal, Space, Enter and Escape tap it (speed up, then skip). A key held down
+  // taps once, and with the help sheet open they belong to the sheet.
   if (ui.animating) {
-    if (k === ' ' || k === 'Enter' || k === 'Escape') {
-      ui.skip = true;
+    if ((k === ' ' || k === 'Enter' || k === 'Escape') && ui.modal !== 'help') {
       ev.preventDefault();
+      if (!ev.repeat) tapReveal();
     }
     return;
   }
@@ -1124,16 +1743,22 @@ document.addEventListener('keydown', (ev) => {
   if (!v) return;
   const R = v.round;
   if (v.phase === 'plan' && R.pending && R.pending.by !== me() && (ui.mode !== 'pass' || ui.seat === 1 - R.pending.by)) {
+    // A key held down through the escalation flash doesn't answer the prompt when the flash goes
+    // (nor press its focused Play on).
+    if (ev.repeat) return ev.preventDefault();
     if (k === 'Enter') act({ a: 'respond', accept: true });
     if (k === 'f' || k === 'F') act({ a: 'respond', accept: false });
     return;
   }
   if (v.phase !== 'plan') {
     if (k === 'Enter') {
+      // On a focused See the board / Back to the result button, Enter presses that button.
+      if (document.activeElement?.dataset?.action === 'peek') return;
       ev.preventDefault();
       if (v.phase === 'match-over') actions.final();
       else actions.next();
     }
+    if (k === 'b' || k === 'B') togglePeek();
     return;
   }
   if (/^[1-9]$/.test(k) && R.hand[Number(k) - 1]) return pick(R.hand[Number(k) - 1].uid);
@@ -1154,9 +1779,10 @@ document.addEventListener('keydown', (ev) => {
   if (k === 'f' || k === 'F') return actions.fold();
 });
 
-onHidden(() => audio.music(false));
+onHidden(() => audio.pause());
+/** Back in front: the screen's piece plays again (from its first bar). */
 const resumeMusic = () => {
-  if (!document.hidden && (ui.screen === 'play' || ui.screen === 'cover')) audio.music(true);
+  if (!document.hidden) audio.resume();
 };
 document.addEventListener('visibilitychange', resumeMusic);
 window.addEventListener('focus', resumeMusic);
@@ -1205,6 +1831,15 @@ function quickTurns(turns, rng = Math.random) {
 
 markReady({
   ui,
+  /** The music, for the smoke: notes scheduled per voice, and the piece playing. */
+  audio: {
+    get played() {
+      return audio.played;
+    },
+    get sceneName() {
+      return audio.sceneName;
+    },
+  },
   get table() {
     return table;
   },
@@ -1225,25 +1860,78 @@ markReady({
     quickTurns(TURNS);
     onUpdate();
   },
+  /** Jump to the round's final turn (both seats drop at random until then), then update as play does. */
+  toFinalTurn() {
+    // quickTurns seats the rival at once. Hold it (as a reveal does in play) until the update below
+    // is under way, so it waits for the final card instead of making its move behind it.
+    const held = ui.updating;
+    ui.updating = true;
+    try {
+      quickTurns(TURNS - table.state.round.turn);
+    } finally {
+      ui.updating = held;
+    }
+    onUpdate();
+  },
+  /**
+   * The computer rival locks in its first legal drop now, through the table as its own lock does,
+   * so a step that inspects the table can't be raced by its fold or escalation. Call it while the
+   * rival is held (a card or reveal up), or it may already be thinking.
+   */
+  rivalLocks() {
+    if (ui.mode !== 'solo' || !table) return false;
+    const v = table.view(1);
+    const d = v.round.legal[0];
+    return v.phase === 'plan' && !v.round.plan && !!d && table.act(1, { a: 'lock', uid: d.uid, city: d.city });
+  },
+  /** The computer rival escalates now, through the table as its own escalation does (the flash and prompt follow). */
+  rivalEscalates() {
+    if (ui.mode !== 'solo' || !table) return false;
+    return table.act(1, { a: 'escalate' });
+  },
+  /** Leave the table through the Leave button's own action, even mid-reveal (the reveal ends at once, silently). */
+  leave: () => actions.title(),
+  /** Keep the title card or flash on screen until it is skipped (for a steady screenshot). */
+  holdCard: () => ui.card?.hold(),
+  /**
+   * Freeze a reveal where it is (for a steady screenshot): its waits slow to a crawl (hours, kept
+   * under setTimeout's ceiling) until a tap or Space speeds it up to FAST or skips it, as in play.
+   */
+  holdReveal() {
+    if (!ui.animating) return false;
+    pace({ speed: 1e-4 });
+    return true;
+  },
+  /** Skip every reveal and title card from now on, for the rest of the session (or play them again). */
   skipAnimations: (on = true) => {
-    ui.skip = on;
+    ui.alwaysSkip = on;
+    pace({ skip: on });
+    if (on) ui.card?.skip();
   },
   prepareThumbnail() {
-    let s = 2;
-    const rng = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    startSolo('countess');
-    bot?.stop();
-    table.state = createTable({ seed: 'thumb-7', cities: ['vienna', 'istanbul', 'monaco'] }).state;
-    table.names = [meta.codename, 'The Countess'];
-    quickTurns(3, rng);
-    bot?.stop();
-    table.state.round.stake = 2;
-    table.state.round.escalated = [true, false];
-    ui.screen = 'play';
-    ui.view = table.view(0);
-    ui.selected = ui.view.round.legal[0]?.uid ?? null;
-    ui.target = ui.view.round.legal[0]?.city ?? null;
-    ui.caption = 'Double Agent slips across to Istanbul.';
-    render();
+    // No round card in the thumbnail: the table is built with every animation skipped.
+    const skip = ui.alwaysSkip;
+    ui.alwaysSkip = true;
+    try {
+      let s = 2;
+      const rng = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+      startSolo('countess');
+      bot?.stop();
+      table.state = createTable({ seed: 'thumb-7', cities: ['vienna', 'istanbul', 'monaco'] }).state;
+      table.names = [meta.codename, 'The Countess'];
+      quickTurns(3, rng);
+      bot?.stop();
+      table.state.round.stake = 2;
+      table.state.round.escalated = [true, false];
+      ui.screen = 'play';
+      ui.view = table.view(0);
+      ui.selected = ui.view.round.legal[0]?.uid ?? null;
+      ui.target = ui.view.round.legal[0]?.city ?? null;
+      ui.caption = 'Double Agent slips across to Istanbul.';
+      ui.initShown = ui.view.round.initiative; // the token at rest, not mid-flip
+      render();
+    } finally {
+      ui.alwaysSkip = skip;
+    }
   },
 });

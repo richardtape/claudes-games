@@ -88,3 +88,101 @@ test('a computer rival plays a whole match against a random player', async () =>
   bot.stop();
   assert.ok(table.state.scores[table.state.winner] >= 6);
 });
+
+test('every match has an id that survives a save and changes on a rematch', () => {
+  const t = createTable({ seed: 3 });
+  const id = t.view(0).matchId;
+  assert.match(id, /^[a-z0-9]{8}$/);
+  assert.equal(restoreTable(JSON.parse(JSON.stringify(t.toJSON()))).view(1).matchId, id);
+  const old = JSON.parse(JSON.stringify(t.toJSON()));
+  delete old.matchId;
+  const r = restoreTable(old);
+  assert.match(r.view(0).matchId, /^[a-z0-9]{8}$/);
+  assert.equal(r.view(1).matchId, r.view(0).matchId, 'a pre-Phase-1 save gets one stable id');
+  assert.notEqual(createTable({ seed: 3 }).view(0).matchId, id, 'same seed, different id');
+  t.state.phase = 'match-over';
+  t.act(0, { a: 'rematch' });
+  t.act(1, { a: 'rematch' });
+  assert.notEqual(t.view(0).matchId, id);
+});
+
+test('the host only accepts codenames from the list', () => {
+  for (const [name, shown] of [['Agent Owl', 'Agent Owl'], ['<img src=x onerror=alert(1)>', 'Agent ?'], ['Agent Owl but longer', 'Agent ?']]) {
+    const table = createTable({ seed: 4 });
+    const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send() {}, leave() {} };
+    hostSession({ room, table });
+    room.handlers.hello({ v: 1, name, token: 't' }, 'g');
+    assert.equal(table.names[1], shown);
+  }
+});
+
+test('leaving says bye: the other side hears it once, not as a lost connection', async () => {
+  const { a, b, connect } = createMemoryPair();
+  const table = createTable({ seed: 9 });
+  const hostStatus = [];
+  const guestStatus = [];
+  const host = hostSession({ room: a, table, onStatus: (s) => hostStatus.push(s) });
+  const guest = guestSession({ room: b, name: 'Agent Lynx', token: 't1', onView: () => {}, onStatus: (s) => guestStatus.push(s) });
+  connect();
+  await until(() => hostStatus.includes('joined') && guestStatus.includes('joined'));
+  // Each side says bye while the other is still in the room (nobody tells a peer that has gone).
+  await host.bye();
+  await until(() => guestStatus.includes('bye'));
+  await guest.bye();
+  b.leave();
+  await until(() => hostStatus.includes('bye'));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(hostStatus, ['joined', 'bye']);
+});
+
+test('bye settles within 400 ms even if the send never settles', async () => {
+  const table = createTable({ seed: 5 });
+  const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send: () => new Promise(() => {}), leave() {} };
+  const host = hostSession({ room, table });
+  room.handlers.hello({ v: 1, name: 'Agent Owl', token: 't' }, 'g');
+  const t0 = Date.now();
+  await host.bye();
+  assert.ok(Date.now() - t0 < 700);
+});
+
+test('bye resolves at once, sending nothing, when there is no peer left to tell', async () => {
+  const sent = [];
+  const fakeRoom = (peers) => ({ peers: new Set(peers), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send: (type) => (sent.push(type), new Promise(() => {})), leave() {} });
+  // Host: no guest yet, then a guest who has gone.
+  const lonely = hostSession({ room: fakeRoom([]), table: createTable({ seed: 6 }) });
+  const t0 = Date.now();
+  await lonely.bye();
+  const room = fakeRoom(['g']);
+  const host = hostSession({ room, table: createTable({ seed: 6 }) });
+  room.handlers.hello({ v: 1, name: 'Agent Owl', token: 't' }, 'g');
+  room.peers.delete('g');
+  await host.bye();
+  // Guest: no host yet, then a host who has gone.
+  const groom = fakeRoom([]);
+  const guest = guestSession({ room: groom, name: 'Agent Lynx', token: 't1', onView: () => {} });
+  await guest.bye();
+  groom.peers.add('h');
+  groom.handlers.welcome({ name: 'Agent Fox' }, 'h');
+  groom.peers.delete('h');
+  await guest.bye();
+  assert.deepEqual(sent.filter((t) => t === 'bye'), [], 'no bye sent to a peer that is gone');
+  assert.ok(Date.now() - t0 < 200, 'each bye resolved at once rather than waiting out its 400 ms');
+});
+
+test('a guest that heard bye reports a later real disconnect once the host is welcomed back', async () => {
+  const { a, b, connect } = createMemoryPair();
+  const table = createTable({ seed: 9, names: ['Agent Fox', 'Rival'] });
+  const guestStatus = [];
+  const host = hostSession({ room: a, table });
+  guestSession({ room: b, name: 'Agent Lynx', token: 't1', onView: () => {}, onStatus: (s, n) => guestStatus.push([s, n]) });
+  connect();
+  await until(() => guestStatus.length === 1);
+  await host.bye();
+  await until(() => guestStatus.length === 2);
+  a.send('welcome', { name: '<b>x</b>' }, 'peer-b');
+  await until(() => guestStatus.length === 3);
+  a.leave();
+  await until(() => guestStatus.length === 4);
+  assert.deepEqual(guestStatus.map((x) => x[0]), ['joined', 'bye', 'joined', 'left']);
+  assert.equal(guestStatus[2][1], 'Agent ?', 'host-supplied names are whitelisted');
+});

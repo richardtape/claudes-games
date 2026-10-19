@@ -8,6 +8,14 @@ export const CAPACITY = 3;
 export const TARGET = 10;
 
 /**
+ * Tunable rule switches (the simulator can patch these as `rules.<field>`).
+ * lisbonTiebreak: when cities are level, the tie-break compares total power across cities.
+ * 'out' leaves Lisbon out (lowest total wins there, so adding it rewards losing it);
+ * 'invert' subtracts each seat's Lisbon total; 'all' is the old behaviour, kept for the A/B.
+ */
+export const RULES = { lisbonTiebreak: 'out' };
+
+/**
  * Every player gets one of each. `flip` tricks fire once when the card is revealed;
  * the others are ongoing and handled by powerOf() in the engine.
  */
@@ -33,7 +41,7 @@ export const CITIES = [
   { id: 'vienna', name: 'Vienna', rule: 'Agents drop here face down, with no tricks.' },
   { id: 'istanbul', name: 'Istanbul', rule: 'The first agent to arrive gets +3.' },
   { id: 'berlin', name: 'Berlin', rule: 'Room for only two agents a side.' },
-  { id: 'havana', name: 'Havana', rule: 'After turn 4, everyone here switches sides.' },
+  { id: 'havana', name: 'Havana', rule: 'After turn 4, everyone here switches sides.', note: 'After the switch, a Getaway here can pull a defected rival agent into your hand: a turned asset.' },
   { id: 'monaco', name: 'Monaco', rule: 'Win here for +1 point, whatever else happens.' },
   { id: 'hongkong', name: 'Hong Kong', rule: 'Drop an agent here and draw a card.' },
   { id: 'helsinki', name: 'Helsinki', rule: 'Closes after turn 3.' },

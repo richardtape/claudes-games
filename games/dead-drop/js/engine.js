@@ -5,7 +5,7 @@
 // the UI to animate → after turn 6 the round is scored → nextRound(). escalate()/respond()/
 // fold() run alongside. viewFor(state, seat) is what a player is allowed to see.
 import { createRng, hashString } from '../../../shared/rng.js';
-import { AGENT, CAPACITY, CITIES, CITY, DECK, MAX_HAND, START_HAND, TARGET, TURNS } from './data.js';
+import { AGENT, CAPACITY, CITIES, CITY, DECK, MAX_HAND, RULES, START_HAND, TARGET, TURNS } from './data.js';
 
 // ── randomness kept inside state.rng ─────────────────────────────────────────
 const rng = createRng(0);
@@ -436,6 +436,16 @@ function resolveOne(state, ev) {
   }
 }
 
+/** Each seat's total for the tie-break. Lisbon (lowest wins) is left out, inverted, or counted, per `mode`. */
+export function tiebreakTotals(cityIds, totals, mode = RULES.lisbonTiebreak) {
+  return [0, 1].map((s) =>
+    totals.reduce((t, x, i) => {
+      if (cityIds[i] !== 'lisbon') return t + x[s];
+      return mode === 'out' ? t : mode === 'invert' ? t - x[s] : t + x[s];
+    }, 0),
+  );
+}
+
 function endRound(state, ev) {
   const R = state.round;
   for (const city of R.cities)
@@ -458,7 +468,7 @@ function endRound(state, ev) {
   let winner = null;
   if (wins[0] !== wins[1]) winner = wins[0] > wins[1] ? 0 : 1;
   else {
-    const sum = [0, 1].map((s) => totals.reduce((t, x) => t + x[s], 0));
+    const sum = tiebreakTotals(R.cities.map((c) => c.id), totals);
     if (sum[0] !== sum[1]) winner = sum[0] > sum[1] ? 0 : 1;
   }
   const mi = R.cities.findIndex((c) => c.id === 'monaco');

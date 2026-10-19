@@ -11,15 +11,27 @@
   --paper-2: #cdb98f;
   --red: #c8321f;
   --teal: #1e6a6e;
+  --oxblood: #5c1814;
+  --night: #170f0d;
   --c0: var(--red);
   --c1: var(--teal);
   --display: 'League Gothic', 'Oswald', Impact, 'Arial Narrow', sans-serif;
   --type: 'Courier Prime', 'Courier New', ui-monospace, monospace;
   --cut: polygon(0.6% 3%, 99.2% 0%, 100% 94%, 1.5% 100%);
   --cut-2: polygon(0% 1%, 98.6% 4%, 99.4% 100%, 1.2% 96%);
+  /* The same cuts in px, for big or tall panels: a percentage of a tall sheet is a wedge
+     through its text. Never deeper than 12px, so 16px of padding always clears them. */
+  --cut-px: polygon(4px 8px, calc(100% - 5px) 0, 100% calc(100% - 12px), 10px 100%);
+  --cut-2-px: polygon(0 3px, calc(100% - 9px) 11px, calc(100% - 4px) 100%, 8px calc(100% - 11px));
   --cg-home-bg: var(--ink);
   --cg-home-fg: var(--paper);
   --cg-home-font: var(--type);
+  /* The table: its ground, the grain printed on it, and the ink for text and lines drawn straight
+     on it. Night (below) redefines all three. */
+  --ground: var(--mustard);
+  --grain: radial-gradient(circle at 20% 10%, rgb(255 255 255 / 0.12), transparent 40%),
+    radial-gradient(circle at 85% 80%, rgb(120 70 0 / 0.14), transparent 45%);
+  --line: var(--ink);
   color-scheme: light;
 }
 body[data-flip='1'] {
@@ -37,8 +49,8 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--mustard);
-  color: var(--ink);
+  background: var(--ground);
+  color: var(--line);
   font: 400 15px/1.45 var(--type);
   -webkit-user-select: none;
   user-select: none;
@@ -48,8 +60,7 @@ body {
 }
 body {
   /* Paper grain: a faint dappled print, never a pattern you notice. */
-  background-image: radial-gradient(circle at 20% 10%, rgb(255 255 255 / 0.12), transparent 40%),
-    radial-gradient(circle at 85% 80%, rgb(120 70 0 / 0.14), transparent 45%);
+  background-image: var(--grain);
   background-attachment: fixed;
 }
 
@@ -150,7 +161,7 @@ body[data-screen='title'] .mark {
 .rival:focus-visible,
 .city.target:focus-visible {
   clip-path: none;
-  outline: 3px solid var(--ink);
+  outline: 3px solid var(--line);
   outline-offset: 2px;
 }
 
@@ -541,7 +552,7 @@ body[data-screen='title'] .mark {
   gap: 10px;
   background: var(--own);
   color: var(--paper);
-  clip-path: var(--cut-2);
+  clip-path: var(--cut-2-px);
 }
 .cover h2 {
   margin: 0;
@@ -594,8 +605,15 @@ body[data-screen='title'] .mark {
   font-size: 14px;
 }
 .banner .link {
+  position: relative;
   color: var(--mustard);
   min-height: 0;
+}
+/* A 40px tap target without making the banner taller. */
+.banner .link::after {
+  content: '';
+  position: absolute;
+  inset: -12px -6px;
 }
 .scorebar {
   display: grid;
@@ -619,6 +637,43 @@ body[data-screen='title'] .mark {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A name and its First flip token (or the empty slot that keeps the name still without it). */
+.scorebar .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.first-flip,
+.ff-slot {
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+/* The First flip token: a paper coin. When it changes hands it spins over once, like a coin
+   tossed across the table (rotateY only: its size never changes). */
+.first-flip {
+  display: grid;
+  place-items: center;
+  padding-top: 2px;
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--ink), inset 0 0 0 4px var(--paper), inset 0 0 0 5px var(--mustard-deep), 0 2px 0 rgb(0 0 0 / 0.25);
+  font: 15px/1 var(--display);
+  letter-spacing: 0.02em;
+}
+.first-flip.moved {
+  animation: coin 0.6s cubic-bezier(0.25, 0.7, 0.3, 1);
+}
+@keyframes coin {
+  from {
+    transform: perspective(160px) rotateY(-540deg);
+  }
+  to {
+    transform: perspective(160px) rotateY(0deg);
+  }
+}
 .scorebar .score {
   font: 46px/0.9 var(--display);
   padding: 4px 10px 0;
@@ -638,14 +693,23 @@ body[data-screen='title'] .mark {
   text-align: center;
 }
 .stake {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
   padding: 4px 12px 2px;
-  background: var(--ink);
   color: var(--paper);
   font: 20px/1 var(--display);
   letter-spacing: 0.04em;
+}
+/* The slip itself sits behind the text, so the final turn's ×2 stamp can hang over its cut edge. */
+.stake::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--ink);
   clip-path: var(--cut-2);
 }
 .stake b {
@@ -656,7 +720,8 @@ body[data-screen='title'] .mark {
   font: 11px var(--type);
   color: var(--paper-2);
 }
-.stake.hot {
+/* A raised stake glows: its slip pulses between red and oxblood (colour only, never size). */
+.stake.hot::before {
   background: var(--red);
   animation: hot 1.6s ease-in-out infinite;
 }
@@ -665,7 +730,37 @@ body[data-screen='title'] .mark {
 }
 @keyframes hot {
   50% {
-    transform: scale(1.06);
+    background-color: var(--oxblood);
+  }
+}
+/* The final turn's stamp: the stake doubles on this flip. Red ink on a paper label (like the
+   turned-asset stamp on cards), slapped on crooked and hanging over the slip's cut edge. */
+.x2-stamp {
+  position: relative;
+  align-self: center;
+  margin: -4px -18px -4px 2px;
+  padding: 4px 6px 1px;
+  background: var(--paper);
+  color: var(--red);
+  font: 24px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.04em;
+  border: 2px solid var(--red);
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--red), 0 2px 0 rgb(0 0 0 / 0.35);
+  rotate: -9deg;
+}
+/* It lands once, as the final card lifts: pressed down from above. */
+.x2-stamp.land {
+  animation: stamp 0.4s cubic-bezier(0.3, 0, 0.35, 1.3) both;
+}
+@keyframes stamp {
+  from {
+    scale: 2.4;
+    rotate: -26deg;
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
   }
 }
 .turn {
@@ -695,6 +790,7 @@ body[data-screen='title'] .mark {
   width: 60px;
   height: 82px;
   border: 2px dashed rgb(29 26 23 / 0.28);
+  border-color: color-mix(in srgb, var(--line) 28%, transparent);
   border-radius: 4px;
 }
 .plate {
@@ -820,9 +916,11 @@ body[data-screen='title'] .mark {
 .city.closed .plate {
   opacity: 0.6;
 }
+/* Reveal animations scale with --pace: a sped-up reveal (tapReveal() sets 1/3 on .play)
+   plays its flips and takedowns as fast as its waits. */
 .city.resolving .plate {
   transform: scale(1.04);
-  transition: transform 0.2s;
+  transition: transform calc(0.2s * var(--pace, 1));
 }
 /* City results: the winner's colour sweeps across in bars. */
 .city.won-me .plate,
@@ -830,7 +928,7 @@ body[data-screen='title'] .mark {
   background: var(--win);
 }
 .city.sweeping .plate {
-  animation: sweep 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: sweep calc(0.6s * var(--pace, 1)) cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .city.won-me {
   --win: var(--me-col);
@@ -949,7 +1047,7 @@ body[data-screen='title'] .mark {
 }
 .chip.ghost {
   opacity: 0.6;
-  outline: 2px dashed var(--ink);
+  outline: 2px dashed var(--line);
   outline-offset: 2px;
   box-shadow: none;
 }
@@ -957,7 +1055,7 @@ body[data-screen='title'] .mark {
   opacity: 1;
   outline: 0;
   transform: rotate(-3deg);
-  box-shadow: 0 3px 0 rgb(0 0 0 / 0.28), 0 0 0 3px var(--ink);
+  box-shadow: 0 3px 0 rgb(0 0 0 / 0.28), 0 0 0 3px var(--line);
 }
 .chip.acting {
   z-index: 2;
@@ -966,10 +1064,10 @@ body[data-screen='title'] .mark {
   transition: transform 0.15s;
 }
 .chip.land-me {
-  animation: land-me 0.5s cubic-bezier(0.2, 0.8, 0.25, 1.15) both;
+  animation: land-me calc(0.5s * var(--pace, 1)) cubic-bezier(0.2, 0.8, 0.25, 1.15) both;
 }
 .chip.land-them {
-  animation: land-them 0.5s cubic-bezier(0.2, 0.8, 0.25, 1.15) both;
+  animation: land-them calc(0.5s * var(--pace, 1)) cubic-bezier(0.2, 0.8, 0.25, 1.15) both;
 }
 @keyframes land-me {
   from {
@@ -984,10 +1082,10 @@ body[data-screen='title'] .mark {
   }
 }
 .chip.flipping {
-  animation: flip-out 0.14s ease-in forwards;
+  animation: flip-out calc(0.14s * var(--pace, 1)) ease-in forwards;
 }
 .chip.flipped-in {
-  animation: flip-in 0.26s ease-out;
+  animation: flip-in calc(0.26s * var(--pace, 1)) ease-out;
 }
 @keyframes flip-out {
   to {
@@ -1000,7 +1098,7 @@ body[data-screen='title'] .mark {
   }
 }
 .chip.taken {
-  animation: taken 0.46s ease-in forwards;
+  animation: taken calc(0.46s * var(--pace, 1)) ease-in forwards;
 }
 @keyframes taken {
   30% {
@@ -1013,10 +1111,10 @@ body[data-screen='title'] .mark {
   }
 }
 .chip.pulled.to-me {
-  animation: pull-me 0.42s ease-in forwards;
+  animation: pull-me calc(0.42s * var(--pace, 1)) ease-in forwards;
 }
 .chip.pulled.to-them {
-  animation: pull-them 0.42s ease-in forwards;
+  animation: pull-them calc(0.42s * var(--pace, 1)) ease-in forwards;
 }
 @keyframes pull-me {
   to {
@@ -1113,7 +1211,7 @@ body[data-screen='title'] .mark {
 }
 .card.sel {
   transform: translateY(-16px) rotate(0deg);
-  box-shadow: 0 0 0 3px var(--ink), 0 12px 0 rgb(0 0 0 / 0.22);
+  box-shadow: 0 0 0 3px var(--line), 0 12px 0 rgb(0 0 0 / 0.22);
 }
 .card:disabled {
   cursor: default;
@@ -1146,6 +1244,57 @@ body[data-screen='title'] .mark {
   bottom: 6px;
   background: rgb(29 26 23 / 0.12);
 }
+/* A turned asset: the rival's agent, now yours. Stamped in the rival's colour over its portrait. */
+.card .turned {
+  position: absolute;
+  top: 44px;
+  right: 5px;
+  padding: 2px 4px 1px;
+  border: 2px solid var(--them-col);
+  color: var(--them-col);
+  background: rgb(240 226 196 / 0.88);
+  font: 15px/1 var(--display);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transform: rotate(-9deg);
+  pointer-events: none;
+}
+/* Drag to drop (main.js): a card pressed and moved lifts out of the hand as a ghost that
+   follows the pointer. Only the hand keeps a touch from panning, so the page still scrolls
+   from anywhere else. */
+.hand .card {
+  touch-action: none;
+}
+.card.dragging {
+  opacity: 0.35;
+}
+.card.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 45;
+  margin: 0;
+  pointer-events: none;
+  transform: rotate(-3deg) scale(0.8);
+  transition: none;
+  box-shadow: 0 0 0 3px var(--line), 0 16px 0 rgb(0 0 0 / 0.22);
+}
+/* The city under a dragged card takes your colour, and the socket in your row where the card
+   will land lights up, so the target reads even with the ghost over it. */
+.city.drop-over .plate,
+.city.drop-over:hover .plate {
+  background: #4a4036;
+  background: color-mix(in srgb, var(--me-col) 42%, var(--ink));
+}
+.city.drop-over > .row:last-child:not(:has(.ghost)) > .slot:first-of-type {
+  border: 3px solid var(--me-col);
+  background: rgb(240 226 196 / 0.4);
+}
+.city.drop-over .plate::after {
+  border-style: solid;
+  border-color: var(--paper);
+  animation: none;
+}
 
 /* Round result */
 .result {
@@ -1158,7 +1307,8 @@ body[data-screen='title'] .mark {
   padding: 22px 24px 20px;
   background: var(--paper);
   color: var(--ink);
-  clip-path: var(--cut-2);
+  --line: var(--ink); /* paper: focus rings stay ink, by day or night */
+  clip-path: var(--cut-2-px);
   box-shadow: 0 10px 0 rgb(0 0 0 / 0.2);
   display: grid;
   gap: 10px;
@@ -1210,27 +1360,54 @@ body[data-screen='title'] .mark {
   margin: 0;
   font: 26px var(--display);
 }
-
-/* Flashes: escalate and fold */
-.flash {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-content: center;
-  text-align: center;
-  background: rgb(29 26 23 / 0.88);
-  color: var(--paper);
-  overflow: hidden;
-  pointer-events: none;
-  animation: flash-in 0.2s ease-out;
+.result .btns {
+  justify-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
+/* A quiet slip on the paper panel: a darker paper, so it still reads as a button. */
+.result .slip.quiet {
+  background: var(--paper-2);
+}
+.result .wait {
+  margin: 0;
+}
+/* See the board: the result folds down to a strip pinned to the bottom of the screen, so the
+   final board shows in full above it. */
+.result.peek {
+  position: fixed;
+  top: auto;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translateX(-50%) rotate(-0.5deg);
+  width: min(972px, calc(100% - 28px));
+  padding: 12px 16px 12px 22px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+}
+.result.peek h2 {
+  font-size: 34px;
+}
+.result.peek .btns {
+  justify-self: end;
+  flex-wrap: nowrap;
+}
+.result.peek .slip {
+  min-height: 44px;
+  font-size: 22px;
+  padding: 8px 14px 6px;
+}
+
+/* Flashes (escalate and fold) and title cards share the Saul Bass bars. */
 @keyframes flash-in {
   from {
     opacity: 0;
   }
 }
-.flash .bars i {
+:is(.flash, .cine) .bars i {
   position: absolute;
   left: -20%;
   width: 140%;
@@ -1239,20 +1416,20 @@ body[data-screen='title'] .mark {
   transform: rotate(-10deg);
   animation: bars 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
-.flash .bars i:nth-child(1) {
+:is(.flash, .cine) .bars i:nth-child(1) {
   top: 8%;
 }
-.flash .bars i:nth-child(2) {
+:is(.flash, .cine) .bars i:nth-child(2) {
   top: 30%;
   height: 4vh;
   background: var(--red);
   animation-delay: 0.08s;
 }
-.flash .bars i:nth-child(3) {
+:is(.flash, .cine) .bars i:nth-child(3) {
   top: 66%;
   animation-delay: 0.14s;
 }
-.flash .bars i:nth-child(4) {
+:is(.flash, .cine) .bars i:nth-child(4) {
   top: 84%;
   height: 3vh;
   background: var(--mustard);
@@ -1263,24 +1440,239 @@ body[data-screen='title'] .mark {
     transform: translateX(-100%) rotate(-10deg);
   }
 }
-.flash .big {
-  position: relative;
-  margin: 0;
-  font: clamp(96px, 20vw, 240px) / 0.85 var(--display);
-  text-transform: uppercase;
-  animation: slam 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
-}
 @keyframes slam {
   from {
     transform: scale(2.2) rotate(-6deg);
     opacity: 0;
   }
 }
+
+/* Title cards (showCard in main.js): full-screen credits over the table, with the Saul Bass bars.
+   A card takes every tap: a tap, Enter, Space or Escape skips it. The escalate and fold flashes
+   are cards too (.cine.flash), so nothing reaches the table or the escalation prompt under them. */
+.cine {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgb(29 26 23 / 0.94);
+  color: var(--paper);
+  text-align: center;
+  overflow: hidden;
+  cursor: pointer;
+  animation: flash-in 0.2s ease-out;
+}
+/* The bars sit behind everything, out of the card's grid. */
+.cine .bars {
+  position: absolute;
+  inset: 0;
+}
+.cine .big {
+  position: relative;
+  margin: 0;
+  font: clamp(72px, min(22vw, 18vh), 150px) / 0.85 var(--display);
+  text-transform: uppercase;
+  animation: card-head 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes card-head {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25em);
+  }
+}
+
+/* Flashes: escalate and fold. A word slams in over a lighter veil, with the line under it. */
+.cine.flash {
+  gap: 0;
+  background: rgb(29 26 23 / 0.88);
+}
+.flash .big {
+  font: clamp(96px, 20vw, 240px) / 0.85 var(--display);
+  animation: slam 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
 .flash .small {
   position: relative;
   margin: 8px 0 0;
   font-size: 18px;
   font-weight: 700;
+}
+
+/* The round's title card: the three cities run in like opening credits, one slip of paper each,
+   alternately from the left and the right, 250 ms apart. The bars are mustard, with a thin red
+   and a thin teal for the two players. */
+.title-card {
+  --own: var(--mustard);
+}
+.title-card .bars i:nth-child(4) {
+  background: var(--teal);
+}
+.title-card .slate {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  width: min(700px, calc(100vw - 32px));
+}
+.title-card .line {
+  display: grid;
+  grid-template-columns: 136px 10.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
+  min-height: 76px;
+  padding: 0 24px 0 4px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut-px);
+  rotate: -0.6deg;
+  animation: line-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(0.3s + var(--i) * 0.25s);
+}
+.title-card .line:nth-child(2) {
+  clip-path: var(--cut-2-px);
+  rotate: 0.5deg;
+  animation-name: line-in-right;
+}
+.title-card .line:nth-child(3) {
+  rotate: -0.3deg;
+}
+@keyframes line-in {
+  from {
+    transform: translateX(-110vw);
+  }
+}
+@keyframes line-in-right {
+  from {
+    transform: translateX(110vw);
+  }
+}
+/* The skyline stands on the slip's bottom edge. */
+.title-card .sky {
+  align-self: end;
+  height: 62px;
+  color: var(--ink);
+}
+.title-card .sky svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.title-card .sky .ac {
+  fill: var(--mustard-deep);
+}
+.title-card h3 {
+  margin: 0;
+  padding-top: 4px;
+  font: 44px/0.9 var(--display);
+  letter-spacing: 0.03em;
+}
+.title-card .line p {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+/* The final turn's card: the house lights go down. Oxblood bars slam in from both sides (the
+   card is up for only 1.2 s, so everything is in by 0.7 s), "Final drop" lands, a spotlight
+   strikes on above it, and the news types out underneath. */
+.final-card {
+  --own: var(--oxblood);
+  gap: 14px;
+  background: rgb(22 11 9 / 0.95);
+  animation-duration: 0.12s;
+}
+.final-card .bars {
+  animation: jolt 0.3s 0.4s;
+}
+.final-card .bars i {
+  animation-duration: 0.42s;
+  animation-timing-function: cubic-bezier(0.75, 0, 0.3, 1);
+}
+.final-card .bars i:nth-child(1) {
+  top: 9%;
+  height: 15vh;
+  animation-delay: 0s;
+}
+.final-card .bars i:nth-child(2) {
+  top: 27%;
+  height: 2.6vh;
+  animation-name: bars-right;
+  animation-delay: 0.05s;
+}
+.final-card .bars i:nth-child(3) {
+  top: 64%;
+  height: 13vh;
+  animation-name: bars-right;
+  animation-delay: 0.1s;
+}
+.final-card .bars i:nth-child(4) {
+  top: 82%;
+  height: 2vh;
+  animation-delay: 0.15s;
+}
+@keyframes bars-right {
+  from {
+    transform: translateX(100%) rotate(-10deg);
+  }
+}
+@keyframes jolt {
+  25% {
+    translate: -6px 3px;
+  }
+  55% {
+    translate: 4px -2px;
+  }
+  80% {
+    translate: -2px 1px;
+  }
+}
+/* A flat cut-paper cone of light, struck on with a flicker. */
+.final-card .beam {
+  position: absolute;
+  inset: 0 0 12%;
+  background: linear-gradient(rgb(255 214 150 / 0.34), rgb(255 214 150 / 0.1) 70%, rgb(255 214 150 / 0.04));
+  clip-path: polygon(42.5% 0, 57.8% 0, 79% 100%, 21.5% 99%);
+  animation: beam-on 0.42s 0.3s both;
+  animation-timing-function: steps(1, end);
+}
+@keyframes beam-on {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.8;
+  }
+  40% {
+    opacity: 0.2;
+  }
+  60% {
+    opacity: 1;
+  }
+}
+.final-card .big {
+  font-size: clamp(84px, min(24vw, 22vh), 190px);
+  animation: slam 0.34s 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+.final-card .small {
+  position: relative;
+  margin: 0;
+  padding: 6px 14px 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 18px/1.3 var(--type);
+  clip-path: var(--cut-2);
+  rotate: 0.6deg;
+  animation: slip-type 0.36s 0.42s steps(28) both;
+}
+/* Typed out left to right, from a sliver of the slip's own cut (polygons interpolate point by point). */
+@keyframes slip-type {
+  from {
+    clip-path: polygon(0% 1%, 0% 4%, 0% 100%, 0% 96%);
+  }
 }
 
 /* Modals */
@@ -1296,14 +1688,20 @@ body[data-screen='title'] .mark {
 .sheet {
   width: min(680px, 100%);
   max-height: 88dvh;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 22px 24px;
   background: var(--paper);
   color: var(--ink);
-  clip-path: var(--cut);
+  clip-path: var(--cut-px);
+  --line: var(--ink); /* paper: focus rings stay ink, by day or night */
 }
 .sheet.small {
   width: min(440px, 100%);
+}
+.sheet > p {
+  margin: 4px 0 0;
 }
 .modal.hot .sheet {
   border-top: 10px solid var(--red);
@@ -1313,65 +1711,166 @@ body[data-screen='title'] .mark {
   font: 48px/0.92 var(--display);
   text-transform: uppercase;
 }
-.sheet h3 {
-  margin: 18px 0 8px;
-  font: 28px/1 var(--display);
-  font-weight: 400;
-}
 .sheet .btns {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 14px;
 }
+
+/* Help: header (title and tabs), one scrolling body, footer. A steady height, so the tabs
+   stay put under the pointer while you switch between short and long ones. */
+.sheet.help {
+  height: min(640px, 88dvh);
+  padding-bottom: 20px;
+}
+.sheet-head,
+.sheet.help .btns {
+  flex: none;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 4px solid var(--ink);
+}
+.tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 6px 5px;
+  border: 0;
+  background: var(--paper-2);
+  color: var(--ink);
+  font: 24px/1 var(--display);
+  letter-spacing: 0.03em;
+  clip-path: polygon(5px 0, calc(100% - 3px) 3px, 100% 100%, 0 100%);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.tab:nth-child(2n) {
+  clip-path: polygon(2px 3px, calc(100% - 6px) 0, 100% 100%, 0 100%);
+}
+.tab:hover:not([aria-selected='true']) {
+  background: #dccaa0;
+}
+.tab[aria-selected='true'] {
+  background: var(--ink);
+  color: var(--paper);
+  cursor: default;
+}
+.tab:focus-visible {
+  outline: 3px solid var(--mustard-deep);
+  outline-offset: -3px;
+}
+@media (hover: none) {
+  /* Touch screens have no keys to list. */
+  .tab[data-tab='keys'] {
+    display: none;
+  }
+}
+.sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px 6px 18px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-2) transparent;
+  /* Text scrolling on fades into the perforation instead of stopping in a hard line. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+}
+.sheet-body:focus-visible {
+  outline: 2px dashed var(--ink);
+  outline-offset: -2px;
+}
+.sheet.help .btns {
+  margin-top: 0;
+  padding-top: 14px;
+  border-top: 2px dashed rgb(29 26 23 / 0.35);
+}
 .rules {
-  padding-left: 20px;
+  padding-left: 30px;
   margin: 0;
 }
 .rules li {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
-.agents,
-.cities {
+.rules li::marker {
+  font: 21px/1 var(--display);
+}
+.agent-list,
+.city-list,
+.key-list {
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px 16px;
+  gap: 10px 18px;
   font-size: 13px;
 }
-.agents li {
+.agent-list li {
   display: grid;
   grid-template-columns: 40px 1fr;
   gap: 2px 10px;
   align-items: center;
 }
-.agents .art {
+.agent-list .art {
   grid-row: span 2;
   width: 40px;
   height: 40px;
   --own: var(--red);
 }
-.agents .art svg {
+.agent-list .art svg {
   width: 100%;
   height: 100%;
 }
-.agents .ac {
+.agent-list .ac {
   fill: var(--red);
 }
-.agents b {
+.agent-list b {
   font: 20px/1 var(--display);
   font-weight: 400;
 }
-.agents b i {
+.agent-list b i {
   font-style: normal;
   margin-left: 4px;
   color: var(--red);
 }
-.cities b {
+.city-list b {
   font: 18px var(--display);
   font-weight: 400;
+}
+.city-list .note {
+  display: block;
+  margin-top: 5px;
+  padding-left: 8px;
+  border-left: 3px solid var(--mustard-deep);
+  font-style: italic;
+}
+.key-list {
+  grid-template-columns: 1fr;
+  gap: 7px;
+  font-size: 14px;
+}
+.key-list li {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+.key-list .keys {
+  white-space: nowrap;
+}
+.key-list kbd {
+  display: inline-block;
+  min-width: 26px;
+  padding: 5px 6px 4px;
+  font: 700 13px/1 var(--type);
+  text-align: center;
+  background: var(--ink);
+  color: var(--paper);
 }
 
 /* Match over: the dossier */
@@ -1390,7 +1889,8 @@ body[data-screen='title'] .mark {
   padding: 26px 28px 22px;
   background: #e9d39c;
   color: var(--ink);
-  clip-path: polygon(0 3%, 26% 3%, 30% 0, 54% 0, 57% 3%, 100% 3%, 99.4% 100%, 0.5% 99%);
+  /* A 14px folder tab, sized in px so a tall dossier on a phone keeps the same small tab. */
+  clip-path: polygon(0 14px, 26% 14px, calc(26% + 16px) 0, calc(56% - 14px) 0, 56% 14px, 100% 14px, calc(100% - 4px) 100%, 3px calc(100% - 8px));
   box-shadow: 0 8px 0 rgb(0 0 0 / 0.18);
 }
 .stamp-line {
@@ -1458,6 +1958,7 @@ body[data-screen='title'] .mark {
 }
 .over .actions {
   display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -1468,6 +1969,73 @@ body[data-screen='title'] .mark {
   font: 700 14px var(--type);
   border-radius: 0;
   clip-path: var(--cut);
+}
+
+/* ── night: a round's final turn ────────────────────────────────────────── */
+/* The same film after dark (main.js sets body[data-night] for the final turn's planning, its
+   reveal and its result). The ground goes to ink, with an oxblood glow hanging under the
+   scorebar; text and lines on it turn to paper. The three cities stand in spotlights. */
+body[data-night='1'] {
+  --ground: var(--night);
+  --grain: radial-gradient(ellipse 150% 70% at 50% -12%, rgb(116 30 24 / 0.95), rgb(92 24 20 / 0.55) 42%, transparent 78%),
+    radial-gradient(ellipse 90% 40% at 50% 112%, rgb(92 24 20 / 0.45), transparent 70%);
+  --line: var(--paper);
+}
+/* The page behind the body (overscroll) goes dark too. */
+:root:has(> body[data-night='1']) {
+  --ground: var(--night);
+}
+/* The stake's slip turns oxblood; a raised stake still pulses red. */
+body[data-night='1'] .stake:not(.hot)::before {
+  background: var(--oxblood);
+}
+/* Each city is lit from above: a flat cone of light through its column, and a pool where it
+   falls on the top of the panel (kept above the name and rule, so they read as by day). */
+body[data-night='1'] .city {
+  position: relative;
+  isolation: isolate;
+}
+body[data-night='1'] .city::before {
+  content: '';
+  position: absolute;
+  inset: -10px -3px 0;
+  z-index: -1;
+  background: linear-gradient(rgb(255 214 150 / 0.2), rgb(255 214 150 / 0.07) 62%, rgb(255 214 150 / 0.12));
+  clip-path: polygon(36.5% 0, 63.5% 0.6%, 99.4% 100%, 0.8% 99.3%);
+  pointer-events: none;
+}
+/* After the flip, the light takes the colour of whoever holds the city (a gel), or goes out. */
+body[data-night='1'] .city.won-me::before,
+body[data-night='1'] .city.won-them::before {
+  background: linear-gradient(color-mix(in srgb, var(--win) 55%, transparent), color-mix(in srgb, var(--win) 18%, transparent) 70%, color-mix(in srgb, var(--win) 30%, transparent));
+}
+/* A city nobody holds, or one that is closed this turn, stands in the dark. */
+body[data-night='1'] .city.won-none::before,
+body[data-night='1'] .city.closed::before {
+  opacity: 0.3;
+}
+body[data-night='1'] .city:not(.won-me, .won-them, .closed) .plate {
+  background-image: radial-gradient(ellipse 85% 58% at 50% -6%, rgb(255 218 160 / 0.38), rgb(255 205 140 / 0.1) 50%, transparent 88%);
+}
+/* Your hand takes a red edge, as if lit by the warning lamp. */
+body[data-night='1'] .hand .card {
+  box-shadow: 0 0 0 2px var(--red), 0 0 22px rgb(200 50 31 / 0.5), 0 4px 0 rgb(0 0 0 / 0.3);
+}
+body[data-night='1'] .hand .card.sel {
+  box-shadow: 0 0 0 2px var(--red), 0 0 0 5px var(--line), 0 0 26px rgb(200 50 31 / 0.55), 0 12px 0 rgb(0 0 0 / 0.22);
+}
+/* The final flip: once both lock in, the house lights go down on everything but the cities, the
+   ticker that narrates them and the reveal's Speed up / Skip control (its only control). */
+body[data-night='1'] .play.revealing > :not(#board, .banner, .ticker, .controls),
+body[data-night='1'] .play.revealing > .controls > :not(.btns),
+body[data-night='1']:has(.play.revealing) #top {
+  opacity: 0.35;
+  animation: house-lights 0.7s ease-out both;
+}
+@keyframes house-lights {
+  from {
+    opacity: 1;
+  }
 }
 
 /* ── phones ─────────────────────────────────────────────────────────────── */
@@ -1540,6 +2108,20 @@ body[data-screen='title'] .mark {
   }
   .stake small {
     display: none;
+  }
+  .x2-stamp {
+    margin-right: -14px;
+    padding: 3px 5px 1px;
+    font-size: 19px;
+  }
+  .final-card .big .word {
+    display: block;
+  }
+  .final-card .big {
+    font-size: clamp(84px, min(30vw, 15vh), 150px);
+  }
+  .final-card .small {
+    font-size: 15px;
   }
   .board {
     gap: 6px;
@@ -1640,6 +2222,19 @@ body[data-screen='title'] .mark {
     line-height: 1.2;
     padding-bottom: 0;
   }
+  /* Five cards: smaller print, so the longest rules (the Assassin's) stay on the card down to
+     360px wide, and "Double Agent" stays on one line. */
+  .hand[data-n='5'] .card {
+    padding-inline: 4px;
+  }
+  .hand[data-n='5'] .nm {
+    font-size: 14px;
+  }
+  .hand[data-n='5'] .tx {
+    font-size: 9px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
   .hand[data-n='6'] .tx,
   .hand[data-n='7'] .tx {
     display: none;
@@ -1650,6 +2245,38 @@ body[data-screen='title'] .mark {
   }
   .result h2 {
     font-size: 38px;
+  }
+  .result.peek {
+    bottom: max(8px, env(safe-area-inset-bottom));
+    width: calc(100% - 16px);
+    padding: 10px 14px 12px 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .result.peek h2 {
+    font-size: 28px;
+  }
+  .result.peek .btns {
+    justify-self: stretch;
+  }
+  .result.peek .btns > * {
+    flex: 1;
+  }
+  .card .turned {
+    top: 24px;
+    right: 3px;
+    font-size: 12px;
+    padding: 2px 3px 1px;
+  }
+  .sheet.help {
+    height: 88dvh;
+    padding: 20px 18px 18px;
+  }
+  .sheet.help h2 {
+    font-size: 42px;
+  }
+  .sheet-body {
+    font-size: 14px;
   }
   .dossier {
     padding: 22px 16px 18px;
@@ -1668,6 +2295,58 @@ body[data-screen='title'] .mark {
   .flash .small {
     font-size: 15px;
   }
+  .title-card .slate {
+    gap: 8px;
+  }
+  .title-card .line {
+    grid-template-columns: 84px minmax(0, 1fr);
+    column-gap: 12px;
+    min-height: 0;
+    padding: 0 16px 0 2px;
+  }
+  .title-card .sky {
+    grid-row: 1 / 3;
+    height: 48px;
+  }
+  .title-card h3 {
+    padding-top: 12px;
+    font-size: 32px;
+  }
+  .title-card .line p {
+    padding: 2px 0 12px;
+    font-size: 13px;
+    line-height: 1.3;
+  }
+}
+
+@media (max-height: 520px) {
+  /* Phones on their side: the round card's slips get shorter. */
+  .cine {
+    gap: 10px;
+  }
+  .title-card .slate {
+    gap: 6px;
+  }
+  .title-card .line {
+    min-height: 58px;
+  }
+  .title-card .sky {
+    height: 46px;
+  }
+  .title-card h3 {
+    font-size: 34px;
+  }
+  .title-card .line p {
+    padding: 6px 0;
+  }
+  /* Phones on their side: a smaller title leaves room for the body. */
+  .sheet.help {
+    padding-top: 14px;
+  }
+  .sheet.help h2 {
+    font-size: 34px;
+    margin-bottom: 6px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1678,5 +2357,9 @@ body[data-screen='title'] .mark {
     animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  /* The ghost still follows the pointer (that is the information), without the tilt. */
+  .card.drag-ghost {
+    transform: scale(0.8);
   }
 }

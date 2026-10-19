@@ -7,8 +7,24 @@
 import * as E from './engine.js';
 import { think, estimateLocked, stakeCall } from './bot.js';
 import { createRng } from '../../../shared/rng.js';
+import { CODENAMES } from './data.js';
 
 export const PROTOCOL = 1;
+
+/** 8 lowercase base-36 characters; not derived from the match seed, so rematches and equal seeds differ. */
+const newMatchId = () => Array.from({ length: 8 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
+
+/** Resolve after the send settles or after `ms`, whichever is first; never rejects. */
+const settleWithin = (fn, ms = 400) =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => (clearTimeout(timer), resolve());
+    try {
+      Promise.resolve(fn()).then(done, done);
+    } catch {
+      done();
+    }
+  });
 
 export function createTable({ seed = Date.now(), target, cities, names = ['Red', 'Teal'] } = {}) {
   const listeners = new Set();
@@ -17,6 +33,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
     names: names.slice(),
     ready: [false, false],
     rematch: [false, false],
+    matchId: newMatchId(),
     seq: 0,
     turnSeq: 0,
     onChange(cb) {
@@ -29,7 +46,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
       for (const cb of [...listeners]) cb(table);
     },
     view(seat) {
-      return { ...E.viewFor(table.state, seat), names: table.names.slice(), ready: table.ready.slice(), rematch: table.rematch.slice(), seq: table.seq, turnSeq: table.turnSeq };
+      return { ...E.viewFor(table.state, seat), names: table.names.slice(), ready: table.ready.slice(), rematch: table.rematch.slice(), seq: table.seq, turnSeq: table.turnSeq, matchId: table.matchId };
     },
     /** Apply one player action; returns whether it did anything. */
     act(seat, a) {
@@ -68,6 +85,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
             ok = true;
             if (table.rematch.every(Boolean)) {
               table.rematch = [false, false];
+              table.matchId = newMatchId();
               table.state = E.newMatch({ seed: Date.now() + Math.floor(Math.random() * 1e6), target: S.target });
             }
           }
@@ -78,7 +96,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
       return ok;
     },
     toJSON() {
-      return { state: table.state, names: table.names, ready: table.ready, rematch: table.rematch, seq: table.seq, turnSeq: table.turnSeq };
+      return { state: table.state, names: table.names, ready: table.ready, rematch: table.rematch, seq: table.seq, turnSeq: table.turnSeq, matchId: table.matchId };
     },
   };
   return table;
@@ -88,6 +106,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
 export function restoreTable(saved) {
   const table = createTable({ seed: 1 });
   Object.assign(table, { state: saved.state, names: saved.names, ready: saved.ready, rematch: saved.rematch, seq: saved.seq, turnSeq: saved.turnSeq });
+  if (typeof saved.matchId === 'string' && /^[a-z0-9]{8}$/.test(saved.matchId)) table.matchId = saved.matchId;
   return table;
 }
 
@@ -171,13 +190,15 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
  */
 export function hostSession({ room, table, onStatus = () => {} }) {
   let guest = null;
+  let said = false; // the guest said bye: its later peer-leave is not a lost connection
   const sendView = () => guest && room.peers.has(guest.peerId) && room.send('view', table.view(1), guest.peerId);
   room.on('hello', (d, peerId) => {
     if (!d || d.v !== PROTOCOL) return room.send('nope', { why: 'version' }, peerId);
     const returning = guest && guest.token === d.token;
     if (guest && !returning && room.peers.has(guest.peerId)) return room.send('nope', { why: 'full' }, peerId);
     guest = { peerId, token: d.token, name: d.name };
-    table.names[1] = String(d.name || 'Rival').slice(0, 24);
+    said = false;
+    table.names[1] = CODENAMES.includes(d.name) ? d.name : 'Agent ?';
     room.send('welcome', { name: table.names[0] }, peerId);
     onStatus(returning ? 'back' : 'joined', table.names[1]);
     table.touch();
@@ -185,13 +206,22 @@ export function hostSession({ room, table, onStatus = () => {} }) {
   room.on('act', (a, peerId) => {
     if (guest && peerId === guest.peerId) table.act(1, a);
   });
+  room.on('bye', (d, peerId) => {
+    if (!guest || peerId !== guest.peerId || said) return;
+    said = true;
+    onStatus('bye', table.names[1]);
+  });
   room.onPeerLeave = (id) => {
-    if (guest && id === guest.peerId) onStatus('left', table.names[1]);
+    if (guest && id === guest.peerId && !said) onStatus('left', table.names[1]);
   };
   const off = table.onChange(sendView);
   return {
     get guest() {
       return guest;
+    },
+    /** Tell the guest we're leaving, if they're still here. Settles within 400 ms (at once with nobody to tell). */
+    bye() {
+      return guest && room.peers.has(guest.peerId) ? settleWithin(() => room.send('bye', {}, guest.peerId)) : Promise.resolve();
     },
     close() {
       off();
@@ -203,21 +233,34 @@ export function hostSession({ room, table, onStatus = () => {} }) {
 /** Guest side: forwards actions to the host and hands every view it receives to onView. */
 export function guestSession({ room, name, token, onView, onStatus = () => {} }) {
   let hostId = null;
+  let said = false;
+  let hostName;
   const hello = (id) => room.send('hello', { v: PROTOCOL, name, token }, id);
   room.onPeerJoin = hello;
   for (const id of room.peers) hello(id);
   room.on('welcome', (d, id) => {
     hostId = id;
-    onStatus('joined', d?.name);
+    said = false;
+    hostName = CODENAMES.includes(d?.name) ? d.name : 'Agent ?';
+    onStatus('joined', hostName);
   });
   room.on('nope', (d) => onStatus(d?.why === 'version' ? 'version' : 'full'));
   room.on('view', (v, id) => {
     if (id === hostId) onView(v);
   });
+  room.on('bye', (d, id) => {
+    if (id !== hostId || said) return;
+    said = true;
+    onStatus('bye', hostName);
+  });
   room.onPeerLeave = (id) => {
-    if (id === hostId) onStatus('left');
+    if (id === hostId && !said) onStatus('left');
   };
   return {
+    /** Tell the host we're leaving, if they're still here. Settles within 400 ms (at once with nobody to tell). */
+    bye() {
+      return hostId && room.peers.has(hostId) ? settleWithin(() => room.send('bye', {}, hostId)) : Promise.resolve();
+    },
     act(a) {
       if (hostId) room.send('act', a, hostId);
       return !!hostId;

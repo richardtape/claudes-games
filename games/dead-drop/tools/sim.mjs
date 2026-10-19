@@ -1,180 +1,264 @@
 #!/usr/bin/env node
-// Bot-vs-bot simulator for balancing Dead Drop.
+// Bot-vs-bot simulator for balancing Dead Drop. Rules and stats live in tools/sim/*.mjs.
 //
-//   node games/dead-drop/tools/sim.mjs                     cards/cities/stakes report (mid bots)
-//   node games/dead-drop/tools/sim.mjs --ladder            every rival against every other
-//   node games/dead-drop/tools/sim.mjs --rounds 400 --samples 10 --a heron --b heron
-//   node games/dead-drop/tools/sim.mjs --set sleeper.power=4      try a tweak without editing data.js
+//   node games/dead-drop/tools/sim.mjs [options]
 //
-// Agent stats compare round win rate when a seat played that agent vs when it didn't
-// (folded rounds excluded). City stats show how often a city was decided and how often its
-// winner took the round.
-import * as E from '../js/engine.js';
-import { think, stakeCall } from '../js/bot.js';
+//   --rounds N            volume per configuration, in rounds (default 5000), rounded up to whole batches
+//   --a ID --b ID         rivals (default heron, heron); --samples N overrides both (default: their own)
+//   --target N            points to win a match (default 10)
+//   --seed S              default "dd"
+//   --pin city            pin a city into every round (repeatable, at most 3)
+//   --set path=value      (repeatable) change data, e.g. heavy.power=5; applies to the base and every variant
+//   --variant name:key=value   (repeatable; repeat a name to set more than one key). Keys: a, b, samples,
+//                         target, pin, or a settings path
+//   --probe agents|cities agents: one "<id>+1" variant per agent (power + 1); cities: "pin-<id>" variants
+//   --ladder [all]        adjacent rival pairs (default) or all 10 pairs, no base run
+//   --workers W           default 4; 1 runs in-process with no threads
+//   --run NAME            batch log .tmp/dead-drop-sim/NAME.jsonl (default "sim"); --resume reuses it
+//   --out FILE            JSON summary (default .tmp/dead-drop-sim/NAME.json)
+//   --against FILE        compare this run's base with the base in a saved JSON
+//   --json                print the JSON to stdout instead of the text report
+//
+// Every configuration plays batches 0, 1, 2, ... and keeps the shortest prefix that reaches --rounds, so
+// the numbers do not depend on --workers or on which batch finishes first.
+import { Worker } from 'node:worker_threads';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { AGENTS, CITIES, RIVALS } from '../js/data.js';
-import { createRng } from '../../../shared/rng.js';
+import { resolveConfig, applyVariant, configHash, SIM_VERSION, BATCH } from './sim/config.mjs';
+import { playBatch } from './sim/play.mjs';
+import { emptyStats, mergeStats, summarize, formatSummary, compare, margin } from './sim/stats.mjs';
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : fallback;
+const DIR = new URL('../../../.tmp/dead-drop-sim/', import.meta.url).pathname;
+const WORKER = new URL('./sim/worker.mjs', import.meta.url);
+
+// ---- arguments ----
+const REPEAT = new Set(['pin', 'set', 'variant']);
+const FLAGS = new Set(['json', 'resume']);
+const VALUED = new Set(['rounds', 'a', 'b', 'samples', 'target', 'seed', 'probe', 'workers', 'run', 'out', 'against']);
+const POSITIVE_INTS = ['rounds', 'workers', 'samples', 'target'];
+function parseArgs(argv) {
+  const o = { pin: [], set: [], variant: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith('--')) throw new Error(`unexpected argument: ${a}`);
+    const key = a.slice(2);
+    if (FLAGS.has(key)) o[key] = true;
+    else if (key === 'ladder') o.ladder = argv[i + 1] === 'all' ? (i++, 'all') : 'adjacent';
+    else {
+      if (!REPEAT.has(key) && !VALUED.has(key)) throw new Error(`unknown option: ${a}`);
+      const v = argv[++i];
+      if (v === undefined) throw new Error(`--${key} needs a value`);
+      if (REPEAT.has(key)) o[key].push(v);
+      else o[key] = v;
+    }
+  }
+  for (const key of POSITIVE_INTS) {
+    if (o[key] !== undefined && !(/^\d+$/.test(o[key]) && Number(o[key]) >= 1)) throw new Error(`--${key} must be a whole number of at least 1, got "${o[key]}"`);
+  }
+  return o;
+}
+const splitOnce = (s, ch) => {
+  const i = s.indexOf(ch);
+  return i < 0 ? [s, undefined] : [s.slice(0, i), s.slice(i + 1)];
 };
-const ROUNDS = Number(opt('rounds', 300));
-for (let i = 0; i < args.length; i++) {
-  if (args[i] !== '--set') continue;
-  const [path, value] = args[i + 1].split('=');
-  const [id, field] = path.split('.');
-  const target = AGENTS.find((a) => a.id === id);
-  if (!target) throw new Error(`no agent ${id}`);
-  target[field] = Number.isNaN(Number(value)) ? value : Number(value);
-  console.log(`set ${id}.${field} = ${target[field]}`);
-}
-const SAMPLES = opt('samples', null);
-const rivalOf = (id) => {
-  const r = RIVALS.find((x) => x.id === id) || RIVALS[2];
-  return SAMPLES ? { ...r, samples: Number(SAMPLES) } : r;
-};
 
-/** Plays one round between two rivals from the state's current round. Returns notes about it. */
-function playRound(state, bots, rng) {
-  const played = [[], []];
-  const escalations = [];
-  while (state.phase === 'plan') {
-    const R = state.round;
-    const thoughts = [0, 1].map((seat) => (R.plans[seat] ? null : think(E.viewFor(state, seat), { samples: bots[seat].samples, noise: bots[seat].noise, rng })));
-    for (const seat of [0, 1]) {
-      if (state.phase !== 'plan') break;
-      const value = thoughts[seat]?.value ?? 0;
-      const call = stakeCall(E.viewFor(state, seat), value, bots[seat], rng);
-      if (call === 'fold') E.fold(state, seat);
-      else if (call === 'escalate' && E.escalate(state, seat)) {
-        escalations.push({ seat, turn: R.turn, value });
-        const other = 1 - seat;
-        const ov = thoughts[other]?.value ?? 0;
-        const answer = stakeCall(E.viewFor(state, other), ov, bots[other], rng);
-        E.respond(state, other, answer === 'accept');
+// ---- configurations ----
+function buildConfigs(o) {
+  const common = { seed: o.seed ?? 'dd', samples: o.samples ?? null, target: o.target ?? 10, pin: o.pin };
+  const withSets = (c) => o.set.reduce((acc, s) => applyVariant(acc, ...splitOnce(s, '=')), c);
+  const named = (c, name) => ({ ...c, name });
+  const list = [];
+  if (o.ladder) {
+    const ids = RIVALS.map((r) => r.id);
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) {
+        if (o.ladder !== 'all' && j !== i + 1) continue;
+        const name = `${ids[i]}-${ids[j]}`;
+        list.push(withSets(resolveConfig({ ...common, name, a: ids[i], b: ids[j] })));
       }
-    }
-    if (state.phase !== 'plan') break;
-    for (const seat of [0, 1]) {
-      if (thoughts[seat]) {
-        const d = thoughts[seat].drop;
-        if (!d.pass) played[seat].push({ kind: state.round.cards[d.uid].kind, turn: R.turn, city: R.cities[d.city].id });
-        E.lock(state, seat, d);
-      }
-    }
-    E.resolveTurn(state);
+    return list;
   }
-  return { result: state.round.result, cities: state.round.cities.map((c) => c.id), played, escalations };
+  const base = withSets(resolveConfig({ ...common, name: 'base', a: o.a ?? 'heron', b: o.b ?? 'heron' }));
+  list.push(base);
+  const variants = new Map();
+  for (const v of o.variant) {
+    const [name, rest] = splitOnce(v, ':');
+    const [key, value] = splitOnce(rest ?? '', '=');
+    if (!name || !key || value === undefined) throw new Error(`bad --variant (want name:key=value): ${v}`);
+    variants.set(name, applyVariant(variants.get(name) ?? base, key, value));
+  }
+  if (o.probe === 'agents') {
+    for (const a of AGENTS) {
+      const key = `${a.id}.power`;
+      variants.set(`${a.id}+1`, applyVariant(base, key, (base.set[key] ?? a.power) + 1));
+    }
+  } else if (o.probe === 'cities') {
+    for (const c of CITIES) variants.set(`pin-${c.id}`, applyVariant(base, 'pin', c.id));
+  } else if (o.probe) throw new Error(`unknown --probe: ${o.probe}`);
+  for (const [name, c] of variants) list.push(named(c, name));
+  return list;
 }
 
-function runMatches(aId, bId, rounds, rng, onRound) {
-  const bots = [rivalOf(aId), rivalOf(bId)];
-  let n = 0;
-  let matches = 0;
-  const wins = [0, 0];
-  const roundsPerMatch = [];
-  while (n < rounds) {
-    // Alternate seats so neither bot always has seat 0.
-    const flip = matches % 2 === 1;
-    const seatBots = flip ? [bots[1], bots[0]] : bots;
-    const state = E.newMatch({ seed: rng.int(1, 2 ** 31) });
-    let r = 0;
-    while (state.phase !== 'match-over' && n < rounds) {
-      const note = playRound(state, seatBots, rng);
-      onRound?.(note, flip);
-      n++;
-      r++;
-      if (state.phase === 'round-over') E.nextRound(state);
-    }
-    if (state.phase === 'match-over') {
-      wins[flip ? 1 - state.winner : state.winner]++;
-      roundsPerMatch.push(r);
-    }
-    matches++;
+// ---- batch log ----
+function loadLog(file) {
+  const done = new Map(); // `${hash}:${batch}` -> {rounds, stats}
+  if (!existsSync(file)) return done;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line);
+      done.set(`${r.hash}:${r.batch}`, { stats: r.stats, rounds: r.stats.rounds });
+    } catch {}
   }
-  return { wins, roundsPerMatch };
+  return done;
 }
 
-const pct = (x) => `${(100 * x).toFixed(0)}%`.padStart(4);
-const rng = createRng(Number(opt('seed', 1)));
-
-if (args.includes('--ladder')) {
-  const ids = RIVALS.map((r) => r.id);
-  console.log(`Ladder (${ROUNDS} rounds per pairing): row's match win rate vs column\n`);
-  console.log('            ' + ids.map((i) => i.padStart(9)).join(''));
-  for (const a of ids) {
-    const row = [];
-    for (const b of ids) {
-      if (a === b) {
-        row.push('        —');
-        continue;
-      }
-      const { wins } = runMatches(a, b, ROUNDS, rng);
-      row.push(pct(wins[0] / Math.max(1, wins[0] + wins[1])).padStart(9));
+// ---- scheduling ----
+/** Plays every configuration to its prefix of batches; returns merged stats per config name. */
+async function runAll(configs, o, log) {
+  const need = Math.max(1, Math.ceil(Number(o.rounds ?? 5000)));
+  const workers = Math.max(1, Number(o.workers ?? 4));
+  const cached = o.resume ? loadLog(log) : new Map();
+  if (!o.resume) writeFileSync(log, '');
+  const st = configs.map((config) => ({ config, hash: configHash(config), results: [], next: 0, prefix: 0, rounds: 0, merged: emptyStats(), fromLog: 0, done: false }));
+  const advance = (s) => {
+    while (!s.done && s.results[s.prefix]) {
+      const r = s.results[s.prefix++];
+      s.merged = mergeStats(s.merged, r.stats);
+      s.rounds += r.rounds;
+      if (r.cached) s.fromLog++;
+      if (s.rounds >= need) s.done = true;
     }
-    console.log(a.padEnd(12) + row.join(''));
+  };
+  // Take cached batches first, in order.
+  for (const s of st) {
+    while (!s.done) {
+      const hit = cached.get(`${s.hash}:${s.next}`);
+      if (!hit) break;
+      s.results[s.next++] = { ...hit, cached: true };
+      advance(s);
+    }
   }
-  process.exit(0);
+  // Next batch to hand out: round-robin over configurations that still need work.
+  let rr = 0;
+  const take = () => {
+    for (let k = 0; k < st.length; k++) {
+      const s = st[(rr + k) % st.length];
+      if (s.done) continue;
+      rr = (rr + k + 1) % st.length;
+      return { s, batch: s.next++ };
+    }
+    return null;
+  };
+  const finish = ({ s, batch }, res) => {
+    s.results[batch] = { stats: res.stats, rounds: res.rounds };
+    appendFileSync(log, `${JSON.stringify({ run: s.config.name, hash: s.hash, batch, stats: res.stats })}\n`);
+    advance(s);
+  };
+  if (workers === 1) {
+    for (let t = take(); t; t = take()) finish(t, playBatch(t.s.config, t.batch * BATCH, BATCH));
+  } else {
+    const pool = Array.from({ length: workers }, () => new Worker(WORKER));
+    try {
+      await Promise.all(
+        pool.map(
+          (w) =>
+            new Promise((ok, fail) => {
+              let job = null;
+              const feed = () => {
+                job = take();
+                if (!job) return ok();
+                w.postMessage({ id: job.batch, config: job.s.config, start: job.batch * BATCH, count: BATCH });
+              };
+              w.on('message', (res) => {
+                finish(job, res);
+                feed();
+              });
+              w.on('error', fail);
+              feed();
+            }),
+        ),
+      );
+    } finally {
+      await Promise.all(pool.map((w) => w.terminate()));
+    }
+  }
+  return st;
 }
 
-const agentStat = Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, won: 0, turns: 0 }]));
-const notPlayed = Object.fromEntries(AGENTS.map((a) => [a.id, { n: 0, won: 0 }]));
-const cityStat = Object.fromEntries(CITIES.map((c) => [c.id, { n: 0, decided: 0, agrees: 0 }]));
-const out = { rounds: 0, folds: 0, draws: 0, seat0: 0, decided: 0, points: 0, esc: 0, escWon: 0, stakes: {}, bluffs: 0 };
+// ---- report ----
+const f1 = (v) => (v === null ? 'n/a' : v.toFixed(1));
+function compareLines(rows) {
+  return rows.map((r) => `  ${r.sig ? '*' : ' '} ${r.key.padEnd(14)} ${f1(r.base).padStart(6)} -> ${f1(r.other).padStart(6)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(1)} ±${r.margin.toFixed(1)})`);
+}
+function textReport(o, header, runs, base, probe, against) {
+  const L = [header, ''];
+  if (o.ladder) {
+    L.push('Ladder (A is the first rival)');
+    for (const [name, r] of Object.entries(runs)) {
+      const w = r.summary.aMatchWins;
+      L.push(`  ${name.padEnd(18)} A wins ${f1(w.pct)}% ±${f1(w.margin)}   ${r.summary.roundsPerMatch.mean?.toFixed(2)} rounds/match   (${r.rounds} rounds)`);
+    }
+    return L.join('\n');
+  }
+  L.push(formatSummary(base.summary, 'Base'));
+  for (const [name, r] of Object.entries(runs)) {
+    if (name === 'base') continue;
+    L.push('', `Variant ${name}: ${JSON.stringify({ ...r.config.set, ...(r.config.pin.length ? { pin: r.config.pin } : {}) })}`, ...compareLines(compare(base.summary, r.summary)));
+  }
+  if (probe === 'agents') {
+    L.push('', 'Agent probe: win% when played (base -> power + 1)');
+    for (const a of AGENTS) {
+      const v = runs[`${a.id}+1`];
+      const b = base.summary.agents[a.id].winPlayed, x = v.summary.agents[a.id].winPlayed;
+      const m = Math.sqrt(base.summary.agents[a.id].winPlayedMargin ** 2 + v.summary.agents[a.id].winPlayedMargin ** 2);
+      L.push(`  ${a.name.padEnd(14)} ${f1(b).padStart(6)} -> ${f1(x).padStart(6)}  (${x - b >= 0 ? '+' : ''}${(x - b).toFixed(1)} ±${m.toFixed(1)})${Math.abs(x - b) > m ? ' *' : ''}`);
+    }
+  }
+  if (probe === 'cities') {
+    L.push('', 'City probe: pinned city, share of rounds it was decided, and winner took round');
+    for (const c of CITIES) {
+      const s = runs[`pin-${c.id}`].summary.cities[c.id];
+      const d = s.n ? (100 * s.decided) / s.n : null;
+      const g = s.decided ? (100 * s.agrees) / s.decided : null;
+      L.push(`  ${c.name.padEnd(14)} decided ${f1(d)}% ±${f1(margin(s.decided, s.n))}   agrees ${f1(g)}% ±${f1(margin(s.agrees, s.decided))}`);
+    }
+  }
+  if (against) L.push('', 'Against saved base (* = significant)', ...compareLines(against));
+  return L.join('\n');
+}
+
+// ---- main ----
+let o;
+try {
+  o = parseArgs(process.argv.slice(2));
+} catch (e) {
+  console.error(`sim: ${e.message}`);
+  process.exit(1);
+}
+const name = o.run ?? 'sim';
+mkdirSync(DIR, { recursive: true });
+const log = `${DIR}${name}.jsonl`;
 const t0 = Date.now();
-const { wins, roundsPerMatch } = runMatches(opt('a', 'heron'), opt('b', 'heron'), ROUNDS, rng, (note) => {
-  const res = note.result;
-  out.rounds++;
-  out.points += res.points;
-  out.stakes[res.points] = (out.stakes[res.points] || 0) + 1;
-  for (const e of note.escalations) {
-    out.esc++;
-    if (res.winner === e.seat) out.escWon++;
-    if (e.value < 0) out.bluffs++;
-  }
-  if (res.folded !== null) {
-    out.folds++;
-    return;
-  }
-  if (res.winner === null) out.draws++;
-  else {
-    out.decided++;
-    if (res.winner === 0) out.seat0++;
-  }
-  for (const seat of [0, 1]) {
-    const won = res.winner === seat ? 1 : 0;
-    const kinds = new Set(note.played[seat].map((p) => p.kind));
-    for (const p of note.played[seat]) {
-      agentStat[p.kind].played++;
-      agentStat[p.kind].won += won;
-      agentStat[p.kind].turns += p.turn;
-    }
-    for (const a of AGENTS) if (!kinds.has(a.id)) {
-      notPlayed[a.id].n++;
-      notPlayed[a.id].won += won;
-    }
-  }
-  note.cities.forEach((id, ci) => {
-    cityStat[id].n++;
-    const w = res.cityWinners[ci];
-    if (w !== null) cityStat[id].decided++;
-    if (w !== null && w === res.winner) cityStat[id].agrees++;
-  });
-});
+const configs = buildConfigs(o);
+const done = await runAll(configs, o, log);
+const seconds = (Date.now() - t0) / 1000;
 
-console.log(`${out.rounds} rounds in ${((Date.now() - t0) / 1000).toFixed(1)}s, ${roundsPerMatch.length} matches finished, avg ${(roundsPerMatch.reduce((a, b) => a + b, 0) / Math.max(1, roundsPerMatch.length)).toFixed(1)} rounds/match, match wins ${wins.join(' : ')}`);
-console.log(`folds ${pct(out.folds / out.rounds)}  draws ${pct(out.draws / out.rounds)}  seat 0 wins ${pct(out.seat0 / Math.max(1, out.decided))} of decided  avg points/round ${(out.points / out.rounds).toFixed(2)}`);
-console.log(`escalations ${out.esc} (${(out.esc / out.rounds).toFixed(2)}/round), escalator won ${pct(out.escWon / Math.max(1, out.esc))}, bluffs ${out.bluffs}`);
-console.log(`points per round: ${Object.entries(out.stakes).map(([k, v]) => `${k}:${v}`).join('  ')}`);
-console.log('\nAgent         played  win% when played  win% when not  avg turn');
-for (const a of AGENTS) {
-  const s = agentStat[a.id];
-  const np = notPlayed[a.id];
-  console.log(`${a.name.padEnd(14)}${String(s.played).padStart(6)}   ${pct(s.won / Math.max(1, s.played)).padStart(14)}   ${pct(np.won / Math.max(1, np.n)).padStart(12)}   ${(s.turns / Math.max(1, s.played)).toFixed(1).padStart(7)}`);
+const runs = {};
+for (const s of done) runs[s.config.name] = { config: s.config, rounds: s.rounds, matches: s.merged.matches, summary: summarize(s.merged), stats: s.merged };
+const base = runs.base;
+let against;
+if (o.against) {
+  const saved = JSON.parse(readFileSync(resolve(o.against), 'utf8'));
+  if (!saved.runs?.base) throw new Error(`${o.against} has no base run`);
+  against = compare(saved.runs.base.summary, (base ?? Object.values(runs)[0]).summary);
 }
-console.log('\nCity          rounds  decided  winner took round');
-for (const c of CITIES) {
-  const s = cityStat[c.id];
-  console.log(`${c.name.padEnd(14)}${String(s.n).padStart(6)}   ${pct(s.decided / Math.max(1, s.n)).padStart(6)}   ${pct(s.agrees / Math.max(1, s.decided)).padStart(8)}`);
+const out = { version: SIM_VERSION, seed: o.seed ?? 'dd', seconds, resumedBatches: done.reduce((n, s) => n + s.fromLog, 0), runs, ...(against ? { against } : {}) };
+writeFileSync(o.out ? resolve(o.out) : `${DIR}${name}.json`, JSON.stringify(out));
+if (o.json) console.log(JSON.stringify(out));
+else {
+  const total = Object.values(runs).reduce((n, r) => n + r.rounds, 0);
+  const header = `${total} rounds across ${configs.length} configuration${configs.length > 1 ? 's' : ''} in ${seconds.toFixed(1)}s (${(total / Math.max(seconds, 0.001)).toFixed(0)} rounds/s), ${o.workers ?? 4} workers, seed ${out.seed}${out.resumedBatches ? `, ${out.resumedBatches} batches resumed` : ''}`;
+  console.log(textReport(o, header, runs, base, o.probe, against));
 }
