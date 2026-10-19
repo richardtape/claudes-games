@@ -64,3 +64,53 @@ test('stake calls: confident bots escalate, hopeless ones fold, escalations get 
   assert.equal(stakeCall(facing, 0.2, steady, rng), 'accept');
   assert.equal(stakeCall(facing, -0.9, steady, rng), 'fold');
 });
+
+/** Random legal play for a few turns at n seats. */
+function midRoundN(n, seed, turns) {
+  const s = E.newMatch({ seed, seats: n });
+  const rng = createRng(seed);
+  for (let t = 0; t < turns && s.phase === 'plan'; t++) {
+    for (let seat = 0; seat < n; seat++) if (!s.round.plans[seat]) E.lock(s, seat, rng.pick(E.legalDrops(s, seat)));
+    E.resolveTurn(s);
+  }
+  return s;
+}
+
+test('determinize at 3 and 4 seats keeps what the seat sees and invents only the rest', () => {
+  const rng = createRng(6);
+  for (const n of [3, 4])
+    for (let seed = 1; seed <= 40; seed++) {
+      const s = midRoundN(n, seed, seed % 6);
+      if (s.phase !== 'plan') continue;
+      for (let seat = 0; seat < n; seat++) {
+        const R = determinize(E.viewFor(s, seat), rng).round;
+        const all = [...R.hands.flat(), ...R.decks.flat(), ...R.gone.flat(), ...R.cities.flatMap((c) => c.sides.flat())];
+        assert.equal(all.length, n * DECK.length, `${n} seats, seed ${seed}`);
+        assert.deepEqual(R.hands[seat], s.round.hands[seat]);
+        assert.deepEqual(R.hands.map((h) => h.length), s.round.hands.map((h) => h.length));
+        R.cities.forEach((c, ci) => assert.deepEqual(c.sides, s.round.cities[ci].sides));
+        assert.equal(R.plans.length, n);
+        for (let origin = 0; origin < n; origin++) {
+          const kinds = Object.values(R.cards).filter((c) => c.origin === origin).map((c) => c.id0).sort();
+          assert.deepEqual(kinds, DECK.slice().sort(), `origin ${origin}`);
+        }
+      }
+    }
+});
+
+test('think at 3 and 4 seats returns a legal drop and a value between −1 and 1', () => {
+  for (const n of [3, 4]) {
+    const s = midRoundN(n, 12, 2);
+    const view = E.viewFor(s, n - 1);
+    const { drop, value } = think(view, { samples: 4, rng: createRng(1) });
+    assert.ok(view.round.legal.some((d) => d.uid === drop.uid && d.city === drop.city));
+    assert.ok(value >= -1 && value <= 1);
+  }
+});
+
+test('stake calls stay two-player until Phase 2b-i', () => {
+  const s = midRoundN(3, 4, 4);
+  const steady = { ...RIVALS[2], noise: 0 };
+  assert.equal(stakeCall(E.viewFor(s, 0), 0.95, steady, createRng(2)), null);
+  assert.equal(stakeCall({ ...E.viewFor(s, 0), round: { ...E.viewFor(s, 0).round, turn: 5 } }, -0.99, steady, createRng(2)), null);
+});

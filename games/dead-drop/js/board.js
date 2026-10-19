@@ -1,6 +1,7 @@
 // The table on screen: cities, agents (chips on the board, cards in hand) and the reveal
 // animation that plays a turn's events over the board before it re-renders from the new view.
 import { AGENT, CITY } from './data.js';
+import { rivalsOf, seatCount } from './engine.js';
 import { agentSVG, citySVG } from './art.js';
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -58,7 +59,7 @@ function totalHTML(city, seat, mine) {
 export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [] } = {}) {
   const city = view.round.cities[ci];
   const def = CITY[city.id];
-  const them = 1 - me;
+  const them = rivalsOf(seatCount(view), me)[0]; // two-player: Phase 3 makes this a lane per rival
   const target = choosing && legalCities.includes(ci);
   const closedNow = !city.open && view.phase === 'plan';
   const leader = city.leader;
@@ -240,7 +241,7 @@ export async function playEvents(events, ctx) {
       case 'havana': {
         say('Havana: everyone there switches sides!');
         sound('swap');
-        const top = rowEl(e.city, 1 - ctx.me);
+        const top = rowEl(e.city, rivalsOf(ctx.names.length, ctx.me)[0]); // two-player: Phase 3 makes this a lane per rival
         const bottom = rowEl(e.city, ctx.me);
         if (top && bottom) {
           const [a, b] = [top.getBoundingClientRect(), bottom.getBoundingClientRect()];

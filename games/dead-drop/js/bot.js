@@ -17,10 +17,12 @@ function shuffleInPlace(arr, rng) {
 /** A full engine state consistent with `view`, with every unseen card filled in at random. */
 export function determinize(view, rng) {
   const seat = view.seat;
-  const rival = 1 - seat;
+  const n = E.seatCount(view);
+  const rivals = E.rivalsOf(n, seat);
   const V = view.round;
   const cards = {};
-  const pool = { [seat]: DECK.slice(), [rival]: DECK.slice() };
+  const pool = {};
+  for (let s = 0; s < n; s++) pool[s] = DECK.slice();
   const forget = (origin, id0) => {
     const i = pool[origin].indexOf(id0);
     if (i >= 0) pool[origin].splice(i, 1);
@@ -36,20 +38,25 @@ export function determinize(view, rng) {
   // My own deck: known contents, unknown order.
   for (const kind of V.myDeck) forget(seat, kind);
 
-  const secretOnBoard = V.cities.flatMap((c) => c.sides[rival].filter((cv) => !cv.kind));
-  const unknown = shuffleInPlace(pool[rival].slice(), rng);
-  const take = (ok) => {
-    const i = unknown.findIndex(ok);
-    return unknown.splice(i >= 0 ? i : 0, 1)[0];
-  };
-  // Face-down agents outside Vienna can only be a Sleeper or a Tripwire.
-  const order = secretOnBoard.slice().sort((a, b) => Number(V.cities[a.city].id === 'vienna') - Number(V.cities[b.city].id === 'vienna'));
-  for (const cv of order) {
-    const anything = V.cities[cv.city].id === 'vienna';
-    const kind = take((k) => anything || AGENT[k].faceDown);
-    put(cv, kind, kind);
-    const city = V.cities[cv.city];
-    if (city.id === 'istanbul' && cv.turn === city.first) cards[cv.uid].bonus = 3;
+  // Each rival's unseen cards are shuffled on their own, and its face-down board cards come
+  // out of that pool.
+  const unknown = {};
+  for (const rival of rivals) {
+    const secretOnBoard = V.cities.flatMap((c) => c.sides[rival].filter((cv) => !cv.kind));
+    const pile = (unknown[rival] = shuffleInPlace(pool[rival].slice(), rng));
+    const take = (ok) => {
+      const i = pile.findIndex(ok);
+      return pile.splice(i >= 0 ? i : 0, 1)[0];
+    };
+    // Face-down agents outside Vienna can only be a Sleeper or a Tripwire.
+    const order = secretOnBoard.slice().sort((a, b) => Number(V.cities[a.city].id === 'vienna') - Number(V.cities[b.city].id === 'vienna'));
+    for (const cv of order) {
+      const anything = V.cities[cv.city].id === 'vienna';
+      const kind = take((k) => anything || AGENT[k].faceDown);
+      put(cv, kind, kind);
+      const city = V.cities[cv.city];
+      if (city.id === 'istanbul' && cv.turn === city.first) cards[cv.uid].bonus = 3;
+    }
   }
   for (const cv of known) if (cv.kind) put(cv);
 
@@ -59,17 +66,15 @@ export function determinize(view, rng) {
       cards[uid] = { uid, kind, id0: kind, owner, origin: owner, city: null, turn: 0, faceDown: false, hidden: false, bonus: 0 };
       return uid;
     });
-  const rivalHand = fresh('?h', unknown.splice(0, V.handCounts[rival]), rival);
-  const rivalDeck = fresh('?d', unknown.splice(0, V.deckCounts[rival]), rival);
-  const myDeck = fresh('?m', shuffleInPlace(V.myDeck.slice(), rng), seat);
-
   const hands = [];
-  hands[seat] = V.hand.map((cv) => cv.uid);
-  hands[rival] = rivalHand;
   const decks = [];
-  decks[seat] = myDeck;
-  decks[rival] = rivalDeck;
-  const plans = [null, null];
+  for (const rival of rivals) {
+    hands[rival] = fresh(`?h${rival}.`, unknown[rival].splice(0, V.handCounts[rival]), rival);
+    decks[rival] = fresh(`?d${rival}.`, unknown[rival].splice(0, V.deckCounts[rival]), rival);
+  }
+  decks[seat] = fresh('?m', shuffleInPlace(V.myDeck.slice(), rng), seat);
+  hands[seat] = V.hand.map((cv) => cv.uid);
+  const plans = Array.from({ length: n }, () => null);
   if (V.plan) plans[seat] = V.plan;
   return {
     v: 1,
@@ -104,6 +109,7 @@ export function determinize(view, rng) {
 export function quickDrop(state, seat, rng) {
   const legal = E.legalDrops(state, seat);
   if (!legal.length) return { pass: true };
+  const rivals = E.rivalSeats(E.seatCount(state), seat);
   if (rng.next() < 0.25) return legal[Math.floor(rng.next() * legal.length)];
   const R = state.round;
   let best = null;
@@ -112,12 +118,15 @@ export function quickDrop(state, seat, rng) {
     const kind = R.cards[d.uid].kind;
     const city = R.cities[d.city];
     const pow = AGENT[kind].power;
-    const [mine, theirs] = seat === 0 ? E.cityTotals(state, d.city) : E.cityTotals(state, d.city).reverse();
+    const totals = E.cityTotals(state, d.city);
+    const mine = totals[seat];
+    let theirs = -Infinity;
+    for (const r of rivals) if (totals[r] > theirs) theirs = totals[r];
     let v = city.id === 'lisbon' ? 3 - pow : pow;
     const gap = theirs - mine;
     if (gap > 0 && gap < pow + 2) v += 2; // this drop could swing the city
     if (gap < -7) v -= 3; // already safe here
-    if (kind === 'assassin' && city.sides[1 - seat].length) v += 3;
+    if (kind === 'assassin' && rivals.some((r) => city.sides[r].length)) v += 3;
     if (kind === 'veteran' && !city.sides[seat].length) v += 3;
     v += rng.next() * 3;
     if (v > bestV) {
@@ -128,11 +137,12 @@ export function quickDrop(state, seat, rng) {
   return best;
 }
 
-/** Plays the rest of the round from `state` (mutated) and scores it for `seat`: +1 win, −1 loss. */
+/** Plays the rest of the round from `state` (mutated) and scores it for `seat`: +1 if `seat` won, 0 for a dead heat, −1 if anyone else won. */
 function playout(state, seat, firstDrop, rng) {
+  const n = E.seatCount(state);
   E.lock(state, seat, firstDrop);
   while (state.phase === 'plan') {
-    for (const s of [0, 1]) if (!state.round.plans[s]) E.lock(state, s, quickDrop(state, s, rng));
+    for (let s = 0; s < n; s++) if (!state.round.plans[s]) E.lock(state, s, quickDrop(state, s, rng));
     if (!E.resolveTurn(state)) break;
   }
   const res = state.round.result;
@@ -191,6 +201,7 @@ export function estimateLocked(view, samples = 20, rng = createRng(Date.now())) 
  * fun rivals) play on much more often, so the thresholds lean towards seeing the final flip.
  */
 export function stakeCall(view, value, rival, rng) {
+  if (view.scores.length > 2) return null; // stakes stay two-player until Phase 2b-i
   const V = view.round;
   const seat = view.seat;
   const v = value + (rng.next() - 0.5) * 2 * (rival.noise ?? 0);

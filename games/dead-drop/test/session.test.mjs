@@ -4,6 +4,7 @@ import { createTable, attachBot, hostSession, guestSession, restoreTable } from 
 import { createMemoryPair } from '../../../shared/net.js';
 import { RIVALS } from '../js/data.js';
 import { createRng } from '../../../shared/rng.js';
+import * as E from '../js/engine.js';
 
 const until = async (cond, ms = 4000) => {
   const t0 = Date.now();
@@ -185,4 +186,63 @@ test('a guest that heard bye reports a later real disconnect once the host is we
   await until(() => guestStatus.length === 4);
   assert.deepEqual(guestStatus.map((x) => x[0]), ['joined', 'bye', 'joined', 'left']);
   assert.equal(guestStatus[2][1], 'Agent ?', 'host-supplied names are whitelisted');
+});
+
+test('a three-seat table of computer rivals plays a whole match', async () => {
+  const t = createTable({ seed: 31, seats: 3, target: 4 });
+  assert.deepEqual(t.names, ['Red', 'Teal', 'Cobalt']);
+  assert.deepEqual([t.ready, t.rematch], [[false, false, false], [false, false, false]]);
+  const bots = [0, 1, 2].map((seat) => attachBot(t, seat, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(seat + 1) }));
+  await until(() => t.state.phase === 'match-over', 30000);
+  bots.forEach((b) => b.stop());
+  assert.ok(t.state.scores[t.state.winner] >= 4);
+});
+
+test('a three-seat table keeps three seats across rounds, rematches and a save', () => {
+  const t = createTable({ seed: 32, seats: 3 });
+  t.state.phase = 'round-over';
+  [0, 1, 2].forEach((seat) => t.act(seat, { a: 'next' }));
+  assert.deepEqual(t.ready, [false, false, false]);
+  t.state.phase = 'match-over';
+  [0, 1, 2].forEach((seat) => t.act(seat, { a: 'rematch' }));
+  assert.equal(E.seatCount(t.state), 3);
+  assert.deepEqual(t.rematch, [false, false, false]);
+  const copy = restoreTable(JSON.parse(JSON.stringify(t.toJSON())));
+  assert.equal(E.seatCount(copy.state), 3);
+  assert.equal(copy.ready.length, 3);
+});
+
+test('a stopped computer rival never finishes the move it was making', async () => {
+  for (const phase of ['plan', 'round-over']) {
+    const t = createTable({ seed: 21 });
+    t.state.phase = phase;
+    const bot = attachBot(t, 1, { ...RIVALS[0], samples: 2 }, { pace: 0.02, rng: createRng(4) });
+    bot.stop(); // the bot is now inside its first wait
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(t.seq, 0, `${phase}: nothing happened after stop`);
+    assert.equal(t.state.round.plans[1], null);
+    assert.equal(t.ready[1], false);
+  }
+});
+
+test('names must match the seat count, and online play stays two seats', () => {
+  assert.throws(() => createTable({ seats: 3, names: ['A', 'B'] }), /one entry per seat/);
+  const room = { peers: new Set(), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send() {}, leave() {} };
+  assert.throws(() => hostSession({ room, table: createTable({ seats: 3 }) }), /two players until Phase 3/);
+});
+
+test('an action from a seat outside the table changes nothing', () => {
+  const t = createTable({ seed: 5, seats: 2 });
+  for (const phase of ['round-over', 'match-over']) {
+    t.state.phase = phase;
+    const a = phase === 'round-over' ? 'next' : 'rematch';
+    for (const seat of [7, -1, '1', 2, null, undefined, 0.5]) {
+      const seq = t.seq;
+      assert.equal(t.act(seat, { a }), false, `${a} from ${String(seat)}`);
+      assert.equal(t.ready.length, 2);
+      assert.equal(t.rematch.length, 2);
+      assert.deepEqual([t.ready, t.rematch], [[false, false], [false, false]]);
+      assert.equal(t.seq, seq);
+    }
+  }
 });

@@ -4,10 +4,11 @@
 // and turns player actions into engine calls. attachBot() lets a computer rival sit at a
 // seat. hostSession()/guestSession() carry the same actions and views over a shared/net.js
 // room: the guest only ever receives viewFor(state, 1), so it can't see the host's cards.
+// Tables seat 2-4 players; online play (hostSession) stays two seats until Phase 3.
 import * as E from './engine.js';
 import { think, estimateLocked, stakeCall } from './bot.js';
 import { createRng } from '../../../shared/rng.js';
-import { CODENAMES } from './data.js';
+import { CODENAMES, SEAT_NAMES } from './data.js';
 
 export const PROTOCOL = 1;
 
@@ -26,13 +27,15 @@ const settleWithin = (fn, ms = 400) =>
     }
   });
 
-export function createTable({ seed = Date.now(), target, cities, names = ['Red', 'Teal'] } = {}) {
+export function createTable({ seed = Date.now(), target, cities, seats = 2, names = SEAT_NAMES.slice(0, seats) } = {}) {
+  if (names.length !== seats) throw new Error('names must have one entry per seat');
+  const none = () => Array(seats).fill(false);
   const listeners = new Set();
   const table = {
-    state: E.newMatch({ seed, target, cities }),
+    state: E.newMatch({ seed, target, cities, seats }),
     names: names.slice(),
-    ready: [false, false],
-    rematch: [false, false],
+    ready: none(),
+    rematch: none(),
     matchId: newMatchId(),
     seq: 0,
     turnSeq: 0,
@@ -51,6 +54,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
     /** Apply one player action; returns whether it did anything. */
     act(seat, a) {
       const S = table.state;
+      if (!Number.isInteger(seat) || seat < 0 || seat >= E.seatCount(S)) return false;
       let ok = false;
       let resolved = false;
       switch (a?.a) {
@@ -74,7 +78,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
             table.ready[seat] = true;
             ok = true;
             if (table.ready.every(Boolean)) {
-              table.ready = [false, false];
+              table.ready = none();
               E.nextRound(S);
             }
           }
@@ -84,9 +88,9 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
             table.rematch[seat] = true;
             ok = true;
             if (table.rematch.every(Boolean)) {
-              table.rematch = [false, false];
+              table.rematch = none();
               table.matchId = newMatchId();
-              table.state = E.newMatch({ seed: Date.now() + Math.floor(Math.random() * 1e6), target: S.target });
+              table.state = E.newMatch({ seed: Date.now() + Math.floor(Math.random() * 1e6), target: S.target, seats });
             }
           }
           break;
@@ -104,7 +108,7 @@ export function createTable({ seed = Date.now(), target, cities, names = ['Red',
 
 /** Rebuild a table saved with toJSON() (the host's browser resumes after a reload). */
 export function restoreTable(saved) {
-  const table = createTable({ seed: 1 });
+  const table = createTable({ seed: 1, seats: saved.state.scores.length });
   Object.assign(table, { state: saved.state, names: saved.names, ready: saved.ready, rematch: saved.rematch, seq: saved.seq, turnSeq: saved.turnSeq });
   if (typeof saved.matchId === 'string' && /^[a-z0-9]{8}$/.test(saved.matchId)) table.matchId = saved.matchId;
   return table;
@@ -121,6 +125,12 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
   let stopped = false;
   const wait = (ms) => (pace ? sleep(ms * pace * (0.75 + rng.next() * 0.5)) : sleep(0));
 
+  /** Wait, then report whether the bot was stopped meanwhile (a stopped bot never finishes its move). */
+  const nap = async (ms) => {
+    await wait(ms);
+    return stopped;
+  };
+
   async function tick() {
     if (busy || stopped) return;
     busy = true;
@@ -130,31 +140,31 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
       if (stopped) return;
       const S = table.state;
       if (S.phase === 'match-over') {
-        if (table.rematch[1 - seat] && !table.rematch[seat]) {
-          await wait(600);
+        if (table.rematch.some((r, s) => r && s !== seat) && !table.rematch[seat]) {
+          if (await nap(600)) return;
           table.act(seat, { a: 'rematch' });
         }
       } else if (S.phase === 'round-over') {
         if (!table.ready[seat]) {
-          await wait(300);
+          if (await nap(300)) return;
           table.act(seat, { a: 'next' });
         }
       } else if (S.phase === 'plan') {
         const R = S.round;
         if (R.pending && R.pending.by !== seat) {
-          await wait(900);
+          if (await nap(900)) return;
           const view = table.view(seat);
           const value = view.round.plan ? estimateLocked(view, Math.max(6, rival.samples >> 1), rng) : think(view, { samples: rival.samples, noise: rival.noise, rng }).value;
           table.act(seat, { a: 'respond', accept: stakeCall(table.view(seat), value, rival, rng) === 'accept' });
         } else if (!R.plans[seat]) {
           const turn = R.turn;
           const roundNo = S.roundNo;
-          await wait(500);
+          if (await nap(500)) return;
           if (table.state.phase !== 'plan' || table.state.round.turn !== turn || table.state.roundNo !== roundNo) return;
           const view = table.view(seat);
           const thought = think(view, { samples: rival.samples, noise: rival.noise, rng });
           const call = stakeCall(view, thought.value, rival, rng);
-          await wait(700);
+          if (await nap(700)) return;
           if (table.state.phase !== 'plan' || table.state.round.turn !== turn) return;
           if (call === 'fold') {
             table.act(seat, { a: 'fold' });
@@ -162,7 +172,7 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
           }
           if (call === 'escalate') {
             table.act(seat, { a: 'escalate' });
-            await wait(500);
+            if (await nap(500)) return;
           }
           table.act(seat, { a: 'lock', ...thought.drop });
         }
@@ -189,6 +199,7 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
  * first (and to them again if they reconnect with the same token).
  */
 export function hostSession({ room, table, onStatus = () => {} }) {
+  if (E.seatCount(table.state) > 2) throw new Error('online play seats two players until Phase 3');
   let guest = null;
   let said = false; // the guest said bye: its later peer-leave is not a lost connection
   const sendView = () => guest && room.peers.has(guest.peerId) && room.send('view', table.view(1), guest.peerId);

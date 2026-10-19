@@ -1,10 +1,11 @@
 // Mergeable tallies from match records, with 95% margins. Stats stay plain JSON.
 import { AGENTS, CITIES } from '../../js/data.js';
 
-export function emptyStats() {
+export function emptyStats(seats = 2) {
+  const zeros = () => new Array(seats).fill(0);
   return {
-    matches: 0, capped: 0, rounds: 0, roundsHist: {}, matchWins: [0, 0], seatMatchWins: [0, 0],
-    halfLeader: { n: 0, won: 0 }, folds: 0, deadHeats: 0, tiebreaks: 0, decided: 0, seatRoundWins: [0, 0],
+    matches: 0, capped: 0, rounds: 0, roundsHist: {}, matchWins: zeros(), seatMatchWins: zeros(),
+    halfLeader: { n: 0, won: 0 }, folds: 0, deadHeats: 0, tiebreaks: 0, decided: 0, seatRoundWins: zeros(),
     pointsHist: {}, escalated: 0, escalatorWon: 0, answeredFold: 0, bluffs: 0, escTurnHist: {},
     agents: Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, wonPlayed: 0, notPlayed: 0, wonNotPlayed: 0, turnSum: 0 }])),
     cities: Object.fromEntries(CITIES.map((c) => [c.id, { n: 0, decided: 0, agrees: 0 }])),
@@ -36,7 +37,7 @@ export function addMatch(stats, rec) {
       stats.decided++;
       stats.seatRoundWins[res.winner]++;
     }
-    for (const seat of [0, 1]) {
+    for (let seat = 0; seat < r.played.length; seat++) {
       const won = res.winner === seat ? 1 : 0;
       const kinds = new Set(r.played[seat].map((p) => p.kind));
       for (const p of r.played[seat]) {
@@ -65,12 +66,14 @@ export function addMatch(stats, rec) {
   }
   bump(stats.roundsHist, rec.rounds.length);
   stats.seatMatchWins[rec.winner]++;
-  stats.matchWins[rec.swapped ? 1 - rec.winner : rec.winner]++;
+  const n = stats.matchWins.length;
+  stats.matchWins[(rec.winner + rec.rotation) % n]++;
   if (rec.rounds.length >= 2) {
-    const [x, y] = rec.rounds[Math.floor(rec.rounds.length / 2) - 1].scores;
-    if (x !== y) {
+    const half = rec.rounds[Math.floor(rec.rounds.length / 2) - 1].scores;
+    const top = Math.max(...half);
+    if (half.filter((x) => x === top).length === 1) {
       stats.halfLeader.n++;
-      if (rec.winner === (x > y ? 0 : 1)) stats.halfLeader.won++;
+      if (rec.winner === half.indexOf(top)) stats.halfLeader.won++;
     }
   }
   return stats;
@@ -142,6 +145,10 @@ export function summarize(s) {
     seat0Matches: rate(s.seatMatchWins[0], finished),
     halfLeaderWins: rate(s.halfLeader.won, s.halfLeader.n),
     bluffs: s.bluffs,
+    seats: s.matchWins.length,
+    seatRounds: s.seatRoundWins.map((k) => rate(k, s.decided)),
+    seatMatches: s.seatMatchWins.map((k) => rate(k, finished)),
+    botMatches: s.matchWins.map((k) => rate(k, finished)),
     pointsPerRound: histMean(s.pointsHist),
     roundsPerMatch: histMean(s.roundsHist),
     agents,
@@ -176,6 +183,11 @@ export function formatSummary(sum, title = 'Dead Drop sim') {
   L.push(`folds ${pc(sum.folds)}  dead heats ${pc(sum.deadHeats)}  tie-breaks ${pc(sum.tiebreaks)}  seat 0 wins ${pc(sum.seat0Rounds)} of decided rounds  half-time leader wins ${pc(sum.halfLeaderWins)}`);
   L.push(`points/round ${num(sum.pointsPerRound.mean, 2)} ±${num(sum.pointsPerRound.margin, 2)}  stake 4 in ${pc(sum.maxStake)} of rounds`);
   L.push(`escalations ${pc(sum.escalation)} of rounds, escalator won ${pc(sum.escalatorWins)}, answered with a fold ${pc(sum.foldInAnswer)}, bluffs ${sum.bluffs}`);
+  if (sum.seats > 2) {
+    L.push('', 'Seats           decided rounds won    matches won');
+    sum.seatRounds.forEach((r, i) => L.push(`seat ${i}${' '.repeat(10)}${pc(r).padStart(18)}  ${pc(sum.seatMatches[i]).padStart(16)}`));
+    sum.botMatches.forEach((r, i) => L.push(`bot ${String.fromCharCode(65 + i)} wins matches ${pc(r).padStart(16)}`));
+  }
   L.push('', 'Agent           played  win% when played  win% when not  avg turn');
   for (const a of AGENTS) {
     const s = sum.agents[a.id];

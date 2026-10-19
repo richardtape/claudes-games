@@ -4,7 +4,8 @@ import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, s
 import { createSfx } from '../../../shared/sfx.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
-import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, TURNS } from './data.js';
+import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, SEAT_NAMES, TURNS } from './data.js';
+import { rivalsOf, seatCount } from './engine.js';
 import { attachBot, createTable, guestSession, hostSession, restoreTable } from './session.js';
 import { cardHTML, chipHTML, cityHTML, esc, FAST, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
 import { agentSVG, citySVG, spySVG } from './art.js';
@@ -50,7 +51,7 @@ const ui = {
   skip: false,
   alwaysSkip: false,
   peek: false, // See the board: the round result shrinks to a strip so the final board shows
-  modal: null, // help | fold | escalated | quit
+  modal: null, // help | fold | quit (the escalation prompt is .modal.hot, drawn from the view; it is not ui.modal)
   helpTab: 'rules', // rules | agents | cities | keys: the help sheet's open tab, kept between openings
   cover: null, // pass and play: { seat, why }
   prevSpectator: null,
@@ -123,6 +124,24 @@ const label = (seat, v = view()) => {
   if (!v) return '';
   if (ui.mode !== 'pass' && seat === me()) return 'You';
   return v.names[seat];
+};
+/** Every seat at the table, for a state or a view. */
+const allSeats = (x) => Array.from({ length: seatCount(x) }, (_, s) => s);
+/** The other seats, in table order after `seat`. */
+const rivals = (v = view(), seat = me()) => rivalsOf(seatCount(v), seat);
+/**
+ * The other side of a two-player screen. Phase 3 replaces each use with a lane, or a list, per
+ * rival; searching for `foe(` finds every two-player assumption in the UI.
+ */
+const foe = (v = view(), seat = me()) => rivals(v, seat)[0];
+/** One colour name per seat: pass and play is by seat; otherwise you are red and rivals take teal, cobalt, plum in order. */
+const seatColours = (v = view()) => {
+  const all = ['red', 'teal', 'cobalt', 'plum'];
+  if (ui.mode === 'pass') return all.slice(0, seatCount(v));
+  const out = [];
+  out[me()] = 'red';
+  rivals(v).forEach((s, i) => (out[s] = all[i + 1]));
+  return out;
 };
 const labelLower = (seat, v) => (ui.mode !== 'pass' && seat === me() ? 'you' : label(seat, v));
 const cityName = (v, ci) => CITY[v.round.cities[ci].id].name;
@@ -223,7 +242,7 @@ function startPass(resume = null) {
   ui.mode = 'pass';
   ui.rival = null;
   if (resume) restoreSaved(resume);
-  else table = createTable({ names: ['Red', 'Teal'] });
+  else table = createTable({ names: SEAT_NAMES.slice(0, 2) });
   watch(table);
   ui.seat = null;
   beginMatch();
@@ -385,11 +404,11 @@ function act(a) {
   if (ui.mode === 'guest') return ui.net?.session?.act(a);
   if (!table) return false;
   if (ui.mode === 'pass') {
-    if (a.a === 'next' || a.a === 'rematch') return table.act(0, a) | table.act(1, a);
+    if (a.a === 'next' || a.a === 'rematch') return allSeats(table.state).reduce((ok, s) => table.act(s, a) | ok, 0);
     ui.prevSpectator = table.view(-1);
     return table.act(ui.seat, a);
   }
-  if (ui.mode === 'solo' && a.a === 'rematch') return table.act(0, a) | table.act(1, a);
+  if (ui.mode === 'solo' && a.a === 'rematch') return allSeats(table.state).reduce((ok, s) => table.act(s, a) | ok, 0);
   return table.act(0, a);
 }
 
@@ -536,10 +555,12 @@ function passCover(v) {
   let why = 'turn';
   if (full.pending && !full.locked[full.pending.by]) actor = full.pending.by;
   else if (full.pending) {
-    actor = 1 - full.pending.by;
+    actor = foe(table.view(-1), full.pending.by); // stakes are two-player
     why = 'escalated';
-  } else if (!full.locked[0]) actor = 0;
-  else if (!full.locked[1]) actor = 1;
+  } else {
+    const first = full.locked.indexOf(false);
+    actor = first < 0 ? null : first;
+  }
   if (actor !== null && actor !== ui.seat) {
     ui.seat = null;
     ui.cover = { seat: actor, why };
@@ -907,8 +928,8 @@ function coverHTML() {
   const c = ui.cover;
   const v = table.view(-1);
   const name = v.names[c.seat];
-  const other = v.names[1 - c.seat];
-  const why = c.why === 'escalated' ? `${other} escalated. You decide: fold, or play on for double.` : `Turn ${v.round.turn} of ${TURNS}. ${other}, no peeking.`;
+  const others = rivals(v, c.seat).map((s) => v.names[s]).join(', ');
+  const why = c.why === 'escalated' ? `${v.names[v.round.pending?.by ?? foe(v, c.seat)]} escalated. You decide: fold, or play on for double.` : `Turn ${v.round.turn} of ${TURNS}. ${others}, no peeking.`;
   return `<div class="cover own-${c.seat}">
     <p class="pass">Pass the device to</p>
     <h2>${jitter(name, c.seat + 2)}</h2>
@@ -919,7 +940,7 @@ function coverHTML() {
 
 function statusText(v) {
   const R = v.round;
-  const rival = 1 - me();
+  const rival = foe(v);
   if (v.phase !== 'plan') return '';
   if (R.pending && R.pending.by === me()) return `Waiting for ${label(rival, v)} to answer your escalation…`;
   if (!R.legal.length) return `Nowhere to drop this turn: you pass.${R.rivalLocked ? '' : ` ${label(rival, v)} is choosing…`}`;
@@ -963,7 +984,7 @@ function inspectText(v) {
 }
 
 function scorebarHTML(v, bottom) {
-  const top = 1 - bottom;
+  const top = foe(v, bottom);
   const R = v.round;
   const stake = R.stake;
   // On the final turn (and after its flip, though not after a fold) a ×2 stamp stands in for the
@@ -1032,22 +1053,22 @@ function resultHTML(v, bottom) {
   else if (res.winner === null) head = 'Dead heat';
   else head = `${winnerName} ${ui.mode !== 'pass' && res.winner === me() ? 'take' : 'takes'} the round`;
   const lines = [];
-  if (res.folded !== null) lines.push(`${label(1 - res.folded, v)} ${ui.mode !== 'pass' && 1 - res.folded === me() ? 'score' : 'scores'} ${res.points} (the stake).`);
+  if (res.folded !== null) lines.push(`${label(res.winner, v)} ${ui.mode !== 'pass' && res.winner === me() ? 'score' : 'scores'} ${res.points} (the stake).`);
   else {
     R.cities.forEach((c, ci) => {
       const w = res.cityWinners[ci];
       const t = res.totals[ci];
-      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} <small>${t[bottom]} to ${t[1 - bottom]}</small></span>`);
+      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} <small>${t[bottom]} to ${t[foe(v, bottom)]}</small></span>`);
     });
     if (res.winner !== null) lines.push(`<span class="pts">+${res.points} to ${esc(label(res.winner, v))} <small>stake ${res.stake}, doubled on the final flip</small></span>`);
     else lines.push('<span class="pts">Nobody scores.</span>');
     if (res.monaco !== null && res.monaco !== undefined) lines.push(`<span class="pts">+1 Monaco bonus to ${esc(label(res.monaco, v))}</span>`);
   }
-  const waiting = ui.mode === 'host' || ui.mode === 'guest' ? v.ready[me()] && !v.ready[1 - me()] : false;
+  const waiting = ui.mode === 'host' || ui.mode === 'guest' ? v.ready[me()] && rivals(v).some((s) => !v.ready[s]) : false;
   const btn = over
     ? `<button class="slip primary" data-action="final">Final report<kbd>Enter</kbd></button>`
     : waiting
-      ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(1 - me(), v))}…</p>`
+      ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(foe(v), v))}…</p>`
       : `<button class="slip primary" data-action="next">Next round<kbd>Enter</kbd></button>`;
   const key = `${v.roundNo}:${v.scores.join(',')}`;
   const enter = ui.resultShown !== key;
@@ -1063,7 +1084,7 @@ function resultHTML(v, bottom) {
   return `<div class="result${enter ? ' enter' : ''}" role="dialog" aria-label="Round result">
     <h2>${jitter(head, v.roundNo + 3)}</h2>
     <div class="lines">${lines.map((l) => `<p>${l}</p>`).join('')}</div>
-    <p class="tally">${esc(label(bottom, v))} ${v.scores[bottom]} · ${v.scores[1 - bottom]} ${esc(label(1 - bottom, v))}</p>
+    <p class="tally">${esc(label(bottom, v))} ${v.scores[bottom]} · ${v.scores[foe(v, bottom)]} ${esc(label(foe(v, bottom), v))}</p>
     <div class="btns">${peekBtn}${btn}</div>
   </div>`;
 }
@@ -1104,10 +1125,10 @@ function renderPlay({ board = view(), hand = board, revealing = false, bottom = 
       return html;
     })
     .join('');
-  const colours = ui.mode === 'pass' ? ['red', 'teal'] : me() === 0 ? ['red', 'teal'] : ['teal', 'red'];
+  const colours = seatColours(v);
   const caption = revealing ? ui.caption : ui.caption || inspectText(v) || hintText(v);
   syncNight();
-  $('#screen').innerHTML = `<div class="play c0-${colours[0]} c1-${colours[1]}${revealing ? ' revealing' : ''}" data-bottom="${b}">
+  $('#screen').innerHTML = `<div class="play ${colours.map((c, s) => `c${s}-${c}`).join(' ')}${revealing ? ' revealing' : ''}" data-bottom="${b}">
     ${peerBannerHTML()}
     ${scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
@@ -1124,7 +1145,7 @@ function overHTML() {
   const bottom = ui.mode === 'pass' ? 0 : me();
   const won = v.winner === bottom;
   const head = ui.mode === 'pass' ? `${v.names[v.winner]} wins` : won ? 'Mission accomplished' : 'Burned';
-  const sub = ui.mode === 'pass' ? 'The other spymaster is reassigned to a lighthouse.' : won ? `You beat ${label(1 - bottom, v)} ${v.scores[bottom]} to ${v.scores[1 - bottom]}.` : `${label(1 - bottom, v)} beat you ${v.scores[1 - bottom]} to ${v.scores[bottom]}.`;
+  const sub = ui.mode === 'pass' ? 'The other spymaster is reassigned to a lighthouse.' : won ? `You beat ${label(foe(v, bottom), v)} ${v.scores[bottom]} to ${v.scores[foe(v, bottom)]}.` : `${label(foe(v, bottom), v)} beat you ${v.scores[foe(v, bottom)]} to ${v.scores[bottom]}.`;
   const rounds = v.history
     .map((h, i) => {
       const who = h.winner === null ? 'nobody' : label(h.winner, v);
@@ -1135,15 +1156,15 @@ function overHTML() {
   const ri = ui.rival ? RIVALS.findIndex((r) => r.id === ui.rival.id) : -1;
   const nextRival = ui.mode === 'solo' && won && ri >= 0 && ri < RIVALS.length - 1 ? RIVALS[ri + 1] : null;
   const online = ui.mode === 'host' || ui.mode === 'guest';
-  const rematchWait = online && v.rematch[me()] && !v.rematch[1 - me()];
-  const rivalWants = online && v.rematch[1 - me()] && !v.rematch[me()];
+  const rematchWait = online && v.rematch[me()] && rivals(v).some((s) => !v.rematch[s]);
+  const rivalWants = online && rivals(v).some((s) => v.rematch[s]) && !v.rematch[me()];
   const rivalLeft = online && ui.net?.peer === 'left';
   return `<div class="over ${won || ui.mode === 'pass' ? 'won' : 'lost'}">
     <div class="dossier">
-      <p class="stamp-line">Dossier · ${esc(v.names[0])} vs ${esc(v.names[1])}</p>
+      <p class="stamp-line">Dossier · ${esc(v.names.join(' vs '))}</p>
       <h2>${jitter(head, 9)}</h2>
       <p class="sub">${esc(sub)}</p>
-      <p class="final"><span>${esc(label(bottom, v))}</span><b>${v.scores[bottom]}</b><i>to</i><b>${v.scores[1 - bottom]}</b><span>${esc(label(1 - bottom, v))}</span></p>
+      <p class="final"><span>${esc(label(bottom, v))}</span><b>${v.scores[bottom]}</b><i>to</i><b>${v.scores[foe(v, bottom)]}</b><span>${esc(label(foe(v, bottom), v))}</span></p>
       <ol class="rounds">${rounds}</ol>
       ${ui.mode === 'solo' && won && ri === RIVALS.length - 1 ? '<p class="sub">You beat Control. There is nobody left to fool.</p>' : ''}
     </div>
@@ -1153,7 +1174,7 @@ function overHTML() {
         rivalLeft
           ? `<p class="wait">${esc(ui.net.leftName || 'Your rival')} left the table.</p>`
           : rematchWait
-            ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(1 - me(), v))} to accept…</p>`
+            ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${esc(label(foe(v), v))} to accept…</p>`
             : `<button class="slip ${nextRival ? '' : 'primary'}" data-action="rematch">${rivalWants ? 'Accept rematch' : 'Rematch'}</button>`
       }
       <button class="slip quiet" data-action="title">Title screen</button>
@@ -1241,7 +1262,7 @@ function modalHTML() {
   const v = view();
   if (ui.modal === 'help') return helpHTML();
   if (!v) return '';
-  const rival = 1 - me();
+  const rival = foe(v);
   if (ui.modal === 'fold') {
     const gets = v.round.stake;
     return `<div class="modal" data-action="close-modal"><div class="sheet small" role="dialog" aria-label="Fold" data-stop>
@@ -1258,10 +1279,11 @@ function modalHTML() {
     </div></div>`;
   }
   const R = v.round;
-  if (v.phase === 'plan' && R.pending && R.pending.by === rival && (ui.mode !== 'pass' || ui.seat === 1 - R.pending.by)) {
+  if (v.phase === 'plan' && R.pending && R.pending.by !== me() && (ui.mode !== 'pass' || ui.seat === foe(v, R.pending.by))) {
+    const by = R.pending.by;
     return `<div class="modal hot"><div class="sheet small" role="dialog" aria-label="Escalation">
-      <h2>${jitter(`${label(rival, v)} escalates`, 6)}</h2>
-      <p>Play on and this round is worth <b>${R.stake * 2}</b>, or <b>${R.stake * 4}</b> if it reaches the final flip. Fold now and ${esc(label(rival, v))} takes <b>${R.stake}</b>.</p>
+      <h2>${jitter(`${label(by, v)} escalates`, 6)}</h2>
+      <p>Play on and this round is worth <b>${R.stake * 2}</b>, or <b>${R.stake * 4}</b> if it reaches the final flip. Fold now and ${esc(label(by, v))} takes <b>${R.stake}</b>.</p>
       <div class="btns"><button class="slip primary" data-action="respond" data-accept="1">Play on<kbd>Enter</kbd></button><button class="slip" data-action="respond" data-accept="0">Fold<kbd>F</kbd></button></div>
     </div></div>`;
   }
@@ -1742,7 +1764,7 @@ document.addEventListener('keydown', (ev) => {
   const v = view();
   if (!v) return;
   const R = v.round;
-  if (v.phase === 'plan' && R.pending && R.pending.by !== me() && (ui.mode !== 'pass' || ui.seat === 1 - R.pending.by)) {
+  if (v.phase === 'plan' && R.pending && R.pending.by !== me() && (ui.mode !== 'pass' || ui.seat === foe(v, R.pending.by))) {
     // A key held down through the escalation flash doesn't answer the prompt when the flash goes
     // (nor press its focused Play on).
     if (ev.repeat) return ev.preventDefault();
@@ -1813,8 +1835,8 @@ function quickTurns(turns, rng = Math.random) {
   bot?.stop();
   unwatch?.();
   for (let t = 0; t < turns && table.state.phase === 'plan'; t++) {
-    if (table.state.round.pending) table.act(1 - table.state.round.pending.by, { a: 'respond', accept: true });
-    for (const seat of [0, 1]) {
+    if (table.state.round.pending) table.act(foe(table.state, table.state.round.pending.by), { a: 'respond', accept: true });
+    for (const seat of allSeats(table.state)) {
       const v = table.view(seat);
       if (!v.round.plan && v.round.legal.length) {
         const d = v.round.legal[Math.floor(rng() * v.round.legal.length)];

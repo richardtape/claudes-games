@@ -576,9 +576,17 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   // Mid-reveal, a click in any modal but help only skips the reveal: the quit modal's Leave
   // must not leave. Then leaving anyway (through the Leave action itself): the title is up at
   // once, the abandoned reveal runs out without a sound, and the title answers the very next
-  // click. Sounds are counted as WebAudio sources created. One synchronous step, so the reveal
-  // is certainly still running.
-  await page.evaluate(() => {
+  // click. Sounds are counted as WebAudio sources created, with the music off (its own button;
+  // back on at the end): the title theme rightly starts the moment the title is up, on a spy
+  // chord of 21 sources, and is not the reveal's. (With the music on, the step passed only while
+  // the pass and play victory cue still held the band, 2.3 s after it, so a slow run failed.)
+  // The reveal's effects and city flourishes play with the music off, so they all still count.
+  // One synchronous step, so the reveal is certainly still running.
+  const musicOff = await page.evaluate(() => {
+    const music = () => document.querySelector('[data-action=music]');
+    window.__musicWasOn = music().getAttribute('aria-pressed') === 'true';
+    if (window.__musicWasOn) music().click();
+    const off = music().getAttribute('aria-pressed') === 'false';
     const proto = (window.AudioContext || window.webkitAudioContext).prototype;
     window.__sounds = 0;
     for (const m of ['createOscillator', 'createBufferSource']) {
@@ -589,7 +597,9 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
       };
     }
     window.__game.startSolo('wren');
+    return off;
   });
+  if (!musicOff) fail('the Music button should switch the music off');
   await until(page, () => window.__game.ui.screen === 'play' && document.querySelector('.hand .card'), null, 'a fresh table to leave');
   await clearCard(page);
   await dropFirst(page);
@@ -618,6 +628,9 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   if (after.board || !after.title) fail(`the abandoned reveal painted over the title: ${JSON.stringify(after)}`);
   await page.click('[data-action=rivals]');
   await until(page, () => document.querySelector('.rivals-screen'), null, 'the title to answer a click after leaving mid-reveal');
+  const wasOn = await page.evaluate(() => window.__musicWasOn);
+  if (wasOn) await page.click('[data-action=music]');
+  await until(page, (on) => document.querySelector('[data-action=music]')?.getAttribute('aria-pressed') === String(on), wasOn, 'the Music button to show what it showed before');
   log(`left mid-reveal cleanly (${left.sounds} sounds before, none after; the Leave click ${b.speed === 1 ? 'fell inside the guard' : 'sped the reveal up'})`);
 
   // The escalation flash takes every tap and key, as a title card does: nothing reaches the prompt

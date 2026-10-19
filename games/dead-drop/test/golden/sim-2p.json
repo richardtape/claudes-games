@@ -1,0 +1,226 @@
+{
+ "matches": 6,
+ "capped": 0,
+ "rounds": 20,
+ "escalation": {
+  "pct": 100,
+  "margin": 0,
+  "n": 20
+ },
+ "maxStake": {
+  "pct": 20,
+  "margin": 17.530772943598354,
+  "n": 20
+ },
+ "escalatorWins": {
+  "pct": 75,
+  "margin": 18.977618396416343,
+  "n": 20
+ },
+ "foldInAnswer": {
+  "pct": 55,
+  "margin": 21.80362355206125,
+  "n": 20
+ },
+ "folds": {
+  "pct": 75,
+  "margin": 18.977618396416343,
+  "n": 20
+ },
+ "deadHeats": {
+  "pct": 5,
+  "margin": 9.551858457912784,
+  "n": 20
+ },
+ "tiebreaks": {
+  "pct": 10,
+  "margin": 13.148079707698765,
+  "n": 20
+ },
+ "seat0Rounds": {
+  "pct": 50,
+  "margin": 49,
+  "n": 4
+ },
+ "aMatchWins": {
+  "pct": 66.66666666666667,
+  "margin": 37.72021758705555,
+  "n": 6
+ },
+ "seat0Matches": {
+  "pct": 50,
+  "margin": 40.00833246545857,
+  "n": 6
+ },
+ "halfLeaderWins": {
+  "pct": 80,
+  "margin": 35.0615458871967,
+  "n": 5
+ },
+ "bluffs": 0,
+ "pointsPerRound": {
+  "mean": 1.75,
+  "margin": 0.53452689361715,
+  "n": 20
+ },
+ "roundsPerMatch": {
+  "mean": 3.3333333333333335,
+  "margin": 0.8846175151714711,
+  "n": 6
+ },
+ "agents": {
+  "heavy": {
+   "played": 7,
+   "winPlayed": 57.142857142857146,
+   "winPlayedMargin": 36.66060555964672,
+   "winNot": 0,
+   "winNotMargin": 0,
+   "avgTurn": 4.857142857142857
+  },
+  "sleeper": {
+   "played": 4,
+   "winPlayed": 25,
+   "winPlayedMargin": 42.43524478543749,
+   "winNot": 50,
+   "winNotMargin": 40.00833246545857,
+   "avgTurn": 3.5
+  },
+  "veteran": {
+   "played": 6,
+   "winPlayed": 50,
+   "winPlayedMargin": 40.00833246545857,
+   "winNot": 40,
+   "winNotMargin": 42.941448508405024,
+   "avgTurn": 3
+  },
+  "double": {
+   "played": 3,
+   "winPlayed": 66.66666666666667,
+   "winPlayedMargin": 53.344443287278104,
+   "winNot": 28.571428571428573,
+   "winNotMargin": 33.46640106136302,
+   "avgTurn": 3
+  },
+  "jammer": {
+   "played": 5,
+   "winPlayed": 20,
+   "winPlayedMargin": 35.06154588719671,
+   "winNot": 60,
+   "winNotMargin": 42.941448508405024,
+   "avgTurn": 3.2
+  },
+  "handler": {
+   "played": 7,
+   "winPlayed": 28.571428571428573,
+   "winPlayedMargin": 33.46640106136302,
+   "winNot": 66.66666666666667,
+   "winNotMargin": 53.344443287278104,
+   "avgTurn": 3.142857142857143
+  },
+  "mole": {
+   "played": 1,
+   "winPlayed": 0,
+   "winPlayedMargin": 0,
+   "winNot": 44.44444444444444,
+   "winNotMargin": 32.46439433999694,
+   "avgTurn": 2
+  },
+  "getaway": {
+   "played": 5,
+   "winPlayed": 60,
+   "winPlayedMargin": 42.941448508405024,
+   "winNot": 20,
+   "winNotMargin": 35.06154588719671,
+   "avgTurn": 2.8
+  },
+  "lookout": {
+   "played": 4,
+   "winPlayed": 50,
+   "winPlayedMargin": 49,
+   "winNot": 33.333333333333336,
+   "winNotMargin": 37.72021758705555,
+   "avgTurn": 4
+  },
+  "assassin": {
+   "played": 6,
+   "winPlayed": 16.666666666666668,
+   "winPlayedMargin": 29.820450353059044,
+   "winNot": 75,
+   "winNotMargin": 42.43524478543749,
+   "avgTurn": 4
+  },
+  "tripwire": {
+   "played": 6,
+   "winPlayed": 50,
+   "winPlayedMargin": 40.00833246545857,
+   "winNot": 25,
+   "winNotMargin": 42.43524478543749,
+   "avgTurn": 4.333333333333333
+  },
+  "impostor": {
+   "played": 6,
+   "winPlayed": 33.333333333333336,
+   "winPlayedMargin": 37.72021758705555,
+   "winNot": 50,
+   "winNotMargin": 49,
+   "avgTurn": 2.5
+  }
+ },
+ "cities": {
+  "lisbon": {
+   "n": 3,
+   "decided": 2,
+   "agrees": 2
+  },
+  "vienna": {
+   "n": 1,
+   "decided": 0,
+   "agrees": 0
+  },
+  "istanbul": {
+   "n": 4,
+   "decided": 3,
+   "agrees": 2
+  },
+  "berlin": {
+   "n": 0,
+   "decided": 0,
+   "agrees": 0
+  },
+  "havana": {
+   "n": 1,
+   "decided": 1,
+   "agrees": 0
+  },
+  "monaco": {
+   "n": 0,
+   "decided": 0,
+   "agrees": 0
+  },
+  "hongkong": {
+   "n": 1,
+   "decided": 1,
+   "agrees": 1
+  },
+  "helsinki": {
+   "n": 0,
+   "decided": 0,
+   "agrees": 0
+  },
+  "moscow": {
+   "n": 1,
+   "decided": 1,
+   "agrees": 0
+  },
+  "venice": {
+   "n": 2,
+   "decided": 2,
+   "agrees": 1
+  },
+  "tangier": {
+   "n": 2,
+   "decided": 2,
+   "agrees": 1
+  }
+ }
+}

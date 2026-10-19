@@ -2,7 +2,7 @@
 import { AGENT, CITY, RIVALS, RULES } from '../../js/data.js';
 import { hashString } from '../../../../shared/rng.js';
 
-export const SIM_VERSION = 1;
+export const SIM_VERSION = 2;
 /** Matches per batch: the unit the worker pool hands out and the cache keys on. */
 export const BATCH = 20;
 export const MAX_ROUNDS = 40;
@@ -22,16 +22,28 @@ function checkPin(pin) {
   return pin;
 }
 
-export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', samples = null, target = 10, pin = [], set = {} } = {}) {
+export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = 10, pin = [], set = {} } = {}) {
+  if (!Number.isInteger(Number(seats)) || Number(seats) < 2 || Number(seats) > 4) throw new Error('seats must be 2 to 4');
   const s = samples === null ? null : Number(samples);
-  return { name, seed: String(seed), samples: s, target: Number(target), pin: checkPin([...pin]), set: { ...set }, bots: [rivalBot(a, s), rivalBot(b, s)] };
+  const bots = [a, b, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s));
+  return { name, seed: String(seed), samples: s, target: Number(target), pin: checkPin([...pin]), set: { ...set }, bots };
 }
 
-/** A copy of `config` with one thing changed. Keys: a, b, samples, target, pin, or a settings path. */
+/** A copy of `config` with one thing changed. Keys: a, b, c, d, seats, samples, target, pin, or a settings path. */
 export function applyVariant(config, key, value) {
   const next = { ...config, pin: [...config.pin], set: { ...config.set }, bots: config.bots.map((x) => ({ ...x })) };
   if (key === 'a') next.bots[0] = rivalBot(value, config.samples);
   else if (key === 'b') next.bots[1] = rivalBot(value, config.samples);
+  else if (key === 'c' || key === 'd') {
+    const i = key === 'c' ? 2 : 3;
+    if (i >= next.bots.length) throw new Error(`--${key} needs at least ${i + 1} seats`);
+    next.bots[i] = rivalBot(value, config.samples);
+  } else if (key === 'seats') {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 2 || n > 4) throw new Error('seats must be 2 to 4');
+    while (next.bots.length < n) next.bots.push(rivalBot('heron', config.samples));
+    next.bots.length = n;
+  }
   else if (key === 'samples') {
     next.samples = Number(value);
     next.bots = next.bots.map((x) => ({ ...x, samples: next.samples }));

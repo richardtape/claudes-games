@@ -157,6 +157,39 @@ turns over, then the cities resolve one at a time under their spotlights: totals
 winner's colour sweeps across the city in Saul Bass bars, the cone takes the winner's colour,
 the city plays its flourish, and the stake (doubled) slides to the winner's score.
 
+## Seats (Phase 2a: the engine plays 2–4)
+
+Every screen still seats two players, but the rules engine, the bots, the table and the
+simulator play 2, 3 or 4 seats (`MIN_SEATS`, `MAX_SEATS` and `SEAT_NAMES` in `js/data.js`). Each
+rule reduces to the two-player one at two seats:
+
+- **Marks:** "your rival's drop" (Double Agent, Impostor) means your *mark's* drop. The mark of
+  seat `s` in round `r` is `(s + 1 + r mod (N − 1)) mod N`, so marks rotate each round and two
+  players always mark each other (`markOf`).
+- **Rival agents here** (Mole, Jammer, Assassin, Tripwire) means every other seat's agents.
+  Moles stack. An arriving agent springs the first armed rival Tripwire in table order after
+  its owner; the Assassin takes the strongest face-up agent of any rival (latest arrival on a
+  tie, then the later seat in that order).
+- **Initiative** for turn `t` of round `r` is `(r + t − 1) mod N`. Drops land, tricks fire and
+  cards are drawn in table order from the holder (`turnOrder`).
+- **Havana** passes every agent there one seat along at the end of turn 4 (the swap, at two).
+- **Scoring:** a city goes to the single highest total among seats with agents there (above
+  0); Lisbon to the single lowest. A round goes to the single seat with most cities, else the
+  tie-break totals (Lisbon left out) among the tied seats only. A match ends when the single
+  leader reaches the target (`leaderOf`, `roundWinner`, `matchWinner`).
+- **Not yet:** stakes stay two-player (at 3–4 seats escalate, respond and fold refuse, and the
+  bots never call; Phase 2b-i adds stakes for every table size). Online play refuses more than
+  two seats, and no screen shows a third player (Phase 3). A seat number outside the table sees
+  as a spectator and can't act.
+- **Two-player play is guarded by golden replays.** `test/golden/v1/` is a frozen copy of the
+  Phase 1 engine and bot. `test/golden.test.mjs` and `tools/golden.mjs --check --matches 400`
+  play seeded two-player bot matches on both and compare the state, the events and the views
+  for seats 0, 1 and −1 after every call. They stop matching at Phase 2b-i's first two-player
+  rule change (tokens), which retires or re-records them.
+- **The UI:** mechanics that go over seats use lists (`allSeats`, `rivals`); two-player copy
+  and layout go through `foe()` in `js/main.js` (and `rivalsOf(...)[0]` with a note in
+  `js/board.js`), so Phase 3 can find every two-player assumption by searching for them.
+
 ## Simulation
 
 `tools/sim.mjs` plays bot-vs-bot matches on worker threads and prints every rate with its 95%
@@ -173,3 +206,15 @@ twice as fast; confirm stake numbers at the bots' own samples), `--set path=valu
 `heavy.power=5`, `rules.lisbonTiebreak=invert`), `--variant name:key=value` for A/B runs,
 `--probe agents|cities`, `--ladder`, `--pin city`, `--out FILE`, `--resume`, `--json`. The doc
 comment at the top of `tools/sim.mjs` lists them all. Results don't depend on `--workers`.
+
+More seats: `--seats N` (2–4) with `--c ID --d ID` for seats three and four; each match index
+rotates the bots one seat, and the report adds each seat's and each bot's share. The first look
+at 3 and 4 seats (stake 1, no escalation) is SIMLOG B10 (`tools/baselines/phase2a-seats3.json`,
+`phase2a-seats4.json`): every seat inside 1/N ± 5 points. At N seats an agent's "win% when
+played" sits near 100/N, not 50. Four seats cost about 4 rounds a second on 4 workers, so batch
+those runs.
+
+`tools/think-time.mjs [--rivals heron,control] [--seats 2,3,4] [--positions 30] [--json]`
+times a bot's move per seat count. Thinking grows about 2.2× per added seat: Control at 3–4
+seats is too slow for a phone (p95 106 and 205 ms on Rich's Mac, which is 3–5× faster than a
+phone), so Phase 3 must cap samples by seat count.

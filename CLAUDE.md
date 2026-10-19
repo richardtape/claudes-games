@@ -329,6 +329,12 @@ document it here rather than burying it in the game.
   samples instead of 24, about twice as fast) broadly carry agent and city numbers over, but
   not stake numbers (they fold more): tune agents cheaply and confirm stakes at the bots' own
   samples.
+- Bot thinking time grows about 2.2× per added seat (Dead Drop, `tools/think-time.mjs`, p95 on
+  Rich's Mac): Heron (24 samples) 16 / 32 / 62 ms at 2 / 3 / 4 seats, Control (80) 49 / 106 /
+  205 ms. A phone is 3–5× slower and the budget is about 150 ms a move, so cap samples by seat
+  count. Four-seat sims run at about 4 rounds/s on 4 workers: a 5,000-round run takes 20 minutes.
+- At N seats an agent's "win% when played" sits near 100/N, not 50, and power separates agents
+  more than in a duel (Heavy 36 vs Lookout 26 at three seats): measure N-seat balance at N seats.
 
 ## Deploying
 
@@ -452,12 +458,33 @@ and new files.
 - Seat a bot after whatever should hold it is up: `attachBot`'s first `tick()` runs
   synchronously and checks its hold only then, so in round 1 the rival locked in behind the
   title card. Dead Drop's `startSolo` calls `beginMatch()` first, and debug helpers that seat
-  a bot (`toFinalTurn()`) hold it themselves; `stop()` doesn't cancel a decision in flight.
+  a bot (`toFinalTurn()`) hold it themselves. Since Phase 2a, `stop()` also cancels a decision
+  in flight: every await in `tick()` goes through a `nap()` that returns once stopped.
 - Web Audio: a new GainNode starts at gain 1, so a note that starts exactly on a sample frame
   (sequencer grids often do) leaks one full-volume sample before its envelope: 31% of
   grid-timed hats clicked. `shared/sfx.js` now sets `gain.setValueAtTime(0, 0)` first (the
   `.value` setter can race `currentTime`). When you can't listen, render to an
   `OfflineAudioContext` and compare levels in dBFS with what the game played before.
+- Refactor a rules engine against a frozen copy of itself (Dead Drop Phase 2a, 2 → 4 seats):
+  copy the old engine and bot into `test/golden/v1/` (imports only changed), drive seeded bot
+  matches on old and new side by side, and compare the state, the return value and every
+  seat's view as JSON after each call, so a divergence names the step and the first differing
+  path (key order counts). Add per-round digests and a whole-sim exactness run, and plant a bug
+  once to see it fail. Every task ran the golden test and the engine and bot tasks the
+  400-match check before committing, so two-player play never moved.
+- When generalising a Monte Carlo bot, keep every RNG call in its old order at the old table
+  size (shuffle each rival's pool, fill its hidden cards, deal, then your own deck), or every
+  replay diverges. Hot paths that build fresh seat lists per call cost 2× until the lists are
+  precomputed and frozen per table size (`rivalSeats(n, seat)` in Dead Drop's engine).
+- A test that pins an order must use a case where the wrong order gives a different answer:
+  Dead Drop's first Tripwire-order test used seat 0, where table order equals seat order, and
+  could never fail. Plant the wrong order once and watch the test catch it.
+- A sound counter in a smoke hears the music too. Dead Drop's "no sound after leaving
+  mid-reveal" check passed only while an earlier victory cue still held the band silent; under
+  load the title theme's spy chord (21 sources) landed in the count. Steps that count effects
+  switch the music off with the game's own button and restore what they found. To show a
+  flake predates your change, run the old commit in a worktree (`git worktree add`, symlink
+  `node_modules`) with the suspected delay inserted.
 
 ## Games so far
 

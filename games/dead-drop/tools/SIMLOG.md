@@ -190,3 +190,53 @@ Agents at 8 samples (win% when played): Heavy 50.8 ±1.4, Sleeper 51.0 ±1.5, Ve
 
   None is significant (`*`), including the three rows the tie-break could touch. Agents and cities, checked pair by pair against B1 as in B2 (|diff| > sqrt(m1^2 + m2^2)): no agent's `winPlayed` moved (largest Getaway +1.4 against 2.0, Tripwire -1.3 against 1.8). One of 22 city rates crossed by a hair: Vienna `decided` 89.2 to 91.0 (diff 1.85 against 1.83), a city no Phase 1 change touches; with 34 comparisons at 95%, one or two crossings are expected by chance. Lisbon's own rates stayed inside their margins (decided 85.3 to 86.3, ±2.2; winner took the round 75.2 to 72.7, ±3.1). The full tables are in the JSON.
 - Decision: No Phase 1 fix changed play; the Lisbon rule (`out`) stands. Later phases keep measuring against B1 (`phase1-heron.json`), which still describes the game as shipped.
+
+## 2026-10-18 · B8 Phase 2a before: two-player reference for the refactor
+- Question: What does the unchanged Phase 1 engine, bot and simulator produce at 2,000 rounds and 8 samples? Phase 2a generalises them to 2-4 seats, and two-player play must not move at all, so this run is the reference to reproduce exactly. Expected: the same numbers, to the digit, after Task 6.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2a-before --rounds 2000 --samples 8 --workers 4 --out games/dead-drop/tools/baselines/phase2a-before.json`, commit c242eac (no engine, bot or sim edits since), seed dd, Heron x Heron, 2,045 rounds / 420 matches (0 capped), 88 rounds/s (23.2 s, 4 workers). No resume.
+- Numbers: escalation 98.9% +-0.4, stake 4 in 69.1% +-2.0 of rounds, escalator won 66.0% +-2.1, folds 27.5% +-1.9, dead heats 2.7% +-0.7, tie-breaks 17.5% +-1.6, seat 0 wins 49.8% +-2.6 of decided rounds (49.0% +-4.8 of matches), points per round 3.15 +-0.06, 4.9 rounds per match. Per-agent and per-city tables are in the JSON (too few rounds to rank agents; this is a fingerprint, not a balance run).
+- Decision: Task 6 must reproduce this JSON exactly (same seed, same batches, so identical, not merely within margins). The golden replays (`test/golden.test.mjs`, `tools/golden.mjs --check`) cover the engine and bot call by call; this covers the whole simulator path.
+
+## 2026-10-18 · B9 Phase 2a after: two-player play unchanged
+- Question: Does the 2-4 seat refactor (engine, bot, session, sim harness) leave two-player play exactly as B8 recorded it?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2a-after --rounds 2000 --samples 8 --against games/dead-drop/tools/baselines/phase2a-before.json`, seed dd, Heron x Heron, 2,045 rounds, 4 workers, 60 rounds/s (34.2 s; machine load 8 to 15 from other sessions). Matches are seated by `rotation = index % 2`, the same seating as Phase 1's swap.
+- Numbers: every `against` row is +0.0 (all 13 rows), and `agents`, `cities`, `roundsPerMatch` and `pointsPerRound` compare byte-identical to B8 (JSON.stringify equal).
+- Decision: Two-player numbers did not move at all, so the refactor stands. `SIM_VERSION` is now 2 (the MatchRecord has `rotation` where it had `swapped`), which only invalidates old cached batches. Three-seat smoke (200 rounds, 4 samples): no stakes at 3-4 seats, tie-breaks 46% of rounds; too small to judge balance.
+
+## 2026-10-18 · B10 Phase 2a: first look at 3 and 4 seats (stake 1, no escalation), and bot thinking time
+- Question: With the N-seat rules of Decision 3 (initiative rotates, stake 1 only), is each seat's share 1/N +- 5 points (Phase 3's bar)? How long does `think` take per move at 2, 3 and 4 seats? Tunes nothing.
+- Thinking time (`nice -n 19 node games/dead-drop/tools/think-time.mjs --rivals wren,heron,control`, 30 positions per row, ms on this Mac, load 2.3 before and after):
+
+| Seats | Rival (samples) | mean | p95 | max |
+|---|---|---|---|---|
+| 2 | wren (6) | 3.0 | 4.8 | 8.8 |
+| 2 | heron (24) | 9.5 | 15.9 | 16.8 |
+| 2 | control (80) | 31.9 | 49.4 | 58.8 |
+| 3 | wren | 5.6 | 8.5 | 8.5 |
+| 3 | heron | 21.0 | 31.9 | 33.2 |
+| 3 | control | 69.8 | 105.9 | 109.5 |
+| 4 | wren | 9.4 | 15.1 | 16.5 |
+| 4 | heron | 37.0 | 62.2 | 66.9 |
+| 4 | control | 123.5 | 205.4 | 221.2 |
+
+  Cost grows about 2.2x per added seat. Phone bar: ~150 ms at 3-5x slower means 30-50 ms on this Mac. Passing (p95 under 30 ms): wren at 2-4 seats (p95 15) and heron at 2 seats (p95 16). Borderline: heron at 3 seats (p95 31.9, just over the bar, and about 160 ms at 5x). Marginal: heron at 4 seats (mean 37, p95 62: fine at 3x, about 310 ms at 5x p95), control at 2 seats (mean 32, p95 49). Failing: control at 3 seats (p95 106) and 4 seats (p95 205), so those need fewer samples, a time budget or a worker on phones. Magpie and Countess were not measured (between wren/heron and heron/control).
+- Timing run (`--rounds 400`, 4 workers, nice 19): 3 seats, target 8: 453 rounds in 40.6 s (11 rounds/s, load about 3-5); 4 seats, target 7: 488 rounds in 250 s (2 rounds/s, load about 4-5). Estimates for 5,000 rounds: 7.6 and 43 minutes. Both were run in full.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2a-seats3 --seats 3 --target 8 --samples 8 --rounds 5000 --out games/dead-drop/tools/baselines/phase2a-seats3.json` and `--run p2a-seats4 --seats 4 --target 7` likewise (`phase2a-seats4.json`); seed dd, Heron-strength bots at 8 samples in every seat, 4 workers, no resume. 3 seats: 5,031 rounds / 660 matches (725 s, 7 rounds/s, load 3-8); 4 seats: 5,019 rounds / 640 matches (1,183 s, 4 rounds/s, load 3-35 from other sessions). 0 capped matches in both. Match seating rotates by index, so "seat" is the in-match seat, and the shares are over seats with bots of equal strength.
+- Numbers (95% margins):
+
+| | 3 seats (target 8) | 4 seats (target 7) |
+|---|---|---|
+| Rounds per match | 7.6 +-0.14 | 7.8 +-0.17 |
+| Capped matches | 0 | 0 |
+| Dead heats | 6.2% +-0.7 | 8.7% +-0.8 |
+| Tie-breaks | 48.4% +-1.4 | 61.4% +-1.3 |
+| Half-time leader wins | 62.3% +-4.1 | 54.4% +-4.4 |
+| Points per round | 1.88 +-0.01 | 1.83 +-0.02 |
+| Seat 0 / 1 / 2 / 3, share of decided rounds | 33.6 / 33.3 / 33.1 +-1.3 | 24.0 / 24.6 / 25.9 / 25.5 +-1.2 to 1.3 |
+| Seat 0 / 1 / 2 / 3, share of matches | 34.4 / 34.2 / 31.4 +-3.6 | 24.2 / 25.2 / 25.6 / 25.0 +-3.4 |
+| Bot A / B / C / D, matches | 34.1 / 35.3 / 30.6 +-3.6 | 25.0 / 22.8 / 25.5 / 26.7 +-3.4 |
+
+  Seat fairness: every seat is inside 1/N +- 5 points at both counts (3 seats: 31.4 to 34.4 against 28.3 to 38.3; 4 seats: 24.0 to 25.9 against 20 to 30), by rounds and by matches. Decision 3's initiative rule is not contradicted by this run.
+- Agents (win% when played; at N seats this sits near 100/N, not 50, so compare with 33.3 and 25): 3 seats: Heavy 36.1, Sleeper 34.6, Jammer 34.3, Veteran 32.0, Handler 31.5, Mole 31.3, Double Agent 30.3, Tripwire 29.0, Assassin 28.7, Impostor 27.2, Getaway 27.1, Lookout 26.4 (margins about 1.0). 4 seats: Heavy 28.1, Sleeper 26.4, Jammer 25.8, Veteran 23.9, Mole 22.9, Double Agent 22.7, Handler 22.3, Getaway 19.8, Assassin 19.6, Impostor 19.0, Tripwire 18.6, Lookout 17.1 (about 0.8). The high-power agents (Heavy, Sleeper, Jammer) and the low-power ones (Lookout, Getaway, Assassin, Tripwire, Impostor) pull further apart than in two-player play (B1), since without stakes there is nothing but power to separate them. Heavy "when not played" is 20.0 / 10.6, so the spread is the strongest signal in the run.
+- Cities: Lisbon is decided least often (78.1% at 3 seats, 67.5% at 4) and Tangier next (77.5 / 78.5); Moscow, Hong Kong and Istanbul are decided most (about 89 / 87-91). The winner-took-the-round rate falls at 4 seats to 45-54%: well above the 25% chance baseline at 4 seats (about twice it), though lower than at 2-3 seats, so cities still matter but less to who wins.
+- Decision: 2a tunes nothing; these are the starting numbers. For 2b-i: dead heats (6.2 / 8.7%) and tie-breaks (48 / 61% of rounds) are high and rise with seats, so the tie-break decides half of all rounds and is the thing to watch if the comeback levers touch it; the half-time leader wins 62.3% of matches at 3 seats and 54.4% at 4, against a fair share of 33% and 25% (1.9x and 2.2x), so the comeback levers have real work to do at both counts. The 3-seat rate (62.3% +-4.1) is above Phase 3's bar (spec, "Phase 3 tuning": "Whoever leads at the halfway point wins <= 60%"); 4 seats (54.4%) is inside it. For 2b-ii: power dominates agent value at N seats (Heavy +8 over Lookout at 3 seats), so any agent rebalance should be measured at N seats with at least 20,000 rounds per variant; 4-seat sims cost about 4 rounds/s, so batch them. Phase 3: keep controlling samples by seat count for phones (control fails at 3-4 seats; heron at 4 is marginal); rivals with samples under about 24 are safe everywhere.

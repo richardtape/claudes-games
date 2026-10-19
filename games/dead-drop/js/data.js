@@ -7,6 +7,11 @@ export const MAX_HAND = 7;
 export const CAPACITY = 3;
 export const TARGET = 10;
 
+/** A table seats 2 to 4 players. Seats are lettered a–d in card uids; these are their default names. */
+export const MIN_SEATS = 2;
+export const MAX_SEATS = 4;
+export const SEAT_NAMES = ['Red', 'Teal', 'Cobalt', 'Plum'];
+
 /**
  * Tunable rule switches (the simulator can patch these as `rules.<field>`).
  * lisbonTiebreak: when cities are level, the tie-break compares total power across cities.

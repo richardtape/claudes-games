@@ -1,0 +1,456 @@
+{
+ "state": {
+  "v": 1,
+  "seed": "golden-save",
+  "rng": 2620310069,
+  "target": 10,
+  "scores": [
+   0,
+   0
+  ],
+  "roundNo": 0,
+  "phase": "plan",
+  "round": {
+   "no": 0,
+   "cities": [
+    {
+     "id": "lisbon",
+     "sides": [
+      [
+       "a0.0"
+      ],
+      [
+       "b0.0"
+      ]
+     ],
+     "first": 0
+    },
+    {
+     "id": "tangier",
+     "sides": [
+      [],
+      []
+     ],
+     "first": 0
+    },
+    {
+     "id": "hongkong",
+     "sides": [
+      [],
+      []
+     ],
+     "first": 0
+    }
+   ],
+   "cards": {
+    "a0.0": {
+     "uid": "a0.0",
+     "kind": "double",
+     "id0": "double",
+     "owner": 0,
+     "origin": 0,
+     "city": 0,
+     "turn": 1,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.1": {
+     "uid": "a0.1",
+     "kind": "sleeper",
+     "id0": "sleeper",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.2": {
+     "uid": "a0.2",
+     "kind": "lookout",
+     "id0": "lookout",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.3": {
+     "uid": "a0.3",
+     "kind": "jammer",
+     "id0": "jammer",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.4": {
+     "uid": "a0.4",
+     "kind": "mole",
+     "id0": "mole",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.5": {
+     "uid": "a0.5",
+     "kind": "assassin",
+     "id0": "assassin",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.6": {
+     "uid": "a0.6",
+     "kind": "handler",
+     "id0": "handler",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.7": {
+     "uid": "a0.7",
+     "kind": "getaway",
+     "id0": "getaway",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.8": {
+     "uid": "a0.8",
+     "kind": "veteran",
+     "id0": "veteran",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.9": {
+     "uid": "a0.9",
+     "kind": "impostor",
+     "id0": "impostor",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.10": {
+     "uid": "a0.10",
+     "kind": "heavy",
+     "id0": "heavy",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "a0.11": {
+     "uid": "a0.11",
+     "kind": "tripwire",
+     "id0": "tripwire",
+     "owner": 0,
+     "origin": 0,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.0": {
+     "uid": "b0.0",
+     "kind": "double",
+     "id0": "impostor",
+     "owner": 1,
+     "origin": 1,
+     "city": 0,
+     "turn": 1,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.1": {
+     "uid": "b0.1",
+     "kind": "heavy",
+     "id0": "heavy",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.2": {
+     "uid": "b0.2",
+     "kind": "getaway",
+     "id0": "getaway",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.3": {
+     "uid": "b0.3",
+     "kind": "assassin",
+     "id0": "assassin",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.4": {
+     "uid": "b0.4",
+     "kind": "mole",
+     "id0": "mole",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.5": {
+     "uid": "b0.5",
+     "kind": "double",
+     "id0": "double",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.6": {
+     "uid": "b0.6",
+     "kind": "handler",
+     "id0": "handler",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.7": {
+     "uid": "b0.7",
+     "kind": "tripwire",
+     "id0": "tripwire",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.8": {
+     "uid": "b0.8",
+     "kind": "veteran",
+     "id0": "veteran",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.9": {
+     "uid": "b0.9",
+     "kind": "sleeper",
+     "id0": "sleeper",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.10": {
+     "uid": "b0.10",
+     "kind": "lookout",
+     "id0": "lookout",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    },
+    "b0.11": {
+     "uid": "b0.11",
+     "kind": "jammer",
+     "id0": "jammer",
+     "owner": 1,
+     "origin": 1,
+     "city": null,
+     "turn": 0,
+     "faceDown": false,
+     "hidden": false,
+     "bonus": 0
+    }
+   },
+   "hands": [
+    [
+     "a0.1",
+     "a0.2",
+     "a0.3",
+     "a0.4"
+    ],
+    [
+     "b0.1",
+     "b0.2",
+     "b0.3",
+     "b0.4"
+    ]
+   ],
+   "decks": [
+    [
+     "a0.5",
+     "a0.6",
+     "a0.7",
+     "a0.8",
+     "a0.9",
+     "a0.10",
+     "a0.11"
+    ],
+    [
+     "b0.5",
+     "b0.6",
+     "b0.7",
+     "b0.8",
+     "b0.9",
+     "b0.10",
+     "b0.11"
+    ]
+   ],
+   "gone": [
+    [],
+    []
+   ],
+   "turn": 2,
+   "initiative": 1,
+   "plans": [
+    {
+     "uid": "a0.1",
+     "city": 0
+    },
+    null
+   ],
+   "stake": 2,
+   "escalated": [
+    true,
+    false
+   ],
+   "pending": null,
+   "events": [
+    {
+     "t": "drop",
+     "seat": 0,
+     "uid": "a0.0",
+     "city": 0,
+     "kind": "double",
+     "faceDown": false
+    },
+    {
+     "t": "drop",
+     "seat": 1,
+     "uid": "b0.0",
+     "city": 0,
+     "kind": "impostor",
+     "faceDown": false
+    },
+    {
+     "t": "trick",
+     "uid": "a0.0",
+     "kind": "double",
+     "to": null
+    },
+    {
+     "t": "trick",
+     "uid": "b0.0",
+     "kind": "impostor",
+     "as": "double"
+    },
+    {
+     "t": "trick",
+     "uid": "b0.0",
+     "kind": "double",
+     "to": null
+    },
+    {
+     "t": "draw",
+     "seat": 0,
+     "uid": "a0.4",
+     "why": "turn"
+    },
+    {
+     "t": "draw",
+     "seat": 1,
+     "uid": "b0.4",
+     "why": "turn"
+    }
+   ],
+   "result": null
+  },
+  "history": [],
+  "winner": null
+ },
+ "names": [
+  "Agent Fox",
+  "Mr Heron"
+ ],
+ "ready": [
+  false,
+  false
+ ],
+ "rematch": [
+  false,
+  false
+ ],
+ "seq": 5,
+ "turnSeq": 1,
+ "matchId": "l21egpf5"
+}

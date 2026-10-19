@@ -7,12 +7,12 @@ import { AGENT, RULES } from '../js/data.js';
 
 const tiny = (o = {}) => resolveConfig({ samples: 2, target: 4, ...o });
 
-test('a match replays exactly from its config and index; odd indices swap seats', () => {
+test('a match replays exactly from its config and index; each index rotates the seats', () => {
   const c = tiny();
   assert.deepEqual(playMatch(c, 3), playMatch(c, 3));
   assert.notDeepEqual(playMatch(c, 3).rounds, playMatch(c, 4).rounds);
-  assert.equal(playMatch(c, 0).swapped, false);
-  assert.equal(playMatch(c, 1).swapped, true);
+  assert.equal(playMatch(c, 0).rotation, 0);
+  assert.equal(playMatch(c, 1).rotation, 1);
 });
 
 test('a match record has what every report line needs', () => {
@@ -134,4 +134,49 @@ test('rules settings patch RULES inside withPatches only', () => {
   withPatches({ 'rules.lisbonTiebreak': 'invert' }, () => assert.equal(RULES.lisbonTiebreak, 'invert'));
   assert.equal(RULES.lisbonTiebreak, 'out');
   assert.throws(() => withPatches({ 'rules.lisbonTiebrk': 'x' }, () => {}), /unknown sim setting/);
+});
+
+test('matches seat 2 to 4 bots, and each index rotates them one seat', () => {
+  for (const n of [3, 4]) {
+    const c = tiny({ seats: n });
+    const m = playMatch(c, 5);
+    assert.equal(m.rotation, 5 % n);
+    assert.ok(m.winner >= 0 && m.winner < n);
+    assert.equal(m.scores.length, n);
+    assert.ok(m.rounds.every((r) => r.played.length === n && r.escalations.length === 0));
+    assert.deepEqual(playMatch(c, 5), m);
+  }
+  assert.throws(() => resolveConfig({ seats: 5 }), /seats must be 2 to 4/);
+});
+
+test('rivals c and d fill seats three and four', () => {
+  const c = resolveConfig({ seats: 4, c: 'wren', d: 'control' });
+  assert.deepEqual(c.bots.map((b) => b.id), ['heron', 'heron', 'wren', 'control']);
+  assert.equal(applyVariant(c, 'd', 'magpie').bots[3].id, 'magpie');
+  assert.equal(applyVariant(resolveConfig({ samples: 3 }), 'seats', 3).bots[2].samples, 3);
+});
+
+test('stats count every seat', () => {
+  const s = playBatch(tiny({ seats: 3 }), 0, 3).stats;
+  assert.equal(s.seatRoundWins.length, 3);
+  assert.equal(s.matchWins.length, 3);
+  const sum = summarize(s);
+  assert.equal(sum.seats, 3);
+  assert.equal(sum.seatMatches.length, 3);
+  assert.ok(Math.abs(sum.seatMatches.reduce((t, r) => t + r.pct, 0) - 100) < 1e-9);
+});
+
+test('the CLI plays three seats and refuses what it cannot do', () => {
+  const r = sim('--workers', '2', '--run', 'test-sim-n3', '--seats', '3', '--rounds', '10');
+  assert.equal(r.runs.base.summary.seatRounds.length, 3, 'three seats survive the worker merge');
+  for (const args of [['--seats', '5'], ['--seats', '3', '--ladder'], ['--c', 'wren'], ['--seats', '3', '--d', 'wren']]) {
+    assert.throws(() => execFileSync(process.execPath, [SIM, ...args], { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }), (e) => e.status === 1 && /sim: /.test(e.stderr));
+  }
+});
+
+test('think-time measures every seat count it is given', () => {
+  const THINK = fileURLToPath(new URL('../tools/think-time.mjs', import.meta.url));
+  const rows = JSON.parse(execFileSync(process.execPath, [THINK, '--positions', '2', '--rivals', 'wren', '--json'], { encoding: 'utf8' }));
+  assert.deepEqual(rows.map((r) => [r.seats, r.rival]), [[2, 'wren'], [3, 'wren'], [4, 'wren']]);
+  assert.ok(rows.every((r) => r.positions > 0 && r.mean > 0 && r.max >= r.p95));
 });

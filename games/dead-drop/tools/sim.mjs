@@ -5,12 +5,14 @@
 //
 //   --rounds N            volume per configuration, in rounds (default 5000), rounded up to whole batches
 //   --a ID --b ID         rivals (default heron, heron); --samples N overrides both (default: their own)
+//   --seats N             2 to 4 players (default 2); --c ID and --d ID fill seats three and four (default heron).
+//                         Three and four seats have no stakes, so escalation numbers read zero
 //   --target N            points to win a match (default 10)
 //   --seed S              default "dd"
 //   --pin city            pin a city into every round (repeatable, at most 3)
 //   --set path=value      (repeatable) change data, e.g. heavy.power=5; applies to the base and every variant
 //   --variant name:key=value   (repeatable; repeat a name to set more than one key). Keys: a, b, samples,
-//                         target, pin, or a settings path
+//                         a, b, c, d, seats, samples, target, pin, or a settings path
 //   --probe agents|cities agents: one "<id>+1" variant per agent (power + 1); cities: "pin-<id>" variants
 //   --ladder [all]        adjacent rival pairs (default) or all 10 pairs, no base run
 //   --workers W           default 4; 1 runs in-process with no threads
@@ -35,7 +37,7 @@ const WORKER = new URL('./sim/worker.mjs', import.meta.url);
 // ---- arguments ----
 const REPEAT = new Set(['pin', 'set', 'variant']);
 const FLAGS = new Set(['json', 'resume']);
-const VALUED = new Set(['rounds', 'a', 'b', 'samples', 'target', 'seed', 'probe', 'workers', 'run', 'out', 'against']);
+const VALUED = new Set(['rounds', 'a', 'b', 'c', 'd', 'seats', 'samples', 'target', 'seed', 'probe', 'workers', 'run', 'out', 'against']);
 const POSITIVE_INTS = ['rounds', 'workers', 'samples', 'target'];
 function parseArgs(argv) {
   const o = { pin: [], set: [], variant: [] };
@@ -56,6 +58,11 @@ function parseArgs(argv) {
   for (const key of POSITIVE_INTS) {
     if (o[key] !== undefined && !(/^\d+$/.test(o[key]) && Number(o[key]) >= 1)) throw new Error(`--${key} must be a whole number of at least 1, got "${o[key]}"`);
   }
+  if (o.seats !== undefined && !(/^[234]$/.test(o.seats))) throw new Error('--seats must be 2 to 4');
+  const nSeats = Number(o.seats ?? 2);
+  if (o.c !== undefined && nSeats < 3) throw new Error('--c needs --seats 3 or more');
+  if (o.d !== undefined && nSeats < 4) throw new Error('--d needs --seats 4');
+  if (o.ladder && o.seats !== undefined && o.seats !== '2') throw new Error('--ladder plays two seats');
   return o;
 }
 const splitOnce = (s, ch) => {
@@ -79,7 +86,7 @@ function buildConfigs(o) {
       }
     return list;
   }
-  const base = withSets(resolveConfig({ ...common, name: 'base', a: o.a ?? 'heron', b: o.b ?? 'heron' }));
+  const base = withSets(resolveConfig({ ...common, name: 'base', a: o.a ?? 'heron', b: o.b ?? 'heron', c: o.c ?? 'heron', d: o.d ?? 'heron', seats: o.seats ?? 2 }));
   list.push(base);
   const variants = new Map();
   for (const v of o.variant) {
@@ -121,7 +128,7 @@ async function runAll(configs, o, log) {
   const workers = Math.max(1, Number(o.workers ?? 4));
   const cached = o.resume ? loadLog(log) : new Map();
   if (!o.resume) writeFileSync(log, '');
-  const st = configs.map((config) => ({ config, hash: configHash(config), results: [], next: 0, prefix: 0, rounds: 0, merged: emptyStats(), fromLog: 0, done: false }));
+  const st = configs.map((config) => ({ config, hash: configHash(config), results: [], next: 0, prefix: 0, rounds: 0, merged: emptyStats(config.bots.length), fromLog: 0, done: false }));
   const advance = (s) => {
     while (!s.done && s.results[s.prefix]) {
       const r = s.results[s.prefix++];
@@ -259,6 +266,6 @@ writeFileSync(o.out ? resolve(o.out) : `${DIR}${name}.json`, JSON.stringify(out)
 if (o.json) console.log(JSON.stringify(out));
 else {
   const total = Object.values(runs).reduce((n, r) => n + r.rounds, 0);
-  const header = `${total} rounds across ${configs.length} configuration${configs.length > 1 ? 's' : ''} in ${seconds.toFixed(1)}s (${(total / Math.max(seconds, 0.001)).toFixed(0)} rounds/s), ${o.workers ?? 4} workers, seed ${out.seed}${out.resumedBatches ? `, ${out.resumedBatches} batches resumed` : ''}`;
+  const header = `${total} rounds across ${configs.length} configuration${configs.length > 1 ? 's' : ''} in ${seconds.toFixed(1)}s (${(total / Math.max(seconds, 0.001)).toFixed(0)} rounds/s), ${o.workers ?? 4} workers, seed ${out.seed}${base && base.config.bots.length !== 2 ? `, ${base.config.bots.length} seats` : ''}${out.resumedBatches ? `, ${out.resumedBatches} batches resumed` : ''}`;
   console.log(textReport(o, header, runs, base, o.probe, against));
 }
