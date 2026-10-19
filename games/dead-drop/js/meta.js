@@ -26,3 +26,27 @@ export function countWin(meta, matchId) {
   meta.onlineWins = (meta.onlineWins || 0) + 1;
   return true;
 }
+
+export const META_VERSION = 2;
+
+const count = (n) => (Number.isInteger(n) && n >= 0 ? n : 0);
+const ids = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string' && /^[a-z0-9]{8}$/.test(x)).slice(-MAX_COUNTED) : []);
+
+/**
+ * Bring a saved profile up to date. Fields it doesn't know are kept as they are (later phases
+ * add their own); the known ones are cleaned, falling back to `fresh` where unusable.
+ */
+export function migrateMeta(raw, { codenames, rivals, fresh }) {
+  const m = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    ...m,
+    v: META_VERSION,
+    codename: codenames.includes(m.codename) ? m.codename : fresh.codename,
+    token: typeof m.token === 'string' && /^[0-9a-f]{16}$/.test(m.token) ? m.token : fresh.token,
+    beaten: Array.isArray(m.beaten) ? rivals.filter((id) => m.beaten.includes(id)) : [],
+    matches: count(m.matches),
+    onlineWins: count(m.onlineWins),
+    counted: ids(m.counted),
+    wonIds: ids(m.wonIds),
+  };
+}

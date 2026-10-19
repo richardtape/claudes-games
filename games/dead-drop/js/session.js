@@ -10,7 +10,7 @@ import { think, estimateLocked, stakeCall } from './bot.js';
 import { createRng } from '../../../shared/rng.js';
 import { CODENAMES, SEAT_NAMES } from './data.js';
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 /** 8 lowercase base-36 characters; not derived from the match seed, so rematches and equal seeds differ. */
 const newMatchId = () => Array.from({ length: 8 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
@@ -106,8 +106,12 @@ export function createTable({ seed = Date.now(), target, cities, seats = 2, name
   return table;
 }
 
+/** Only a table saved at the current state version (with tokens) can be resumed. */
+export const canRestore = (saved) => saved?.state?.v === E.STATE_VERSION && Array.isArray(saved.state.tokens);
+
 /** Rebuild a table saved with toJSON() (the host's browser resumes after a reload). */
 export function restoreTable(saved) {
+  if (!canRestore(saved)) throw new Error('a table saved by an older version of Dead Drop');
   const table = createTable({ seed: 1, seats: saved.state.scores.length });
   Object.assign(table, { state: saved.state, names: saved.names, ready: saved.ready, rematch: saved.rematch, seq: saved.seq, turnSeq: saved.turnSeq });
   if (typeof saved.matchId === 'string' && /^[a-z0-9]{8}$/.test(saved.matchId)) table.matchId = saved.matchId;
@@ -151,7 +155,10 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
         }
       } else if (S.phase === 'plan') {
         const R = S.round;
-        if (R.pending && R.pending.by !== seat) {
+        if (R.folded?.[seat]) return;
+        if (R.pending) {
+          // Only a seat that is owed an answer acts; everyone else waits for the call to resolve.
+          if (!R.pending.from.includes(seat) || R.pending.calls[seat] !== null) return;
           if (await nap(900)) return;
           const view = table.view(seat);
           const value = view.round.plan ? estimateLocked(view, Math.max(6, rival.samples >> 1), rng) : think(view, { samples: rival.samples, noise: rival.noise, rng }).value;

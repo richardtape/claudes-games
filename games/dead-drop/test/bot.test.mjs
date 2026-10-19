@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
-import { determinize, think, stakeCall } from '../js/bot.js';
-import { DECK, RIVALS } from '../js/data.js';
+import { determinize, think, stakeCall, filmWeightFor } from '../js/bot.js';
+import { DECK, RIVALS, RULES, STAKES, TARGET } from '../js/data.js';
 import { createRng } from '../../../shared/rng.js';
+import { play, withPatch } from './helpers.mjs';
 
 /** Random legal play for a few turns, to get varied mid-round positions. */
 function midRound(seed, turns) {
@@ -52,6 +53,7 @@ test('think returns a legal drop and a value between −1 and 1', () => {
 
 test('stake calls: confident bots escalate, hopeless ones fold, escalations get answered', () => {
   const s = midRound(4, 3);
+  s.scores = [0, TARGET - 1]; // late in the match, so the rivals' pace leaves tokens to spare
   const view = E.viewFor(s, 0);
   const steady = { ...RIVALS[2], noise: 0 };
   const rng = createRng(2);
@@ -108,9 +110,116 @@ test('think at 3 and 4 seats returns a legal drop and a value between −1 and 1
   }
 });
 
-test('stake calls stay two-player until Phase 2b-i', () => {
-  const s = midRoundN(3, 4, 4);
-  const steady = { ...RIVALS[2], noise: 0 };
-  assert.equal(stakeCall(E.viewFor(s, 0), 0.95, steady, createRng(2)), null);
-  assert.equal(stakeCall({ ...E.viewFor(s, 0), round: { ...E.viewFor(s, 0).round, turn: 5 } }, -0.99, steady, createRng(2)), null);
+const steady = { ...RIVALS[2], noise: 0, nerve: 0, bluff: 0 };
+const liar = { ...steady, bluff: 3 }; // bluff / 3 = 1: always bluffs, when allowed
+const stakeView = ({ tokens, turn = 2, seats = 2, scores } = {}) => {
+  const s = E.newMatch({ seed: 9, seats });
+  if (tokens) s.tokens = tokens;
+  if (scores) s.scores = scores;
+  s.round.turn = turn;
+  return E.viewFor(s, 0);
+};
+const call = (view, value, rival = steady) => stakeCall(view, value, rival, createRng(1));
+// Tokens a rival wants in hand when the leader has `lead` points: one for every two rounds left,
+// counting STAKES.roundPoints a round (bot.js), and the first lead at which it wants `n`.
+const wanted = (lead) => Math.ceil(Math.max(1, Math.ceil((TARGET - lead) / STAKES.roundPoints)) / 2);
+const leadWanting = (n) => [...Array(TARGET).keys()].find((lead) => wanted(lead) === n);
+
+test('stake calls: tokens to spare escalate on a good hand; a short supply needs a better one; none means never', () => {
+  const spare = { scores: [leadWanting(1), 0] }; // late in the match one token covers the rounds left
+  assert.equal(call(stakeView(spare), STAKES.escalate + 0.05), 'escalate');
+  assert.equal(call(stakeView(spare), STAKES.escalate - 0.05), null);
+  assert.equal(call(stakeView({ ...spare, turn: 1 }), 0.99), null, 'never on turn 1');
+  // where 2 tokens are wanted, a rival holding 1 is one short
+  const short = { tokens: [1, 3], scores: [leadWanting(2), 0] };
+  assert.equal(call(stakeView(short), STAKES.escalate + 0.05), null);
+  // Only the arithmetic: escalate + scarce is above any value a round can have (−1 to 1, plus a
+  // rival's noise), so in real play a short rival can't value-escalate (nor bluff, below).
+  assert.equal(call(stakeView(short), STAKES.escalate + STAKES.scarce + 0.05), 'escalate');
+  assert.equal(call(stakeView({ tokens: [0, 3], turn: 4 }), 0.99), null);
+});
+
+test('stake calls: the tuned pace (SIMLOG B16) keeps every token until the leader has 4 points', () => {
+  assert.equal(RULES.tokens, 3);
+  for (const lead of [0, 3]) assert.equal(call(stakeView({ scores: [0, lead] }), 0.99), null, `leader on ${lead}`);
+  assert.equal(call(stakeView({ scores: [0, 4] }), STAKES.escalate + 0.05), 'escalate');
+  assert.equal(call(stakeView({ tokens: [2, 3], scores: [0, 5] }), 0.99), null, 'the second token waits for 6');
+  assert.equal(call(stakeView({ tokens: [2, 3], scores: [0, 6] }), STAKES.escalate + 0.05), 'escalate');
+  // Bluffs keep the same pace, so a rival's early escalation is never a sure bluff: it makes none.
+  const bluffTurn = { turn: STAKES.bluffTurn };
+  for (const lead of [0, 3]) assert.equal(call(stakeView({ ...bluffTurn, scores: [0, lead] }), -0.2, liar), null, `no bluff with the leader on ${lead}`);
+  assert.equal(call(stakeView({ ...bluffTurn, scores: [0, 4] }), -0.2, liar), 'escalate', 'a bluff once the pace allows');
+  assert.equal(call(stakeView({ ...bluffTurn, tokens: [2, 3], scores: [0, 5] }), -0.2, liar), null, 'nor with the second token before 6');
+});
+
+test('stake calls: a bluff never spends the last token, nor one the pace keeps back', () => {
+  const spare = { turn: STAKES.bluffTurn, scores: [leadWanting(1), 0] }; // one token covers the rounds left
+  assert.equal(call(stakeView(spare), -0.2, liar), 'escalate');
+  assert.equal(call(stakeView({ ...spare, tokens: [1, 3] }), -0.2, liar), null, 'the last token');
+  assert.equal(call(stakeView({ ...spare, turn: STAKES.bluffTurn - 1 }), -0.2, liar), null, 'not before bluffTurn');
+  // where 3 tokens are wanted, a rival holding 2 is one short: no bluff
+  const lead = leadWanting(3);
+  if (lead !== undefined) assert.equal(call(stakeView({ ...spare, tokens: [2, 3], scores: [lead, 0] }), -0.2, liar), null, 'short');
+});
+
+test('stake calls: answering by value, and only seats that owe an answer answer', () => {
+  const s = E.newMatch({ seed: 9, seats: 3 });
+  E.escalate(s, 0);
+  assert.equal(call(E.viewFor(s, 1), STAKES.answer + 0.05), 'accept');
+  assert.equal(call(E.viewFor(s, 1), STAKES.answer - 0.05), 'fold');
+  assert.equal(call(E.viewFor(s, 0), 0.9), null, 'the escalator waits');
+  E.respond(s, 1, true);
+  assert.equal(call(E.viewFor(s, 1), -0.99), null, 'already answered');
+  assert.equal(call(E.viewFor(s, -1), 0.9), null, 'a spectator');
+});
+
+test('think returns the round value and the film value', () => {
+  const r = think(E.viewFor(E.newMatch({ seed: 2 }), 0), { samples: 4, rng: createRng(3) });
+  assert.ok(r.value >= -1 && r.value <= 1 && r.film >= -1 && r.film <= 1);
+});
+
+test('think weighs the Microfilm: with a heavy film weight the bot drops into the film city', () => {
+  // On the last turn a drop can still decide who holds the film city; on turn 1 one drop of six barely moves it, so no
+  // weight shows there. Under the holder rule, holding the film city is the whole film term; this tests the weighting, not the rule.
+  const into = (filmWeight) => withPatch(RULES, { film: 'holder' }, () => withPatch(STAKES, { filmWeight }, () => {
+    let n = 0;
+    let tried = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const s = midRound(seed, 5);
+      if (s.phase !== 'plan') continue;
+      const legal = E.viewFor(s, 0).round.legal;
+      if (!legal.some((d) => d.city === s.round.film) || !legal.some((d) => d.city !== s.round.film)) continue;
+      tried++;
+      if (think(E.viewFor(s, 0), { samples: 8, rng: createRng(seed) }).drop.city === s.round.film) n++;
+    }
+    return { n, tried };
+  }));
+  const heavy = into(5);
+  const none = into(0);
+  // The gap is the real check; the floor sits well under the 21–24 of 31 nearby RNG draws give.
+  assert.ok(heavy.tried >= 20 && heavy.n / heavy.tried >= 0.6 && heavy.n - none.n >= heavy.tried / 4, `${heavy.n} of ${heavy.tried} (${none.n} with no film weight)`);
+});
+
+test('determinize fills in a folded rival’s face-down cards and carries the stakes and the film', () => {
+  const s = E.newMatch({ seed: 4, seats: 3, cities: ['vienna', 'monaco', 'tangier'], film: 1 });
+  play(s, ['mole', 1], ['heavy', 1], ['heavy', 0]);
+  E.fold(s, 2);
+  const d = determinize(E.viewFor(s, 0), createRng(1));
+  for (const u of d.round.gone.flat()) assert.ok(d.round.cards[u], `gone card ${u}`);
+  for (let o = 0; o < 3; o++) assert.deepEqual(Object.values(d.round.cards).filter((c) => c.origin === o).map((c) => c.id0).sort(), DECK.slice().sort());
+  assert.deepEqual([d.v, d.tokens, d.strips, d.reel, d.filmRule, d.round.pot, d.round.folded, d.round.film], [2, s.tokens, s.strips, s.reel, s.filmRule, 1, [false, false, true], 1]);
+});
+
+test('the film weighs decisive when any seat is one strip from the reel, and never with the Microfilm off', () => {
+  const weight = (strips, reel) => {
+    const s = E.newMatch({ seed: 1 });
+    Object.assign(s, { strips, reel });
+    return filmWeightFor(E.viewFor(s, 0));
+  };
+  assert.notEqual(STAKES.filmWeight, STAKES.filmDecisive);
+  assert.equal(weight([0, 0], 3), STAKES.filmWeight);
+  assert.equal(weight([1, 1], 3), STAKES.filmWeight);
+  assert.equal(weight([0, 2], 3), STAKES.filmDecisive, 'a rival one strip away');
+  assert.equal(weight([2, 0], 3), STAKES.filmDecisive, 'this seat one strip away');
+  assert.equal(weight([0, 0], 0), STAKES.filmWeight, 'reel 0: no Microfilm');
 });

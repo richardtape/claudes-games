@@ -150,8 +150,10 @@ test('Getaway takes your weakest other agent here back to hand, reset', () => {
   play(s, ['assassin', 2], ['handler', 0]);
   const assassin = uidOf(s, 0, 'assassin');
   play(s, ['getaway', 2], ['veteran', 1]);
-  assert.ok(s.round.hands[0].includes(assassin));
-  assert.equal(s.round.cards[assassin].city, null);
+  assert.equal(s.round.cards[assassin], undefined, 'the old uid is gone');
+  const home = uidOf(s, 0, 'assassin'); // re-keyed on the way home
+  assert.ok(s.round.hands[0].includes(home));
+  assert.equal(s.round.cards[home].city, null);
   assert.equal(inPlay(s, 0, 'heavy'), true);
 });
 

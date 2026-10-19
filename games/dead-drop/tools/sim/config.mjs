@@ -1,8 +1,8 @@
 // Simulation configuration: who plays, with which seed, under which data patches.
-import { AGENT, CITY, RIVALS, RULES } from '../../js/data.js';
+import { AGENT, CITY, RIVALS, RULES, STAKES, TARGET } from '../../js/data.js';
 import { hashString } from '../../../../shared/rng.js';
 
-export const SIM_VERSION = 2;
+export const SIM_VERSION = 3;
 /** Matches per batch: the unit the worker pool hands out and the cache keys on. */
 export const BATCH = 20;
 export const MAX_ROUNDS = 40;
@@ -22,7 +22,7 @@ function checkPin(pin) {
   return pin;
 }
 
-export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = 10, pin = [], set = {} } = {}) {
+export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = TARGET, pin = [], set = {} } = {}) {
   if (!Number.isInteger(Number(seats)) || Number(seats) < 2 || Number(seats) > 4) throw new Error('seats must be 2 to 4');
   const s = samples === null ? null : Number(samples);
   const bots = [a, b, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s));
@@ -56,13 +56,14 @@ export function applyVariant(config, key, value) {
 
 /**
  * Prefix -> { obj, family }: the entry a path edits, and every entry of its kind (so a typo'd field is caught).
- * Add a line here to open up a new family of settings (Task 5: rules -> { obj: RULES, family: [RULES] }).
+ * Add a line here to open up a new family of settings.
  */
 const registry = () => {
   const agents = Object.values(AGENT);
   const cities = Object.values(CITY);
   return {
     rules: { obj: RULES, family: [RULES] },
+    stakes: { obj: STAKES, family: [STAKES] },
     ...Object.fromEntries(Object.entries(AGENT).map(([id, obj]) => [id, { obj, family: agents }])),
     ...Object.fromEntries(Object.entries(CITY).map(([id, obj]) => [id, { obj, family: cities }])),
   };

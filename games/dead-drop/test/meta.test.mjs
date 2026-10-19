@@ -38,3 +38,16 @@ test('a win with no match id still counts (an old view), and an old meta starts 
   assert.equal(meta.onlineWins, 1);
   assert.deepEqual(meta.wonIds, []);
 });
+
+import { CODENAMES, RIVALS } from '../js/data.js';
+import { META_VERSION, migrateMeta } from '../js/meta.js';
+
+test('migrateMeta keeps the codename, token, rivals beaten and counts, cleans the rest and stamps v2', () => {
+  const opts = { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Owl', token: 'ffffffffffffffff' } };
+  const v1 = { v: 1, codename: 'Agent Fox', beaten: ['wren', 'magpie'], token: '0123456789abcdef', matches: 7, onlineWins: 2, counted: ['abcd1234'], wonIds: ['zzzz9999'], later: { x: 1 } };
+  assert.equal(META_VERSION, 2);
+  assert.deepEqual(migrateMeta(v1, opts), { ...v1, v: 2 });
+  const clean = { v: 2, codename: 'Agent Owl', beaten: [], token: 'ffffffffffffffff', matches: 0, onlineWins: 0, counted: [], wonIds: [] };
+  assert.deepEqual(migrateMeta({}, opts), clean);
+  assert.deepEqual(migrateMeta({ codename: '<b>Hi</b>', beaten: ['magpie', 'nobody', 'wren', 'wren'], token: 'short', matches: -3, onlineWins: 'x', counted: 'no', wonIds: [1] }, opts), { ...clean, beaten: ['wren', 'magpie'] });
+});

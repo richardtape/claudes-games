@@ -2,7 +2,7 @@
 // animation that plays a turn's events over the board before it re-renders from the new view.
 import { AGENT, CITY } from './data.js';
 import { rivalsOf, seatCount } from './engine.js';
-import { agentSVG, citySVG } from './art.js';
+import { agentSVG, citySVG, filmSVG } from './art.js';
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -53,8 +53,16 @@ function totalHTML(city, seat, mine) {
 }
 
 /**
+ * The Microfilm's canister: with its small label, as it sits on the film city's plate, or (with
+ * `label: false`) as a decoration beside text that already names the film.
+ */
+export const canisterHTML = ({ label = true } = {}) =>
+  label ? `<span class="canister" role="img" aria-label="Carries the Microfilm">${filmSVG()}<b>Film</b></span>` : `<span class="canister" aria-hidden="true">${filmSVG()}</span>`;
+
+/**
  * One city column. `me` is the seat shown at the bottom. `plan` (uid, city) shows the
  * pending drop as a ghost; `choosing` highlights cities you can drop the selected card in.
+ * The city carrying the Microfilm gets class `film` and the canister on its plate.
  */
 export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [] } = {}) {
   const city = view.round.cities[ci];
@@ -63,7 +71,9 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
   const target = choosing && legalCities.includes(ci);
   const closedNow = !city.open && view.phase === 'plan';
   const leader = city.leader;
+  const film = view.round.film === ci;
   const cls = ['city', `c-${city.id}`];
+  if (film) cls.push('film');
   if (target) cls.push('target');
   if (closedNow) cls.push('closed');
   if (leader !== null && leader !== undefined) cls.push(leader === me ? 'lead-me' : 'lead-them');
@@ -72,6 +82,7 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
     ${rowHTML(city.sides[them], city.capacity, ci, them, null)}
     <div class="plate">
       <div class="sky" aria-hidden="true">${citySVG(city.id)}</div>
+      ${film ? canisterHTML() : ''}
       ${totalHTML(city, them, false)}
       <h3>${esc(def.name)}${target ? `<kbd>${keys[ci]}</kbd>` : ''}</h3>
       <p class="rule">${esc(def.rule)}</p>

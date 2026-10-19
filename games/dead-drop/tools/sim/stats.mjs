@@ -6,7 +6,9 @@ export function emptyStats(seats = 2) {
   return {
     matches: 0, capped: 0, rounds: 0, roundsHist: {}, matchWins: zeros(), seatMatchWins: zeros(),
     halfLeader: { n: 0, won: 0 }, folds: 0, deadHeats: 0, tiebreaks: 0, decided: 0, seatRoundWins: zeros(),
-    pointsHist: {}, escalated: 0, escalatorWon: 0, answeredFold: 0, bluffs: 0, escTurnHist: {},
+    pointsHist: {}, escalated: 0, escalatorWon: 0, answers: 0, answeredFold: 0,
+    reelWins: 0, reelComebacks: 0, strips: 0, filmDecided: 0, filmAgrees: 0, potHist: {}, carries: 0, tokensSpentHist: {}, outOfTokens: 0, maxStake: 0,
+    bluffs: 0, escTurnHist: {},
     agents: Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, wonPlayed: 0, notPlayed: 0, wonNotPlayed: 0, turnSum: 0 }])),
     cities: Object.fromEntries(CITIES.map((c) => [c.id, { n: 0, decided: 0, agrees: 0 }])),
   };
@@ -23,14 +25,22 @@ export function addMatch(stats, rec) {
     for (const e of r.escalations) {
       stats.escalated++;
       if (res.winner === e.seat) stats.escalatorWon++;
-      if (e.answer === 'fold') stats.answeredFold++;
+      for (const a of e.answers) {
+        stats.answers++;
+        if (a.call === 'fold') stats.answeredFold++;
+      }
       if (e.value < 0) stats.bluffs++;
       bump(stats.escTurnHist, e.turn);
     }
+    if (res.winner !== null) bump(stats.potHist, res.pot);
+    if (res.carry > 0) stats.carries++;
+    if (res.strip !== null && res.strip !== undefined) stats.strips++;
+    if (r.tokensAtStart.some((t) => t === 0)) stats.outOfTokens++;
     if (res.folded !== null) {
       stats.folds++;
       continue;
     }
+    if (res.winner !== null && res.stake >= 2) stats.maxStake++;
     if (r.tiebreak) stats.tiebreaks++;
     if (res.winner === null) stats.deadHeats++;
     else {
@@ -52,6 +62,10 @@ export function addMatch(stats, rec) {
         stats.agents[id].wonNotPlayed += won;
       }
     }
+    if (r.film !== null && res.cityWinners[r.film] !== null) {
+      stats.filmDecided++;
+      if (res.cityWinners[r.film] === res.winner) stats.filmAgrees++;
+    }
     r.cities.forEach((id, ci) => {
       const c = stats.cities[id];
       c.n++;
@@ -66,6 +80,11 @@ export function addMatch(stats, rec) {
   }
   bump(stats.roundsHist, rec.rounds.length);
   stats.seatMatchWins[rec.winner]++;
+  rec.tokens.forEach((left, s) => bump(stats.tokensSpentHist, rec.rounds[0].tokensAtStart[s] - left));
+  if (rec.winBy === 'reel') {
+    stats.reelWins++;
+    if (rec.scores[rec.winner] < Math.max(...rec.scores.filter((_, s) => s !== rec.winner))) stats.reelComebacks++;
+  }
   const n = stats.matchWins.length;
   stats.matchWins[(rec.winner + rec.rotation) % n]++;
   if (rec.rounds.length >= 2) {
@@ -134,9 +153,17 @@ export function summarize(s) {
     capped: s.capped,
     rounds: s.rounds,
     escalation: rate(s.escalated, s.rounds),
-    maxStake: rate(s.pointsHist[4] || 0, s.rounds),
+    maxStake: rate(s.maxStake, s.rounds),
     escalatorWins: rate(s.escalatorWon, s.escalated),
-    foldInAnswer: rate(s.answeredFold, s.escalated),
+    foldInAnswer: rate(s.answeredFold, s.answers),
+    reelWins: rate(s.reelWins, finished),
+    reelComeback: rate(s.reelComebacks, s.reelWins),
+    filmHolderWins: rate(s.filmAgrees, s.filmDecided),
+    rollovers: rate(s.carries, s.rounds),
+    outOfTokens: rate(s.outOfTokens, s.rounds),
+    stripsPerMatch: s.matches ? s.strips / s.matches : null,
+    tokensSpent: histMean(s.tokensSpentHist),
+    potTaken: histMean(s.potHist),
     folds: rate(s.folds, s.rounds),
     deadHeats: rate(s.deadHeats, s.rounds),
     tiebreaks: rate(s.tiebreaks, s.rounds),
@@ -156,14 +183,15 @@ export function summarize(s) {
   };
 }
 
-const RATE_KEYS = ['escalation', 'maxStake', 'escalatorWins', 'foldInAnswer', 'folds', 'deadHeats', 'tiebreaks', 'seat0Rounds', 'aMatchWins', 'seat0Matches', 'halfLeaderWins'];
-const MEAN_KEYS = ['pointsPerRound', 'roundsPerMatch'];
+const RATE_KEYS = ['escalation', 'maxStake', 'escalatorWins', 'foldInAnswer', 'folds', 'deadHeats', 'tiebreaks', 'seat0Rounds', 'aMatchWins', 'seat0Matches', 'halfLeaderWins', 'reelWins', 'reelComeback', 'filmHolderWins', 'rollovers', 'outOfTokens'];
+const MEAN_KEYS = ['pointsPerRound', 'roundsPerMatch', 'tokensSpent', 'potTaken'];
 
 /** Row per headline number; `sig` when the difference is bigger than the two margins combined. */
 export function compare(a, b) {
   const rows = [];
   for (const key of [...RATE_KEYS, ...MEAN_KEYS]) {
     const x = a[key], y = b[key];
+    if (!x || !y) continue; // an older baseline may lack a key
     const [vx, vy] = RATE_KEYS.includes(key) ? [x.pct, y.pct] : [x.mean, y.mean];
     if (vx === null || vy === null) continue;
     const m = Math.sqrt(x.margin ** 2 + y.margin ** 2);
@@ -181,8 +209,10 @@ export function formatSummary(sum, title = 'Dead Drop sim') {
   L.push(`${title}`);
   L.push(`${sum.rounds} rounds, ${sum.matches} matches (${sum.capped} capped), ${num(sum.roundsPerMatch.mean)} ±${num(sum.roundsPerMatch.margin, 2)} rounds/match, A wins ${pc(sum.aMatchWins)}, seat 0 wins ${pc(sum.seat0Matches)} of matches`);
   L.push(`folds ${pc(sum.folds)}  dead heats ${pc(sum.deadHeats)}  tie-breaks ${pc(sum.tiebreaks)}  seat 0 wins ${pc(sum.seat0Rounds)} of decided rounds  half-time leader wins ${pc(sum.halfLeaderWins)}`);
-  L.push(`points/round ${num(sum.pointsPerRound.mean, 2)} ±${num(sum.pointsPerRound.margin, 2)}  stake 4 in ${pc(sum.maxStake)} of rounds`);
-  L.push(`escalations ${pc(sum.escalation)} of rounds, escalator won ${pc(sum.escalatorWins)}, answered with a fold ${pc(sum.foldInAnswer)}, bluffs ${sum.bluffs}`);
+  L.push(`points/round ${num(sum.pointsPerRound.mean, 2)} ±${num(sum.pointsPerRound.margin, 2)}  won at stake 2 or more in ${pc(sum.maxStake)} of rounds`);
+  L.push(`escalations ${pc(sum.escalation)} of rounds, escalator won ${pc(sum.escalatorWins)}, answers were folds ${pc(sum.foldInAnswer)}, bluffs ${sum.bluffs}`);
+  L.push(`Stakes: ${num(sum.tokensSpent.mean, 2)} tokens spent per player per match, ${pc(sum.outOfTokens)} of rounds begun with a seat out of tokens, pot taken ${num(sum.potTaken.mean, 2)} on average, ${pc(sum.rollovers)} of rounds rolled over`);
+  L.push(`Microfilm: strips ${num(sum.stripsPerMatch, 2)} per match, reel wins ${pc(sum.reelWins)} of matches, ${pc(sum.reelComeback)} of those from behind on points, film city's holder took the round ${pc(sum.filmHolderWins)}`);
   if (sum.seats > 2) {
     L.push('', 'Seats           decided rounds won    matches won');
     sum.seatRounds.forEach((r, i) => L.push(`seat ${i}${' '.repeat(10)}${pc(r).padStart(18)}  ${pc(sum.seatMatches[i]).padStart(16)}`));

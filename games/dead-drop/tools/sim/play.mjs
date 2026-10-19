@@ -12,28 +12,35 @@ function playRound(state, bots, rng) {
   const seats = Array.from({ length: n }, (_, i) => i);
   const played = seats.map(() => []);
   const escalations = [];
+  const film = state.round.film;
+  const tokensAtStart = state.tokens.slice();
   while (state.phase === 'plan') {
     const R = state.round;
     const thoughts = seats.map((seat) => (R.plans[seat] ? null : think(E.viewFor(state, seat), { samples: bots[seat].samples, noise: bots[seat].noise, rng })));
     for (const seat of E.turnOrder(n, R.initiative)) {
       if (state.phase !== 'plan') break;
+      if (state.round.folded[seat]) continue;
       const value = thoughts[seat]?.value ?? 0;
       const call = stakeCall(E.viewFor(state, seat), value, bots[seat], rng);
       if (call === 'fold') E.fold(state, seat);
       else if (call === 'escalate' && E.escalate(state, seat)) {
-        const other = E.rivalsOf(n, seat)[0];
-        const ov = thoughts[other]?.value ?? 0;
-        const answer = stakeCall(E.viewFor(state, other), ov, bots[other], rng) === 'accept' ? 'accept' : 'fold';
-        escalations.push({ seat, turn: R.turn, value, answer });
-        E.respond(state, other, answer === 'accept');
+        // Every seat the call asks answers, in table order; the last answer settles it (pending → null).
+        const record = { seat, turn: R.turn, value, answers: [] };
+        for (const other of state.round.pending.from) {
+          const accept = stakeCall(E.viewFor(state, other), thoughts[other]?.value ?? 0, bots[other], rng) === 'accept';
+          record.answers.push({ seat: other, call: accept ? 'accept' : 'fold' });
+          E.respond(state, other, accept);
+        }
+        escalations.push(record);
       }
     }
     if (state.phase !== 'plan') break;
     for (const seat of seats) {
       if (thoughts[seat]) {
         const d = thoughts[seat].drop;
-        if (!d.pass) played[seat].push({ kind: state.round.cards[d.uid].kind, turn: R.turn, city: R.cities[d.city].id });
-        E.lock(state, seat, d);
+        // A seat that folded this turn can't lock: no drop is recorded for it.
+        const kind = d.pass ? null : state.round.cards[d.uid].kind;
+        if (E.lock(state, seat, d) && !d.pass) played[seat].push({ kind, turn: R.turn, city: R.cities[d.city].id });
       }
     }
     E.resolveTurn(state);
@@ -44,7 +51,7 @@ function playRound(state, bots, rng) {
     const wins = seats.map((s) => cw.filter((w) => w === s).length);
     return wins.filter((x) => x === Math.max(...wins)).length >= 2;
   })();
-  return { cities: state.round.cities.map((c) => c.id), result, tiebreak, played, escalations, scores: state.scores.slice() };
+  return { cities: state.round.cities.map((c) => c.id), film, tokensAtStart, result, tiebreak, played, escalations, scores: state.scores.slice() };
 }
 
 /** Three cities for a pinned match: the pinned ones, filled from the rest, in the bots' rng order. */
@@ -72,7 +79,7 @@ export function playMatch(config, index) {
     } else E.nextRound(state);
   }
   const over = state.phase === 'match-over';
-  return { index, rotation, winner: over ? state.winner : null, scores: state.scores.slice(), capped: !over, rounds };
+  return { index, rotation, winner: over ? state.winner : null, winBy: over ? state.winBy : null, scores: state.scores.slice(), strips: state.strips.slice(), tokens: state.tokens.slice(), capped: !over, rounds };
 }
 
 /** Plays matches start .. start + count - 1 and returns their stats. */

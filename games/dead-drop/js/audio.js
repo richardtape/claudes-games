@@ -3,7 +3,8 @@
 // js/music.js played on shared/seq.js. Three pieces: a title theme, a lobby bossa and the table's
 // spy-surf piece, whose band grows as the round heats up (levelFor), drops to a heartbeat on the
 // final turn and falls silent while the last cards land (hush), until the spy chord rings out.
-// Each city won plays its flourish; the match ends on a victory or defeat cue.
+// Each city won plays its flourish, and a strip of film changing hands rattles through the
+// projector's gate; the match ends on a victory or defeat cue.
 import { createSequencer } from '../../../shared/seq.js';
 import { note } from '../../../shared/sfx.js';
 import { store } from '../../../shared/arcade.js';
@@ -244,5 +245,10 @@ export function createAudio(sfx, slug) {
     roundWon: () => sfx.arp([note(-5), note(-1), note(2), note(7)], { step: 0.09, type: 'square', vol: 0.09, dur: 0.25 }),
     roundLost: () => sfx.arp([note(2), note(-2), note(-5), note(-9)], { step: 0.12, type: 'triangle', vol: 0.12, dur: 0.3 }),
     fold: () => sfx.tone({ freq: 392, to: 130, type: 'sawtooth', dur: 0.5, vol: 0.08 }),
+    /** A strip of film changes hands: the projector's clatter (four gate ticks), then a soft blip as it lands. */
+    film() {
+      for (let i = 0; i < 4; i++) sfx.noise({ dur: 0.02, freq: 2200, type: 'bandpass', q: 3, vol: 0.4, delay: i * 0.06 });
+      sfx.tone({ freq: 990, type: 'triangle', dur: 0.09, vol: 0.08, delay: 0.26 });
+    },
   };
 }

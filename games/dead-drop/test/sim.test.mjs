@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveConfig, applyVariant, withPatches, configHash } from '../tools/sim/config.mjs';
 import { playMatch, playBatch } from '../tools/sim/play.mjs';
-import { emptyStats, mergeStats, margin, summarize, compare } from '../tools/sim/stats.mjs';
-import { AGENT, RULES } from '../js/data.js';
+import { emptyStats, addMatch, mergeStats, margin, summarize, compare } from '../tools/sim/stats.mjs';
+import { AGENT, RULES, TARGET } from '../js/data.js';
 
 const tiny = (o = {}) => resolveConfig({ samples: 2, target: 4, ...o });
 
@@ -18,12 +18,12 @@ test('a match replays exactly from its config and index; each index rotates the 
 test('a match record has what every report line needs', () => {
   const m = playMatch(tiny(), 0);
   assert.ok(m.winner === 0 || m.winner === 1);
-  assert.ok(m.scores[m.winner] >= 4);
+  assert.ok(m.winBy === 'reel' || m.scores[m.winner] >= 4);
   for (const r of m.rounds) {
     assert.equal(r.cities.length, 3);
     assert.equal(typeof r.tiebreak, 'boolean');
     assert.ok(r.escalations.length <= 1);
-    for (const e of r.escalations) assert.ok(['accept', 'fold'].includes(e.answer));
+    for (const e of r.escalations) assert.ok(e.answers.every((a) => ['accept', 'fold'].includes(a.call)));
   }
 });
 
@@ -62,7 +62,7 @@ test('margins are 95% intervals in percentage points', () => {
 
 test('summaries compute rates and means; a summary compared with itself shows no change', () => {
   const s = emptyStats();
-  Object.assign(s, { rounds: 60, escalated: 30, escalatorWon: 18, pointsHist: { 1: 20, 2: 10, 4: 30 } });
+  Object.assign(s, { rounds: 60, escalated: 30, escalatorWon: 18, maxStake: 30, pointsHist: { 1: 20, 2: 10, 4: 30 } });
   const sum = summarize(s);
   assert.equal(sum.escalation.pct, 50);
   assert.equal(sum.escalatorWins.pct, 60);
@@ -143,7 +143,7 @@ test('matches seat 2 to 4 bots, and each index rotates them one seat', () => {
     assert.equal(m.rotation, 5 % n);
     assert.ok(m.winner >= 0 && m.winner < n);
     assert.equal(m.scores.length, n);
-    assert.ok(m.rounds.every((r) => r.played.length === n && r.escalations.length === 0));
+    assert.ok(m.rounds.every((r) => r.played.length === n));
     assert.deepEqual(playMatch(c, 5), m);
   }
   assert.throws(() => resolveConfig({ seats: 5 }), /seats must be 2 to 4/);
@@ -179,4 +179,84 @@ test('think-time measures every seat count it is given', () => {
   const rows = JSON.parse(execFileSync(process.execPath, [THINK, '--positions', '2', '--rivals', 'wren', '--json'], { encoding: 'utf8' }));
   assert.deepEqual(rows.map((r) => [r.seats, r.rival]), [[2, 'wren'], [3, 'wren'], [4, 'wren']]);
   assert.ok(rows.every((r) => r.positions > 0 && r.mean > 0 && r.max >= r.p95));
+});
+
+test('match records carry the Microfilm, the pot, the tokens and every answer', () => {
+  const m = playMatch(tiny(), 3);
+  assert.ok(['points', 'reel'].includes(m.winBy));
+  assert.deepEqual([m.strips.length, m.tokens.length], [2, 2]);
+  for (const r of m.rounds) {
+    assert.ok(r.film === null || [0, 1, 2].includes(r.film));
+    for (const k of ['strip', 'pot', 'carry']) assert.ok(k in r.result, k);
+    assert.equal(r.tokensAtStart.length, 2);
+    for (const e of r.escalations) assert.ok(e.answers.length === 1 && ['accept', 'fold'].includes(e.answers[0].call));
+  }
+});
+
+test('three seats: an escalation is answered by everyone still in', () => {
+  const es = [0, 1, 2, 3, 4, 5].flatMap((i) => playMatch(tiny({ seats: 3 }), i).rounds.flatMap((r) => r.escalations));
+  for (const e of es) assert.ok(e.answers.length >= 1 && e.answers.length <= 2 && !e.answers.some((a) => a.seat === e.seat));
+});
+
+test('three seats: no drop is recorded for a turn after its seat folded', () => {
+  for (let i = 0; i < 6; i++) {
+    for (const r of playMatch(tiny({ seats: 3 }), i).rounds) {
+      // A seat that folds in an answer on turn t has its turn-t drop refused, so it only has drops from earlier turns.
+      const foldTurn = new Map();
+      for (const e of r.escalations) for (const a of e.answers) if (a.call === 'fold') foldTurn.set(a.seat, e.turn);
+      for (const [seat, t] of foldTurn) for (const p of r.played[seat]) assert.ok(p.turn < t, `seat ${seat} dropped on turn ${p.turn}, folded on ${t}`);
+    }
+  }
+});
+
+test('summaries report the stake game and the Microfilm, and still compare with an older baseline', () => {
+  const sum = summarize(playBatch(tiny(), 0, 4).stats);
+  for (const k of ['reelWins', 'reelComeback', 'filmHolderWins', 'rollovers', 'outOfTokens', 'maxStake', 'foldInAnswer']) assert.ok('pct' in sum[k], k);
+  for (const k of ['tokensSpent', 'potTaken']) assert.ok('mean' in sum[k], k);
+  const old = structuredClone(sum);
+  for (const k of ['reelWins', 'reelComeback', 'filmHolderWins', 'rollovers', 'outOfTokens', 'tokensSpent', 'potTaken']) delete old[k];
+  assert.ok(!compare(old, sum).some((r) => r.key === 'reelWins'));
+});
+
+test('the comeback rate counts reel wins from behind on points', () => {
+  const stats = emptyStats(2);
+  const round = { cities: ['monaco', 'berlin', 'tangier'], film: 0, tokensAtStart: [3, 3], played: [[], []], escalations: [], tiebreak: false, scores: [0, 0],
+    result: { winner: 0, points: 2, folded: null, cityWinners: [1, 0, 0], totals: [[0, 1], [2, 0], [2, 0]], monaco: null, stake: 1, pot: 0, carry: 0, strip: 1 } };
+  const rec = (scores, winner) => ({ index: 0, rotation: 0, winner, winBy: 'reel', scores, strips: winner ? [0, RULES.reel] : [RULES.reel, 0], tokens: [3, 3], capped: false, rounds: [round] });
+  addMatch(stats, rec([6, 4], 1)); // seat 1 completed the reel while behind
+  addMatch(stats, rec([2, 7], 1)); // ahead
+  const sum = summarize(stats);
+  assert.deepEqual([stats.reelWins, stats.reelComebacks, sum.reelComeback.pct], [2, 1, 50]);
+});
+
+test('stake settings and the stakes probe', () => {
+  assert.equal(applyVariant(tiny(), 'stakes.escalate', '0.6').set['stakes.escalate'], 0.6);
+  assert.throws(() => withPatches({ 'stakes.nope': 1 }, () => {}), /unknown sim setting/);
+  const r = sim('--workers', '1', '--run', 'test-sim-probe-stakes', '--probe', 'stakes', '--rounds', '10');
+  assert.deepEqual(Object.keys(r.runs).sort(), ['base', 'no-film', 'no-rollover', 'tokens2', 'tokens9']);
+});
+
+test('a CLI config with no --target resolves to TARGET', () => {
+  assert.equal(resolveConfig({ seed: 'dd', samples: null, target: undefined, pin: [] }).target, TARGET);
+});
+
+test('stake counters have the denominators Task 7 reads', () => {
+  const res = (o) => ({ winner: 0, points: 2, folded: null, cityWinners: [0, 0, 1], totals: null, monaco: null, stake: 1, pot: 0, carry: 0, strip: null, ...o });
+  const rd = (result, o = {}) => ({ cities: ['monaco', 'berlin', 'tangier'], film: null, tokensAtStart: [3, 3], played: [[], []], escalations: [], tiebreak: false, scores: [0, 0], result, ...o });
+  const rec = (rounds, o = {}) => ({ index: 0, rotation: 0, winner: 0, winBy: 'points', scores: [4, 0], strips: [0, 0], tokens: [1, 2], capped: false, rounds, ...o });
+  const stats = emptyStats(2);
+  addMatch(stats, rec([
+    rd(res({ stake: 2, pot: 1, points: 5 }), { film: 0 }), // flip, stake 2, pot 1, film city held and won
+    rd(res({ stake: 2, folded: 1, pot: 2, cityWinners: null }), { tokensAtStart: [3, 0] }), // a seat out of tokens; fold-ended: pot taken counts, maxStake does not
+    rd(res({ winner: null, points: 0, stake: 2, carry: 2 })), // dead heat rolled over
+  ]));
+  addMatch(stats, rec([rd(res({ stake: 4 }))], { capped: true, winner: null, winBy: null, tokens: [0, 0] })); // capped: no tokens spent
+  const sum = summarize(stats);
+  assert.equal(stats.maxStake, 2); // the capped match's stake-4 flip counts as a round too
+  assert.deepEqual([sum.maxStake.n, sum.maxStake.pct], [4, 50]);
+  assert.deepEqual([sum.potTaken.n, sum.potTaken.mean], [3, 1]); // 1, 2, 0 (dead heat excluded)
+  assert.deepEqual([sum.outOfTokens.n, stats.outOfTokens], [4, 1]);
+  assert.deepEqual([sum.tokensSpent.n, sum.tokensSpent.mean], [2, 1.5]); // seats spent 2 and 1, one finished match
+  assert.deepEqual([sum.filmHolderWins.n, sum.filmHolderWins.pct], [1, 100]);
+  assert.deepEqual([sum.rollovers.n, stats.carries], [4, 1]);
 });

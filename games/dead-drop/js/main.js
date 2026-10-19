@@ -4,14 +4,14 @@ import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, s
 import { createSfx } from '../../../shared/sfx.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
-import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, SEAT_NAMES, TURNS } from './data.js';
+import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, RULES, SEAT_NAMES, TARGET, TURNS } from './data.js';
 import { rivalsOf, seatCount } from './engine.js';
-import { attachBot, createTable, guestSession, hostSession, restoreTable } from './session.js';
-import { cardHTML, chipHTML, cityHTML, esc, FAST, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
+import { attachBot, createTable, guestSession, hostSession, restoreTable, canRestore } from './session.js';
+import { canisterHTML, cardHTML, chipHTML, cityHTML, esc, FAST, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
 import { agentSVG, citySVG, spySVG } from './art.js';
 import { createAudio } from './audio.js';
 import { levelFor } from './music.js';
-import { countMatch, countWin } from './meta.js';
+import { countMatch, countWin, migrateMeta } from './meta.js';
 
 const SLUG = 'dead-drop';
 const saved = store(SLUG);
@@ -28,7 +28,7 @@ const pickCodename = (not) => {
   return pool[Math.floor(Math.random() * pool.length)];
 };
 
-const meta = Object.assign({ v: 1, codename: pickCodename(), beaten: [], token: randomToken(), matches: 0, onlineWins: 0 }, saved.get('meta', {}));
+const meta = migrateMeta(saved.get('meta', {}), { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: pickCodename(), token: randomToken() } });
 const saveMeta = () => saved.set('meta', meta);
 saveMeta();
 
@@ -70,6 +70,8 @@ const ui = {
   finalKey: null, // the same for the last round whose final turn's card was due
   stampLand: false, // the final card has just gone: the ×2 stamp lands on the stake at the next render
   initShown: null, // the seat whose First flip token was last drawn (it flips across when this changes)
+  reelKey: null, // the matchId whose full reel card was last due (it plays once per match)
+  holdBoard: false, // a fold is playing out over the board as it stood: render() leaves #screen alone
 };
 let table = null;
 let bot = null;
@@ -145,6 +147,14 @@ const seatColours = (v = view()) => {
 };
 const labelLower = (seat, v) => (ui.mode !== 'pass' && seat === me() ? 'you' : label(seat, v));
 const cityName = (v, ci) => CITY[v.round.cities[ci].id].name;
+/** A count in words where it reads better ("two strips"); digits past ten. */
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const inWords = (n) => NUMBER_WORDS[n] ?? String(n);
+/** "two strips", "one strip": a count in words with its noun. */
+const counted = (n, one, many = `${one}s`) => `${inWords(n)} ${n === 1 ? one : many}`;
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+/** "Two strips win the match": how many strips of film the full reel needs, as a sentence. */
+const reelSentence = (reel) => `${capital(counted(reel, 'strip'))} ${reel === 1 ? 'wins' : 'win'} the match`;
 
 // ── sessions ────────────────────────────────────────────────────────────────
 
@@ -187,6 +197,8 @@ function freshMatchUi() {
   ui.finalKey = null;
   ui.stampLand = false;
   ui.initShown = null;
+  ui.reelKey = null;
+  ui.holdBoard = false;
   cancelDrag();
   clearOverlays();
 }
@@ -451,7 +463,9 @@ async function onUpdate() {
 
 /** One pass of onUpdate(): bring the screen up to the latest view, animating what happened. */
 async function showLatest() {
-  if (ui.mode === 'pass' && table && table.turnSeq > ui.shownSeq) ui.seat = null;
+  // Pass and play: a turn that resolved, or a new round, opens with the device covered (a new round
+  // usually comes from the result, which has already covered it; not if it began behind a fold's exit).
+  if (ui.mode === 'pass' && table && (table.turnSeq > ui.shownSeq || (ui.view && table.state.roundNo !== ui.view.roundNo))) ui.seat = null;
   let v = latestView();
   if (!v) return;
   // A new match id is a rematch (in every mode): leave the dossier for a clean table.
@@ -474,10 +488,15 @@ async function showLatest() {
   // After a flash or a title card, stop as well if a turn resolved meanwhile (the rival locked in
   // while it was up; this player can't, since a card or flash takes every tap and key). The board
   // on screen (ui.view) is still the one from before that turn, so the next pass (ui.dirty)
-  // reveals it from there instead of jumping to the new view unrevealed.
+  // reveals it from there instead of jumping to the new view unrevealed. The same goes for a fold
+  // that ended the round meanwhile (the rival folded behind the round card): the next pass flashes
+  // it, and pulls the folder's agents off the board still on screen. And for a new round that began
+  // meanwhile (online, both players ready while a fold's exit played): the next pass opens it.
   const upToDate = () => {
     if (!reread()) return false;
-    if (v.turnSeq <= ui.shownSeq) return true;
+    const newRound = ui.view && v.roundNo !== ui.view.roundNo;
+    const foldedBehind = ui.view && ui.view.phase === 'plan' && v.phase !== 'plan' && v.roundNo === ui.view.roundNo;
+    if (v.turnSeq <= ui.shownSeq && !foldedBehind && !newRound) return true;
     ui.dirty = true;
     return false;
   };
@@ -488,8 +507,12 @@ async function showLatest() {
     ui.target = null;
     ui.inspect = null;
     const from = ui.mode === 'pass' && ui.prevSpectator ? ui.prevSpectator : prev;
-    await animateTurn(from, v);
+    const shown = v;
+    await animateTurn(from, shown);
     if (!reread()) return;
+    // The board on screen is now the one the reveal ended on: a fold that arrived during the
+    // reveal plays out over it, not over the board from before the turn.
+    ui.view = shown;
   }
   ui.shownSeq = Math.max(ui.shownSeq, v.turnSeq);
   // An escalation just landed: flash it once.
@@ -501,11 +524,50 @@ async function showLatest() {
     await flashEscalate(v, pend.by);
     if (!upToDate()) return;
   }
+  // A fold ended the round: the board stays as it stood under the fold's flash, then the folder's
+  // agents pull out of it and (if the fold left anyone a strip of film) the strip flies. render()
+  // leaves the screen alone meanwhile (ui.holdBoard); ui.view is already the new view, so the
+  // escalation prompt goes, and nothing stale is drawn after.
   const folded = v.round.result?.folded;
   if (ui.view && ui.view.phase === 'plan' && v.phase !== 'plan' && folded !== null && folded !== undefined && v.roundNo === ui.view.roundNo) {
+    // Everything this plays comes from the round that ended, kept here: after an await, `v` is
+    // whatever the latest view is by then.
+    const ended = v;
+    const { strip } = ended.round.result;
+    // Pass and play: the board as both players may see it, drawn from the bottom seat (as a reveal is).
+    const spectator = ui.mode === 'pass' && ui.prevSpectator ? ui.prevSpectator : null;
+    const board = spectator || ui.view;
+    ui.prevSpectator = null;
+    ui.view = ended;
+    ui.caption = '';
+    // As the reveal path does: a pick made in the round that folded must not arm Lock in in the next.
+    ui.selected = null;
+    ui.target = null;
+    ui.inspect = null;
+    ui.holdBoard = true;
+    try {
+      renderPlay({ board, still: true, bottom: spectator ? 0 : null });
+      render();
+      await flashFold(ended, folded);
+      if (!upToDate()) return;
+      const clock = outsideReveal();
+      await exfiltrate(ended, folded, clock);
+      if (!upToDate()) return;
+      if (strip !== null && strip !== undefined) {
+        await flyStrip(ended, strip, clock);
+        if (!upToDate()) return;
+      }
+    } finally {
+      ui.holdBoard = false;
+      ui.caption = '';
+    }
+  }
+  // The full reel wins the match: its card plays once per match, after the final flip (and the
+  // strip's flight) or the fold, and before the result. The board behind it is left as it is.
+  if (v.phase === 'match-over' && v.winBy === 'reel' && ui.reelKey !== v.matchId) {
+    ui.reelKey = v.matchId;
     ui.view = v;
-    render();
-    await flashFold(v, folded);
+    await reelCard(v);
     if (!upToDate()) return;
   }
   // A new round opens on its title card, once per round. The new table goes up behind it, and
@@ -664,6 +726,8 @@ async function finale(e, next, bottom, cancelled) {
     shake($('#board'), 2);
   } else audio.nobody();
   await wait(500);
+  // Whoever held the film city without winning the round takes a strip of film: it flies home.
+  if (e.strip !== null && e.strip !== undefined && !cancelled()) await flyStrip(next, e.strip);
 }
 
 /**
@@ -684,6 +748,120 @@ function flashFold(v, seat) {
   audio.fold();
   const walk = `${label(seat, v)} ${ui.mode !== 'pass' && seat === me() ? 'walk' : 'walks'} away from the round`;
   return showCard(`<p class="big">${jitter('Fold')}</p><p class="small">${esc(walk)}</p>`, `flash fold own-${seat}`, 1000, { label: `Fold: ${walk}` });
+}
+
+/**
+ * A clock for what plays outside a reveal (a fold's exit): plain timers, at once with every
+ * animation skipped or under reduced motion. A quick wait resolves on the spot rather than on a
+ * zero timer, which a hidden tab would hold back. Never a WAAPI .finished, which stalls there.
+ */
+function outsideReveal() {
+  const quick = ui.alwaysSkip || reducedMotion();
+  return {
+    quick,
+    wait: (ms) => (quick ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms))),
+    dur: (ms) => (quick ? 1 : ms),
+  };
+}
+
+/** How long the folder's agents take to lift off the board and fade. */
+const EXFIL_MS = 450;
+
+/** A fold: the folder's agents on the board on screen lift off it and fade, and the ticker says so. */
+async function exfiltrate(v, seat, clock) {
+  say(`${label(seat, v)} ${ui.mode !== 'pass' && seat === me() ? 'pull' : 'pulls'} out of the round.`);
+  if (!clock.quick) for (const el of document.querySelectorAll(`#board .row[data-row$="-${seat}"] .chip`)) el.classList.add('exfil');
+  await clock.wait(EXFIL_MS);
+}
+
+/** How long a strip of film takes to fly from the canister to the scorebar. */
+const FLY_MS = 720;
+
+/**
+ * The Microfilm changes hands: a frame of film flies from the film city's canister to `seat`'s
+ * next empty frame in the scorebar, with the projector's clatter and the news on the ticker; the
+ * scorebar's lights come up for it at night. It keeps the clock it is given: the reveal's (wait,
+ * dur) at the final flip, so Speed up and Skip work, or plain timers outside a reveal. Under
+ * reduced motion nothing flies: the frame just fills.
+ */
+async function flyStrip(v, seat, clock = { wait, dur }) {
+  say(filmLine(v, v.round.result) || '');
+  audio.film();
+  const frame = $(`.scorebar .side.s-${seat} .reel .fr:not(.got)`);
+  const can = $(`#board .city[data-city="${v.round.film}"] .plate .canister`);
+  $('.scorebar')?.classList.add('film-in');
+  if (frame && can && !reducedMotion()) {
+    const a = can.getBoundingClientRect();
+    const b = frame.getBoundingClientRect();
+    const dx = Math.round(a.left + a.width / 2 - (b.left + b.width / 2));
+    const dy = Math.round(a.top + a.height / 2 - (b.top + b.height / 2));
+    const el = document.createElement('i');
+    el.className = `fr got strip-fly own-${seat}`;
+    el.setAttribute('aria-hidden', 'true');
+    Object.assign(el.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.width}px`, height: `${b.height}px` });
+    document.body.append(el);
+    can.classList.add('sending');
+    // Out of the can, up in an arc over the board, turning as it goes, and down into the frame.
+    el.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px) scale(2.6) rotate(-18deg)`, opacity: 0 },
+        { transform: `translate(${dx}px, ${dy - 12}px) scale(2.6) rotate(-14deg)`, opacity: 1, offset: 0.14 },
+        { transform: `translate(${Math.round(dx * 0.45)}px, ${Math.round(dy * 0.45) - 72}px) scale(2) rotate(9deg)`, offset: 0.58 },
+        { transform: 'none', opacity: 1 },
+      ],
+      { duration: clock.dur(FLY_MS), easing: 'cubic-bezier(0.3, 0.1, 0.3, 1)', fill: 'both' },
+    );
+    await clock.wait(FLY_MS);
+    el.remove();
+  }
+  frame?.classList.add('got', 'landed');
+  await clock.wait(450);
+}
+
+/**
+ * The Microfilm's line in a round's result, also the ticker's as the strip flies: who took a
+ * strip of film and why, or why nobody did. Null when the match has no Microfilm.
+ */
+function filmLine(v, res) {
+  const film = v.round.film;
+  if (film === null || !res) return null;
+  const city = cityName(v, film);
+  const s = res.strip;
+  if (s !== null && s !== undefined) {
+    const name = label(s, v);
+    const take = `${ui.mode !== 'pass' && s === me() ? 'you take' : `${name} takes`} a strip of film (${v.strips[s]} of ${v.reel})`;
+    if (res.winner === null) return `${name} held ${city} in the dead heat: ${take}.`;
+    if (res.winner !== s) return `${name} lost the round but held ${city}: ${take}.`;
+    return `${name} held ${city}: ${take}.`; // the holder film (a sim switch): the winner takes it
+  }
+  if (res.folded !== null) return 'A fold: the film stays put.';
+  if (res.winner === null || res.cityWinners?.[film] === null) return `Nobody holds ${city}: the film stays put.`;
+  return `${label(res.winner, v)} won the round, so the film stays put.`;
+}
+
+/** How long the full reel's card stays up (skipped like the round card). */
+const REEL_CARD_MS = 1800;
+
+/**
+ * The full reel wins the match: the bars come in in the winner's colour, a strip of film runs
+ * through the gate with every frame exposed in that colour, "The full reel" lands, and the slip
+ * under it says whose it is.
+ */
+function reelCard(v) {
+  const w = v.winner;
+  const you = ui.mode !== 'pass' && w === me();
+  const name = label(w, v);
+  const strips = v.reel === 1 ? 'the strip' : v.reel === 2 ? 'both strips' : `all ${inWords(v.reel)} strips`;
+  const whose = ui.mode === 'pass' ? `${name}’s` : you ? 'yours' : 'theirs';
+  const line = `${name} ${you ? 'have' : 'has'} ${strips}. The match is ${whose}.`;
+  const frames = Array.from({ length: v.reel }, (_, i) => `<i style="--i:${i}">${spySVG()}</i>`).join('');
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="filmstrip" aria-hidden="true">${frames}</div>
+    <h2 class="big">${jitter('The full reel', 13)}</h2>
+    <p class="small">${esc(line)}</p>`;
+  const done = showCard(html, `reel-card own-${w}`, REEL_CARD_MS, { label: `The full reel: ${line}` });
+  if (ui.card) audio.slam();
+  return done;
 }
 
 // ── title cards ─────────────────────────────────────────────────────────────
@@ -724,9 +902,10 @@ function showCard(html, className, ms, { label = '' } = {}) {
   });
 }
 
-/** Take down every overlay a match put up: the title card or flash on screen (one at a time). */
+/** Take down every overlay a match put up: the title card or flash on screen (one at a time), and a strip of film in flight. */
 function clearOverlays() {
   ui.card?.skip();
+  for (const el of document.querySelectorAll('.strip-fly')) el.remove();
 }
 
 /** The player skips the card on screen (a tap past its guard, or Enter, Space or Escape). */
@@ -741,14 +920,32 @@ function skipCard() {
  */
 function roundCard(v) {
   const n = v.roundNo + 1;
+  const { film, pot } = v.round;
   const cities = v.round.cities.map((c) => CITY[c.id]);
+  const canister = canisterHTML({ label: false });
   const lines = cities
-    .map((c, i) => `<div class="line" style="--i:${i}"><span class="sky" aria-hidden="true">${citySVG(c.id)}</span><h3>${esc(c.name)}</h3><p>${esc(c.rule)}</p></div>`)
+    .map((c, i) => {
+      const tag = i === film ? `<span class="film-tag">${canister}Carries the film</span>` : '';
+      return `<div class="line${i === film ? ' film' : ''}" style="--i:${i}"><span class="sky" aria-hidden="true">${citySVG(c.id)}</span><div class="name"><h3>${esc(c.name)}</h3>${tag}</div><p>${esc(c.rule)}</p></div>`;
+    })
     .join('');
+  // Under the credits: where the Microfilm travels, and any points a dead heat rolled over.
+  const notes = [];
+  const said = [];
+  if (film !== null) {
+    notes.push(`<p class="film-line">${canister}<span>The film travels via <b>${esc(cities[film].name)}</b>.</span></p>`);
+    said.push(`The film travels via ${cities[film].name}.`);
+  }
+  if (pot > 0) {
+    const line = `${pot} point${pot === 1 ? '' : 's'} rolled over into this round’s pot.`;
+    notes.push(`<p class="pot-line">${esc(line)}</p>`);
+    said.push(line);
+  }
   const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <h2 class="big">${jitter(`Round ${n}`, n + 4)}</h2>
-    <div class="slate">${lines}</div>`;
-  return showCard(html, 'title-card', ROUND_CARD_MS, { label: `Round ${n}: ${cities.map((c) => c.name).join(', ')}` });
+    <div class="slate">${lines}</div>
+    ${notes.length ? `<div class="notes">${notes.join('')}</div>` : ''}`;
+  return showCard(html, 'title-card', ROUND_CARD_MS, { label: [`Round ${n}: ${cities.map((c) => c.name).join(', ')}.`, ...said].join(' ') });
 }
 
 /** How long the final turn's card stays up (skipped like the round card). */
@@ -958,8 +1155,14 @@ function hintText(v) {
   const t = v.round.turn;
   if (v.roundNo === 0 && t === 1) return 'You and your rival both drop an agent in secret. Then the cards flip together, and the First flip token shows whose tricks go first.';
   if (v.roundNo === 0 && t === 2) return 'Higher total holds a city. Hold two of the three cities after six drops to win the round.';
-  if (v.roundNo === 0 && t === 3) return 'Feeling strong? Escalate doubles the stake: your rival must fold or play on.';
-  if (v.roundNo === 0 && t === TURNS) return 'Final turn: the stake doubles when the cards flip. Folding now costs only the current stake.';
+  if (v.roundNo === 0 && t === 3) {
+    // "left" once one is spent (an escalation on turn 1 or 2).
+    const left = v.tokens[me()];
+    const have = left < RULES.tokens ? `${counted(left, 'token')} left for the match` : `${counted(left, 'token')} for the whole match`;
+    return `Feeling strong? Escalate doubles the stake.${left > 0 ? ` You have ${have}, so pick your moments.` : ''}`;
+  }
+  if (v.roundNo === 0 && t === 4 && v.round.film !== null) return `The canister marks the Microfilm. Lose a round but hold that city, and you take a strip of film. ${reelSentence(v.reel)}.`;
+  if (v.roundNo === 0 && t === TURNS) return `Final turn: the stake doubles when the cards flip. Fold now and your rival takes only the current stake${v.round.pot > 0 ? ' (and the pot)' : ''}.`;
   if (v.roundNo === 1 && t === 1) return 'Tap any card on the board to read what it does.';
   return '';
 }
@@ -983,6 +1186,19 @@ function inspectText(v) {
   return `${a.name} (${a.power}): ${a.text}${extra.length ? ` Now: ${extra.join(', ')}.` : ''}`;
 }
 
+/**
+ * One side's marks: its escalation tokens (one chit per token it started the match with, spent
+ * ones outlined) and, with a reel, its film frames (filled once earned).
+ */
+function marksHTML(v, seat) {
+  const left = v.tokens[seat];
+  const chits = Math.max(RULES.tokens, left);
+  const tokens = `<span class="tokens" role="img" aria-label="${left} escalation token${left === 1 ? '' : 's'} left" title="Escalation tokens: ${left} of ${chits} left">${Array.from({ length: chits }, (_, i) => `<i class="tk${i < left ? '' : ' spent'}"></i>`).join('')}</span>`;
+  const got = v.strips[seat];
+  const reel = v.reel > 0 ? `<span class="reel" role="img" aria-label="${got} of ${v.reel} film strips" title="Film strips: ${got} of ${v.reel}. ${reelSentence(v.reel)}.">${Array.from({ length: v.reel }, (_, i) => `<i class="fr${i < got ? ' got' : ''}"></i>`).join('')}</span>` : '';
+  return `<span class="marks">${tokens}${reel}</span>`;
+}
+
 function scorebarHTML(v, bottom) {
   const top = foe(v, bottom);
   const R = v.round;
@@ -993,6 +1209,9 @@ function scorebarHTML(v, bottom) {
   const land = x2 && ui.stampLand;
   if (x2) ui.stampLand = false;
   const stakeNote = x2 ? `<i class="x2-stamp${land ? ' land' : ''}" title="The stake doubles on the final flip">×2</i>` : v.phase === 'plan' ? `<small>${stake * 2} at the final flip</small>` : '';
+  // The pot (points a dead heat rolled over) hangs off the slip's left edge. After a fold the pot
+  // holds the folded stake too, which the result explains: the slip shows it only while it's at stake.
+  const pot = R.pot > 0 && (v.phase === 'plan' || R.result?.folded === null) ? `<i class="pot" title="The pot: the round’s winner takes it">+${R.pot}</i>` : '';
   // The First flip token sits beside the seat whose flip tricks fire first this turn (during a
   // reveal the board is the view from before it, so the token stays with the turn being flipped).
   // When it changes hands it flips across once (.moved); an empty slot keeps the names still.
@@ -1006,19 +1225,22 @@ function scorebarHTML(v, bottom) {
     return `<span class="first-flip${moved ? ' moved' : ''}" role="img" aria-label="First flip: ${esc(name)}" title="First flip: ${esc(whose)} flip tricks go first this turn">1st</span>`;
   };
   return `<div class="scorebar">
-    <div class="side s-${top}"><span class="tag"><span class="who">${esc(label(top, v))}</span>${token(top)}</span><b class="score" data-score="${top}">${v.scores[top]}</b></div>
+    <div class="side s-${top}"><span class="tag"><span class="who">${esc(label(top, v))}</span>${token(top)}</span>${marksHTML(v, top)}<b class="score" data-score="${top}">${v.scores[top]}</b></div>
     <div class="mid">
-      <span class="stake${stake > 1 ? ' hot' : ''}" title="Points this round is worth">Stake <b>${stake}</b>${stakeNote}</span>
+      <span class="stake${stake > 1 ? ' hot' : ''}" title="Points this round is worth">${pot}Stake <b>${stake}</b>${stakeNote}</span>
       <span class="turn">${v.phase === 'plan' ? `Turn ${R.turn} of ${TURNS}` : `Round ${v.roundNo + 1}`} · first to ${v.target}</span>
     </div>
-    <div class="side s-${bottom}"><b class="score" data-score="${bottom}">${v.scores[bottom]}</b><span class="tag">${token(bottom)}<span class="who">${esc(label(bottom, v))}</span></span></div>
+    <div class="side s-${bottom}"><b class="score" data-score="${bottom}">${v.scores[bottom]}</b>${marksHTML(v, bottom)}<span class="tag">${token(bottom)}<span class="who">${esc(label(bottom, v))}</span></span></div>
   </div>`;
 }
 
 function controlsHTML(v) {
   const R = v.round;
   if (v.phase !== 'plan' || ui.mode === 'pass' && ui.seat === null) return `<div class="controls"><p class="status">${esc(statusText(v))}</p></div>`;
-  const canEsc = !R.escalated.some(Boolean) && !R.pending;
+  // Escalating spends a token: with none left the button stays disabled and says so.
+  const left = v.tokens[me()];
+  const canEsc = left > 0 && !R.escalated.some(Boolean) && !R.pending;
+  const escLabel = left > 0 ? `Escalate: ${left} token${left === 1 ? '' : 's'} left` : 'Escalate: no tokens left';
   const sel = ui.selected && ui.target !== null;
   const lockBtn = myPlan(v)
     ? `<button class="slip" data-action="unlock" ${R.rivalLocked || !R.plan ? 'disabled' : ''}>Take back<kbd>Esc</kbd></button>`
@@ -1026,7 +1248,7 @@ function controlsHTML(v) {
   return `<div class="controls">
     <p class="status">${esc(statusText(v))}</p>
     <div class="btns">
-      <button class="slip esc" data-action="escalate" ${canEsc ? '' : 'disabled'}>Escalate<kbd>E</kbd></button>
+      <button class="slip esc${left > 0 ? '' : ' out'}" data-action="escalate" aria-label="${escLabel}" title="${escLabel}" ${canEsc ? '' : 'disabled'}><span>Escalate</span><small class="left">${left} left</small><kbd>E</kbd></button>
       <button class="slip" data-action="fold">Fold<kbd>F</kbd></button>
       ${lockBtn}
     </div>
@@ -1053,16 +1275,31 @@ function resultHTML(v, bottom) {
   else if (res.winner === null) head = 'Dead heat';
   else head = `${winnerName} ${ui.mode !== 'pass' && res.winner === me() ? 'take' : 'takes'} the round`;
   const lines = [];
-  if (res.folded !== null) lines.push(`${label(res.winner, v)} ${ui.mode !== 'pass' && res.winner === me() ? 'score' : 'scores'} ${res.points} (the stake).`);
+  // A fold pays the stake (and any pot) to whoever is left; a flip win pays the doubled stake plus
+  // the pot; a dead heat rolls the stake and the pot into the next round's pot.
+  if (res.folded !== null) lines.push(esc(`${label(res.winner, v)} ${ui.mode !== 'pass' && res.winner === me() ? 'score' : 'scores'} ${res.points} (the stake${res.points > res.stake ? ' and the pot' : ''}).`));
   else {
     R.cities.forEach((c, ci) => {
       const w = res.cityWinners[ci];
       const t = res.totals[ci];
       lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} <small>${t[bottom]} to ${t[foe(v, bottom)]}</small></span>`);
     });
-    if (res.winner !== null) lines.push(`<span class="pts">+${res.points} to ${esc(label(res.winner, v))} <small>stake ${res.stake}, doubled on the final flip</small></span>`);
-    else lines.push('<span class="pts">Nobody scores.</span>');
+    if (res.winner !== null) lines.push(`<span class="pts">+${res.points} to ${esc(label(res.winner, v))} <small>stake ${res.stake}, doubled on the final flip${res.pot > 0 ? `, plus a pot of ${res.pot}` : ''}</small></span>`);
+    else {
+      // The match can end on a dead heat (Monaco's +1, or the reel): then nothing rolls on.
+      const points = `${res.carry} point${res.carry === 1 ? '' : 's'}`;
+      const carry = res.carry > 0 ? (over ? ` ${points} left on the table.` : ` ${points} ${res.carry === 1 ? 'rolls' : 'roll'} into the next round’s pot.`) : '';
+      lines.push(`<span class="pts">Nobody scores.${esc(carry)}</span>`);
+    }
     if (res.monaco !== null && res.monaco !== undefined) lines.push(`<span class="pts">+1 Monaco bonus to ${esc(label(res.monaco, v))}</span>`);
+  }
+  // The Microfilm: a frame in the taker's colour beside who took a strip, or the canister (the
+  // film stays in it) beside why nobody did.
+  const film = filmLine(v, res);
+  if (film !== null) {
+    const taken = res.strip !== null && res.strip !== undefined;
+    const icon = taken ? `<i class="fr got own-${res.strip}" aria-hidden="true"></i>` : canisterHTML({ label: false });
+    lines.push(`<span class="pts strip-line${taken ? ' taken' : ''}">${icon}<span>${esc(film)}</span></span>`);
   }
   const waiting = ui.mode === 'host' || ui.mode === 'guest' ? v.ready[me()] && rivals(v).some((s) => !v.ready[s]) : false;
   const btn = over
@@ -1100,15 +1337,21 @@ function peerBannerHTML() {
 /** The reveal's button: a tap speeds the reveal up, the next one skips it (tapReveal). */
 const revealLabel = () => `${ui.speed >= FAST ? 'Skip' : 'Speed up'}<kbd>Space</kbd>`;
 
-function renderPlay({ board = view(), hand = board, revealing = false, bottom = null } = {}) {
-  if (ui.drag && (revealing || !canDrag())) cancelDrag();
+/**
+ * The play screen. During a reveal, `board` is the view the turn is flipped over and `hand` the
+ * view after it. `still` draws a board that is playing something out outside a reveal (a fold's
+ * exit): no choosing, no ghost, a quiet hand, and only the status line under the ticker.
+ */
+function renderPlay({ board = view(), hand = board, revealing = false, still = false, bottom = null } = {}) {
+  if (ui.drag && (revealing || still || !canDrag())) cancelDrag();
   const v = board;
   const b = bottom ?? (ui.mode === 'pass' ? (ui.seat ?? 0) : me());
   const R = v.round;
-  const choosing = !!ui.selected && !myPlan(v) && v.phase === 'plan' && !revealing;
+  const busy = revealing || still;
+  const choosing = !!ui.selected && !myPlan(v) && v.phase === 'plan' && !busy;
   const legalCities = choosing ? R.legal.filter((d) => d.uid === ui.selected).map((d) => d.city) : [];
   let ghost = null;
-  if (!revealing && v.phase === 'plan') {
+  if (!busy && v.phase === 'plan') {
     const mine = myPlan(v);
     const planned = mine && !mine.pass ? mine : ui.selected && ui.target !== null ? { uid: ui.selected, city: ui.target } : null;
     const cv = planned && R.hand.find((c) => c.uid === planned.uid);
@@ -1126,16 +1369,16 @@ function renderPlay({ board = view(), hand = board, revealing = false, bottom = 
     })
     .join('');
   const colours = seatColours(v);
-  const caption = revealing ? ui.caption : ui.caption || inspectText(v) || hintText(v);
+  const caption = busy ? ui.caption : ui.caption || inspectText(v) || hintText(v);
   syncNight();
   $('#screen').innerHTML = `<div class="play ${colours.map((c, s) => `c${s}-${c}`).join(' ')}${revealing ? ' revealing' : ''}" data-bottom="${b}">
     ${peerBannerHTML()}
     ${scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
     <p class="ticker" id="ticker" role="status">${esc(caption)}</p>
-    ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : controlsHTML(v)}
-    ${handHTML(hand, revealing)}
-    ${!revealing && v.phase !== 'plan' ? resultHTML(v, b) : ''}
+    ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : still ? '<div class="controls"><p class="status"></p></div>' : controlsHTML(v)}
+    ${handHTML(hand, busy)}
+    ${!busy && v.phase !== 'plan' ? resultHTML(v, b) : ''}
   </div>`;
   markDrag();
 }
@@ -1145,12 +1388,27 @@ function overHTML() {
   const bottom = ui.mode === 'pass' ? 0 : me();
   const won = v.winner === bottom;
   const head = ui.mode === 'pass' ? `${v.names[v.winner]} wins` : won ? 'Mission accomplished' : 'Burned';
-  const sub = ui.mode === 'pass' ? 'The other spymaster is reassigned to a lighthouse.' : won ? `You beat ${label(foe(v, bottom), v)} ${v.scores[bottom]} to ${v.scores[foe(v, bottom)]}.` : `${label(foe(v, bottom), v)} beat you ${v.scores[foe(v, bottom)]} to ${v.scores[bottom]}.`;
+  const reeled = v.winBy === 'reel';
+  const sub = reeled
+    ? ui.mode !== 'pass' && won ? 'You took the full reel.' : `${label(v.winner, v)} took the full reel.`
+    : ui.mode === 'pass' ? 'The other spymaster is reassigned to a lighthouse.' : won ? `You beat ${label(foe(v, bottom), v)} ${v.scores[bottom]} to ${v.scores[foe(v, bottom)]}.` : `${label(foe(v, bottom), v)} beat you ${v.scores[foe(v, bottom)]} to ${v.scores[bottom]}.`;
+  // Each side's strips of film, as frames under its score.
+  const reel = (seat) =>
+    v.reel > 0
+      ? `<span class="reel own-${seat}" role="img" aria-label="${v.strips[seat]} of ${v.reel} film strips">${Array.from({ length: v.reel }, (_, i) => `<i class="fr${i < v.strips[seat] ? ' got' : ''}"></i>`).join('')}</span>`
+      : '';
   const rounds = v.history
     .map((h, i) => {
       const who = h.winner === null ? 'nobody' : label(h.winner, v);
       const how = h.folded !== null ? `${label(h.folded, v)} folded` : h.winner === null ? 'dead heat' : `${h.cityWinners.filter((w) => w === h.winner).length} of 3 cities`;
-      return `<li class="w-${h.winner === null ? 'none' : h.winner === bottom ? 'me' : 'them'}"><span class="n">${i + 1}</span><span class="cities">${h.cities.map((c) => esc(CITY[c].name)).join(', ')}</span><span class="how">${esc(how)}</span><b>${h.winner === null ? '—' : `+${h.points}`} ${esc(who)}</b></li>`;
+      // A round that gave a strip of film: a frame in the taker's colour, beside the film city.
+      const strip = h.strip !== null && h.strip !== undefined && h.film !== null && h.film !== undefined;
+      const frame = (ci) => {
+        if (!strip || ci !== h.film) return '';
+        const said = `${label(h.strip, v)} took a strip of film from ${CITY[h.cities[ci]].name}`;
+        return `<i class="fr got own-${h.strip}" role="img" aria-label="${esc(said)}" title="${esc(said)}"></i>`;
+      };
+      return `<li class="w-${h.winner === null ? 'none' : `${h.winner === bottom ? 'me' : 'them'} own-${h.winner}`}"><span class="n">${i + 1}</span><span class="cities">${h.cities.map((c, ci) => `${esc(CITY[c].name)}${frame(ci)}`).join(', ')}</span><span class="how">${esc(how)}</span><b>${h.winner === null ? '—' : `+${h.points}`} ${esc(who)}</b></li>`;
     })
     .join('');
   const ri = ui.rival ? RIVALS.findIndex((r) => r.id === ui.rival.id) : -1;
@@ -1164,7 +1422,7 @@ function overHTML() {
       <p class="stamp-line">Dossier · ${esc(v.names.join(' vs '))}</p>
       <h2>${jitter(head, 9)}</h2>
       <p class="sub">${esc(sub)}</p>
-      <p class="final"><span>${esc(label(bottom, v))}</span><b>${v.scores[bottom]}</b><i>to</i><b>${v.scores[foe(v, bottom)]}</b><span>${esc(label(foe(v, bottom), v))}</span></p>
+      <p class="final"><span>${esc(label(bottom, v))}</span><span class="score-film"><b>${v.scores[bottom]}</b>${reel(bottom)}</span><i>to</i><span class="score-film"><b>${v.scores[foe(v, bottom)]}</b>${reel(foe(v, bottom))}</span><span>${esc(label(foe(v, bottom), v))}</span></p>
       <ol class="rounds">${rounds}</ol>
       ${ui.mode === 'solo' && won && ri === RIVALS.length - 1 ? '<p class="sub">You beat Control. There is nobody left to fool.</p>' : ''}
     </div>
@@ -1188,13 +1446,25 @@ const HELP_TABS = [
   ['cities', 'Cities'],
   ['keys', 'Keys'],
 ];
-const HELP_RULES = [
-  'Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.',
-  'After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.',
-  'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire.',
-  'Escalate once per round, by whoever calls it first, to double the stake. Your rival must fold (giving you the current stake) or play on. You can fold any time. If the round reaches the final flip, the stake doubles again.',
-  'First to 10 points wins the match.',
-];
+/** The Rules tab. Its numbers come from the match on screen, or from the defaults off the table. */
+function helpRules() {
+  const v = ['play', 'cover', 'over'].includes(ui.screen) ? view() : null;
+  const reel = v ? v.reel : RULES.reel;
+  const target = v ? v.target : TARGET;
+  return [
+    'Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.',
+    'After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.',
+    'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire.',
+    `Each player has ${counted(RULES.tokens, 'escalation token')} for the whole match. Escalate (once per round, by whoever calls it first) to spend one and double the stake: your rival must fold or play on. You can fold any time; whoever wins the round takes the stake and everything in the pot. If the round reaches the final flip, the stake doubles again.`,
+    'A dead heat scores nothing: the stake and the pot roll over into the next round.',
+    ...(reel > 0
+      ? [
+          `One city each round carries the Microfilm (the canister on its plate). Lose the round but hold that city at the end, and you take a strip of film (in a dead heat, whoever holds it does). ${reelSentence(reel)} outright, whatever the score. The round’s winner never takes a strip, so a round that ends in a fold awards none.`,
+        ]
+      : []),
+    reel > 0 ? `First to ${target} points, or the full reel, wins the match.` : `First to ${target} points wins the match.`,
+  ];
+}
 /** Keys tab: [keys, what they do]. The text reads as one line joined with " · ". */
 const HELP_KEYS = [
   [['1–7'], 'pick an agent · or drag a card onto a city'],
@@ -1220,7 +1490,7 @@ function helpBodyHTML(tab) {
   if (tab === 'agents') return `<ul class="agent-list">${AGENTS.map((a) => `<li><span class="art">${agentSVG(a.id)}</span><b>${esc(a.name)} <i>${a.power}</i></b><span>${esc(a.text)}</span></li>`).join('')}</ul>`;
   if (tab === 'cities') return `<ul class="city-list">${CITIES.map((c) => `<li><b>${esc(c.name)}</b> ${esc(c.rule)}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</li>`).join('')}</ul>`;
   if (tab === 'keys') return `<ul class="key-list">${HELP_KEYS.map(([keys, text]) => `<li><span class="keys">${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')}</span> <span>${esc(text)}</span></li>`).join('')}</ul>`;
-  return `<ol class="rules">${HELP_RULES.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`;
+  return `<ol class="rules">${helpRules().map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`;
 }
 
 /**
@@ -1264,10 +1534,13 @@ function modalHTML() {
   if (!v) return '';
   const rival = foe(v);
   if (ui.modal === 'fold') {
-    const gets = v.round.stake;
+    // A fold pays the stake into the pot, and the rival takes the lot.
+    const gets = v.round.stake + v.round.pot;
+    const film = v.round.film;
     return `<div class="modal" data-action="close-modal"><div class="sheet small" role="dialog" aria-label="Fold" data-stop>
       <h2>${jitter('Fold?', 2)}</h2>
-      <p>${esc(label(rival, v))} ${ui.mode === 'pass' ? 'takes' : 'takes'} ${gets} point${gets === 1 ? '' : 's'} and the round ends.</p>
+      <p>${esc(label(rival, v))} takes ${gets} point${gets === 1 ? '' : 's'} and the round ends.</p>
+      ${film !== null ? `<p class="film-note">${canisterHTML({ label: false })}<span>A fold awards no film: nobody takes a strip from ${esc(cityName(v, film))} this round.</span></p>` : ''}
       <div class="btns"><button class="slip" data-action="confirm-fold">Fold<kbd>F</kbd></button><button class="slip primary" data-action="close-modal">Keep playing<kbd>Esc</kbd></button></div>
     </div></div>`;
   }
@@ -1283,7 +1556,8 @@ function modalHTML() {
     const by = R.pending.by;
     return `<div class="modal hot"><div class="sheet small" role="dialog" aria-label="Escalation">
       <h2>${jitter(`${label(by, v)} escalates`, 6)}</h2>
-      <p>Play on and this round is worth <b>${R.stake * 2}</b>, or <b>${R.stake * 4}</b> if it reaches the final flip. Fold now and ${esc(label(by, v))} takes <b>${R.stake}</b>.</p>
+      <p>Play on and this round is worth <b>${R.stake * 2}</b>, or <b>${R.stake * 4}</b> if it reaches the final flip${R.pot > 0 ? `, plus the pot of <b>${R.pot}</b>` : ''}. Fold now and ${esc(label(by, v))} takes <b>${R.stake + R.pot}</b>.</p>
+      ${R.film !== null ? `<p class="film-note">${canisterHTML({ label: false })}<span>Play on and lose, but hold ${esc(cityName(v, R.film))}, and you still take a strip of film. ${reelSentence(v.reel)}. A fold awards no film.</span></p>` : ''}
       <div class="btns"><button class="slip primary" data-action="respond" data-accept="1">Play on<kbd>Enter</kbd></button><button class="slip" data-action="respond" data-accept="0">Fold<kbd>F</kbd></button></div>
     </div></div>`;
   }
@@ -1325,7 +1599,8 @@ function render() {
   else if (s === 'cover') $('#screen').innerHTML = coverHTML();
   else if (s === 'over') $('#screen').innerHTML = view() ? overHTML() : '';
   else if (s === 'play' && view()) {
-    if (!ui.animating) renderPlay();
+    // A reveal or a fold's exit draws the table itself until it is done.
+    if (!ui.animating && !ui.holdBoard) renderPlay();
   }
   const m = ui.screen === 'play' || ui.modal === 'help' ? modalHTML() : '';
   // Leave an unchanged modal alone, so a rival's move doesn't scroll the help sheet back up.
@@ -1405,7 +1680,7 @@ let dragEndedAt = -Infinity; // performance.now() when the last drag ended
 /** A drag may start, or go on: the table is up, nothing covers it, and I still have a drop to make. */
 function canDrag() {
   const v = view();
-  if (ui.screen !== 'play' || ui.modal || ui.card || ui.animating || !v || v.phase !== 'plan' || myPlan(v)) return false;
+  if (ui.screen !== 'play' || ui.modal || ui.card || ui.animating || ui.holdBoard || !v || v.phase !== 'plan' || myPlan(v)) return false;
   if (ui.mode === 'pass' && ui.seat === null) return false;
   return v.round.legal.length > 0;
 }
@@ -1544,7 +1819,7 @@ function tapReveal() {
 /** See the board (B): the round result shrinks to a strip at the bottom, or comes back. */
 function togglePeek() {
   const v = view();
-  if (ui.animating || ui.screen !== 'play' || !v || v.phase === 'plan' || !v.round.result) return;
+  if (ui.animating || ui.holdBoard || ui.screen !== 'play' || !v || v.phase === 'plan' || !v.round.result) return;
   const refocus = document.activeElement?.dataset?.action === 'peek';
   ui.peek = !ui.peek;
   audio.place();
@@ -1564,6 +1839,12 @@ const actions = {
   continue: () => {
     const m = saved.get('match', null);
     if (!m) return;
+    // A stale second tab may have written an older save since this tab booted.
+    if (!canRestore(m.table)) {
+      clearOld('match');
+      toast(OLD_SAVE_TOAST);
+      return;
+    }
     if (m.mode === 'pass') startPass(m.table);
     else startSolo(m.rival, m.table);
   },
@@ -1636,7 +1917,7 @@ const actions = {
   },
   escalate: () => {
     const v = view();
-    if (!v || v.phase !== 'plan' || v.round.escalated.some(Boolean) || v.round.pending) return;
+    if (!v || v.phase !== 'plan' || v.round.escalated.some(Boolean) || v.round.pending || v.tokens[me()] < 1) return;
     act({ a: 'escalate' });
   },
   fold: () => {
@@ -1748,6 +2029,12 @@ document.addEventListener('keydown', (ev) => {
   }
   if (k === 'm' || k === 'M') return actions.mute();
   if (k === '?') return actions.help();
+  // A fold's exit or a strip's flight holds the board: no plan-phase key acts on it. (Enter is
+  // kept from pressing a focused button underneath.)
+  if (ui.holdBoard) {
+    if (k === 'Enter') ev.preventDefault();
+    return;
+  }
   if (ui.modal) {
     if (k === 'Escape') {
       ev.preventDefault();
@@ -1773,6 +2060,12 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (v.phase !== 'plan') {
+    // A fold's exit is still playing over the old board: the result isn't up yet, so Enter (next
+    // round) and B (See the board) wait for it, as they do while a card is up.
+    if (ui.holdBoard) {
+      if (k === 'Enter') ev.preventDefault();
+      return;
+    }
     if (k === 'Enter') {
       // On a focused See the board / Back to the result button, Enter presses that button.
       if (document.activeElement?.dataset?.action === 'peek') return;
@@ -1811,13 +2104,29 @@ window.addEventListener('focus', resumeMusic);
 
 // ── start ───────────────────────────────────────────────────────────────────
 
+// A match saved by an older build can't be resumed: clear it and say so once, on the title.
+const OLD_SAVE_TOAST = 'Your saved match was from an older version of Dead Drop, so it has been cleared.';
+let clearedOld = false;
+const clearOld = (key) => {
+  saved.remove(key);
+  clearedOld = true;
+};
+{
+  const m = saved.get('match', null);
+  if (m && !canRestore(m.table)) clearOld('match');
+}
+
 function route() {
   const h = new URLSearchParams(location.hash.slice(1));
   const join = cleanCode(h.get('join'));
   const host = cleanCode(h.get('host'));
   if (join) return startGuest(join);
   if (host) {
-    const s = saved.get(`host-${host}`, null);
+    let s = saved.get(`host-${host}`, null);
+    if (s && !canRestore(s.table)) {
+      clearOld(`host-${host}`);
+      s = null;
+    }
     return startHost({ code: host, resume: s && Date.now() - s.at < 6 * 3600e3 ? s.table : null });
   }
   ui.screen = 'title';
@@ -1911,6 +2220,11 @@ markReady({
     if (ui.mode !== 'solo' || !table) return false;
     return table.act(1, { a: 'escalate' });
   },
+  /** The computer rival folds now, through the table as its own fold does (the flash, its exit and the result follow). */
+  rivalFolds() {
+    if (ui.mode !== 'solo' || !table) return false;
+    return table.act(1, { a: 'fold' });
+  },
   /** Leave the table through the Leave button's own action, even mid-reveal (the reveal ends at once, silently). */
   leave: () => actions.title(),
   /** Keep the title card or flash on screen until it is skipped (for a steady screenshot). */
@@ -1945,6 +2259,9 @@ markReady({
       bot?.stop();
       table.state.round.stake = 2;
       table.state.round.escalated = [true, false];
+      // You have escalated once (a token spent) and hold a strip of film, so both marks show.
+      table.state.tokens = [2, 3];
+      table.state.strips = [1, 0];
       ui.screen = 'play';
       ui.view = table.view(0);
       ui.selected = ui.view.round.legal[0]?.uid ?? null;
@@ -1957,3 +2274,5 @@ markReady({
     }
   },
 });
+
+if (clearedOld) toast(OLD_SAVE_TOAST);

@@ -145,16 +145,6 @@ test('matchWinner: the single leader at or past the target', () => {
   assert.equal(E.matchWinner([9, 9, 9, 9], 10), null);
 });
 
-test('stakes stay two-player until Phase 2b-i', () => {
-  const s = m(3, ['berlin', 'monaco', 'tangier']);
-  const before = JSON.stringify(s);
-  assert.equal(E.canEscalate(s, 0), false);
-  assert.equal(E.escalate(s, 0), false);
-  assert.equal(E.respond(s, 1, true), false);
-  assert.equal(E.fold(s, 2), false);
-  assert.equal(JSON.stringify(s), before);
-});
-
 test('a turn where nobody can drop resolves by itself at three seats', () => {
   const s = m(3, ['moscow', 'helsinki', 'venice']);
   play(s, ['heavy', 0], ['heavy', 0], ['heavy', 0]);
@@ -201,7 +191,7 @@ function leaks(state, seat) {
   for (const c of Object.values(R.cards)) if (c.faceDown && c.owner !== seat) secret.add(c.uid);
   (function walk(o, path) {
     if (!o || typeof o !== 'object') return;
-    for (const k of ['cards', 'hands', 'decks', 'plans', 'rng']) if (Object.hasOwn(o, k)) out.push(`${path}.${k}: engine internals`);
+    for (const k of ['cards', 'hands', 'decks', 'plans', 'rng', 'calls']) if (Object.hasOwn(o, k)) out.push(`${path}.${k}: engine internals`);
     if (secret.has(o.uid) && ['kind', 'id0', 'power', 'base', 'as'].some((k) => o[k] !== undefined && o[k] !== null)) out.push(`${path}: names secret card ${o.uid}`);
     for (const [k, x] of Object.entries(o)) walk(x, `${path}.${k}`);
   })(v, '$');
@@ -211,7 +201,7 @@ function leaks(state, seat) {
   return out;
 }
 
-/** Random legal play at n seats; calls check(state) after every action. Escalates now and then. */
+/** Random legal play at n seats; calls check(state) after every action. Escalates, answers and folds now and then. */
 function randomMatch(n, seed, check) {
   const s = E.newMatch({ seed, seats: n, target: 6 });
   let r = seed >>> 0;
@@ -222,11 +212,10 @@ function randomMatch(n, seed, check) {
       rounds++;
       continue;
     }
-    if (next() % 97 === 0) {
-      const ok = E.escalate(s, next() % n);
-      if (n > 2) assert.equal(ok, false, 'escalation works only at two seats');
-    }
-    if (s.round.pending) E.respond(s, 1 - s.round.pending.by, next() % 5 !== 0);
+    if (next() % 97 === 0) E.escalate(s, next() % n);
+    for (const seat of s.round.pending?.from ?? []) if (s.round.pending) E.respond(s, seat, next() % 5 !== 0);
+    if (next() % 211 === 0) E.fold(s, next() % n);
+    check(s);
     if (s.phase !== 'plan') continue;
     for (let seat = 0; seat < n; seat++) {
       if (s.round.plans[seat]) continue;
@@ -239,6 +228,28 @@ function randomMatch(n, seed, check) {
   }
   return s;
 }
+
+test('property: no seat ever sees a card face down that it has seen face up, at any table size', () => {
+  const UID = /^[a-d]\d+\.[0-9a-z]{4}$/;
+  for (const [n, seeds] of [[2, 150], [3, 80], [4, 60]])
+    for (let seed = 1; seed <= seeds; seed++) {
+      const known = Array.from({ length: n + 1 }, () => new Map()); // the last one is the spectator's
+      randomMatch(n, seed, (s) => {
+        for (let seat = -1; seat < n; seat++) {
+          const mem = known[seat < 0 ? n : seat];
+          const v = E.viewFor(s, seat);
+          for (const cv of [...v.round.cities.flatMap((c) => c.sides.flat()), ...v.round.gone.flat(), ...v.round.hand]) {
+            assert.match(cv.uid, UID);
+            if (cv.kind) mem.set(cv.uid, cv.kind);
+            else {
+              assert.ok(!mem.has(cv.uid), `${n} seats, seed ${seed}, seat ${seat}: ${cv.uid} was seen as ${mem.get(cv.uid)} and is now face down`);
+              assert.equal(cv.origin, cv.owner);
+            }
+          }
+        }
+      });
+    }
+});
 
 test('property: no view at any table size shows a rival’s hand, deck or face-down card', () => {
   for (const [n, seeds] of [[2, 120], [3, 80], [4, 60]])

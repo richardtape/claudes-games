@@ -17,8 +17,42 @@ export const SEAT_NAMES = ['Red', 'Teal', 'Cobalt', 'Plum'];
  * lisbonTiebreak: when cities are level, the tie-break compares total power across cities.
  * 'out' leaves Lisbon out (lowest total wins there, so adding it rewards losing it);
  * 'invert' subtracts each seat's Lisbon total; 'all' is the old behaviour, kept for the A/B.
+ * tokens: escalation tokens each player starts the match with (9 is effectively unlimited).
+ * reel: strips of Microfilm that win the match outright (0 turns the Microfilm off).
+ * film: who takes a Microfilm strip. 'comeback' (the rule): the holder of the film city takes one only if
+ * they did not win the round, and a round that ends in folds never awards one. 'holder' (the spec's
+ * original rule, kept as a sim switch): the holder always takes it, after a fold too.
+ * rollover: 1 rolls a dead heat's stake and pot into the next round's pot; 0 lets nothing carry.
+ * Tuned in tools/SIMLOG.md: tokens 3, the spec's default, meet every stake band once the rivals pace
+ * them (B16–B22); reel 2, since under the comeback film a reel of 3 decided 3% of matches and a reel of
+ * 2 decides about 21%, nearly all of them from behind on points (B20, Decision 12).
  */
-export const RULES = { lisbonTiebreak: 'out' };
+export const RULES = { lisbonTiebreak: 'out', tokens: 3, reel: 2, film: 'comeback', rollover: 1 };
+
+/**
+ * How the computer rivals bet (the simulator can set these as stakes.<field>). value ≈ P(win) − P(lose)
+ * for the round. escalate: value needed from turn 2 with tokens to spare; scarce: added for each token
+ * short of one every other round left; roundPoints: the rounds left are counted as the leader's distance
+ * to the target divided by roundPoints, so a lower value makes rivals hold their tokens longer; answer:
+ * play on above this; bluffTurn: earliest bluff (a bluff also waits until no token is short);
+ * lateFold, lateFoldChance: cutting losses on turns 5–6; filmWeight, filmDecisive: what the Microfilm
+ * is worth when choosing a drop (decisive when any seat is one strip from the reel).
+ * Tuned at the bots' own samples (tools/SIMLOG.md B11–B22; first written as escalate 0.45, scarce 0.3,
+ * roundPoints 3, answer −0.6, bluffTurn 3, which escalated in 94% of rounds and folded 10% of answers):
+ * - scarce 1 and roundPoints 1 pace the tokens (B15–B16). roundPoints 1 is deliberately low (real
+ *   rounds average about 2.4 points): do not "correct" it, it is the pace. A rival holding all 3
+ *   tokens keeps them until the leader has 4 points, spends its second from 6 and its third from 8
+ *   (a scarce of 1 puts escalating all but out of reach while short), and bluffs keep the same pace
+ *   (B22), so the early rounds see no rival escalations rather than only bluffs. The threshold alone
+ *   cannot pace them: it only delays escalation to later turns (B14).
+ * - escalate 0.1 (B22): with the pace, escalations bunch on turn 2 and the threshold barely matters;
+ *   0.1 is the setting that met every band once bluffs kept the pace.
+ * - answer −0.29 (B17–B22): sets folds in answer against the escalator's win rate (a fold in answer is
+ *   the escalator's win).
+ * - bluffTurn 2 (B18, B21): bluffs from turn 2 lower the escalator's win rate. Not 1: value
+ *   escalations start on turn 2, so a rival's escalation on turn 1 would always be a bluff.
+ */
+export const STAKES = { escalate: 0.1, scarce: 1, roundPoints: 1, answer: -0.29, bluffTurn: 2, lateFold: -0.9, lateFoldChance: 0.45, filmWeight: 0.4, filmDecisive: 1.5 };
 
 /**
  * Every player gets one of each. `flip` tricks fire once when the card is revealed;

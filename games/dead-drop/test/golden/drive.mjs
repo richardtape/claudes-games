@@ -25,9 +25,11 @@ export function driveMatch(E, B, index, { samples = GOLDEN_SAMPLES } = {}) {
         if (call === 'fold') record(seat, 'fold', null, E.fold(state, seat));
         else if (call === 'escalate' && E.canEscalate(state, seat)) {
           record(seat, 'escalate', null, E.escalate(state, seat));
-          const other = 1 - seat;
-          const accept = B.stakeCall(E.viewFor(state, other), thoughts[other]?.value ?? 0, bots[other], rng) === 'accept';
-          record(other, 'respond', accept, E.respond(state, other, accept));
+          // Every seat the call asks answers in turn; the last answer settles it.
+          for (const other of state.round.pending.from) {
+            const accept = B.stakeCall(E.viewFor(state, other), thoughts[other]?.value ?? 0, bots[other], rng) === 'accept';
+            record(other, 'respond', accept, E.respond(state, other, accept));
+          }
         }
       }
       if (state.phase !== 'plan') break;
@@ -48,26 +50,4 @@ export function roundDigests(steps) {
     byRound.get(s.round).push(s.json);
   }
   return [...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([, js]) => createHash('sha256').update(js.join('\n')).digest('hex'));
-}
-
-/** Path of the first difference between two parsed JSON values (key order counts), or null. */
-export function firstDiff(a, b, path = '$') {
-  if (a === b) return null;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return path;
-  if (Array.isArray(a)) {
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      if (i >= a.length || i >= b.length) return `${path}[${i}]`;
-      const d = firstDiff(a[i], b[i], `${path}[${i}]`);
-      if (d) return d;
-    }
-    return null;
-  }
-  const ka = Object.keys(a);
-  const kb = Object.keys(b);
-  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
-    if (ka[i] !== kb[i]) return `${path}.${ka[i] ?? kb[i]} (key order or presence)`;
-    const d = firstDiff(a[ka[i]], b[kb[i]], `${path}.${ka[i]}`);
-    if (d) return d;
-  }
-  return null;
 }

@@ -1,206 +1,279 @@
 {
  "matches": 6,
  "capped": 0,
- "rounds": 20,
+ "rounds": 11,
  "escalation": {
   "pct": 100,
   "margin": 0,
-  "n": 20
+  "n": 11
  },
  "maxStake": {
-  "pct": 20,
-  "margin": 17.530772943598354,
-  "n": 20
+  "pct": 45.45454545454545,
+  "margin": 29.425758813377275,
+  "n": 11
  },
  "escalatorWins": {
-  "pct": 75,
-  "margin": 18.977618396416343,
-  "n": 20
+  "pct": 54.54545454545455,
+  "margin": 29.425758813377275,
+  "n": 11
  },
  "foldInAnswer": {
-  "pct": 55,
-  "margin": 21.80362355206125,
-  "n": 20
+  "pct": 27.272727272727273,
+  "margin": 26.319198798490053,
+  "n": 11
  },
- "folds": {
-  "pct": 75,
-  "margin": 18.977618396416343,
-  "n": 20
+ "reelWins": {
+  "pct": 0,
+  "margin": 0,
+  "n": 6
  },
- "deadHeats": {
-  "pct": 5,
-  "margin": 9.551858457912784,
-  "n": 20
+ "reelComeback": {
+  "pct": null,
+  "margin": null,
+  "n": 0
  },
- "tiebreaks": {
-  "pct": 10,
-  "margin": 13.148079707698765,
-  "n": 20
- },
- "seat0Rounds": {
+ "filmHolderWins": {
   "pct": 50,
   "margin": 49,
   "n": 4
  },
- "aMatchWins": {
-  "pct": 66.66666666666667,
-  "margin": 37.72021758705555,
-  "n": 6
+ "rollovers": {
+  "pct": 0,
+  "margin": 0,
+  "n": 11
  },
- "seat0Matches": {
+ "outOfTokens": {
+  "pct": 0,
+  "margin": 0,
+  "n": 11
+ },
+ "stripsPerMatch": 0.3333333333333333,
+ "tokensSpent": {
+  "mean": 0.9166666666666666,
+  "margin": 0.3621681111593631,
+  "n": 12
+ },
+ "potTaken": {
+  "mean": 0.8181818181818182,
+  "margin": 0.49238712299171067,
+  "n": 11
+ },
+ "folds": {
+  "pct": 54.54545454545455,
+  "margin": 29.425758813377275,
+  "n": 11
+ },
+ "deadHeats": {
+  "pct": 0,
+  "margin": 0,
+  "n": 11
+ },
+ "tiebreaks": {
+  "pct": 9.090909090909092,
+  "margin": 16.98896977201237,
+  "n": 11
+ },
+ "seat0Rounds": {
+  "pct": 20,
+  "margin": 35.06154588719671,
+  "n": 5
+ },
+ "aMatchWins": {
   "pct": 50,
   "margin": 40.00833246545857,
   "n": 6
  },
+ "seat0Matches": {
+  "pct": 33.333333333333336,
+  "margin": 37.72021758705555,
+  "n": 6
+ },
  "halfLeaderWins": {
-  "pct": 80,
-  "margin": 35.0615458871967,
-  "n": 5
+  "pct": 50,
+  "margin": 49,
+  "n": 4
  },
  "bluffs": 0,
+ "seats": 2,
+ "seatRounds": [
+  {
+   "pct": 20,
+   "margin": 35.06154588719671,
+   "n": 5
+  },
+  {
+   "pct": 80,
+   "margin": 35.0615458871967,
+   "n": 5
+  }
+ ],
+ "seatMatches": [
+  {
+   "pct": 33.333333333333336,
+   "margin": 37.72021758705555,
+   "n": 6
+  },
+  {
+   "pct": 66.66666666666667,
+   "margin": 37.72021758705555,
+   "n": 6
+  }
+ ],
+ "botMatches": [
+  {
+   "pct": 50,
+   "margin": 40.00833246545857,
+   "n": 6
+  },
+  {
+   "pct": 50,
+   "margin": 40.00833246545857,
+   "n": 6
+  }
+ ],
  "pointsPerRound": {
-  "mean": 1.75,
-  "margin": 0.53452689361715,
-  "n": 20
+  "mean": 2.6363636363636362,
+  "margin": 0.7673299105243289,
+  "n": 11
  },
  "roundsPerMatch": {
-  "mean": 3.3333333333333335,
-  "margin": 0.8846175151714711,
+  "mean": 1.8333333333333333,
+  "margin": 0.5498619355330469,
   "n": 6
  },
  "agents": {
   "heavy": {
-   "played": 7,
-   "winPlayed": 57.142857142857146,
-   "winPlayedMargin": 36.66060555964672,
-   "winNot": 0,
-   "winNotMargin": 0,
-   "avgTurn": 4.857142857142857
+   "played": 6,
+   "winPlayed": 66.66666666666667,
+   "winPlayedMargin": 37.72021758705555,
+   "winNot": 25,
+   "winNotMargin": 42.43524478543749,
+   "avgTurn": 5
   },
   "sleeper": {
    "played": 4,
    "winPlayed": 25,
    "winPlayedMargin": 42.43524478543749,
-   "winNot": 50,
-   "winNotMargin": 40.00833246545857,
+   "winNot": 66.66666666666667,
+   "winNotMargin": 37.72021758705555,
    "avgTurn": 3.5
   },
   "veteran": {
-   "played": 6,
-   "winPlayed": 50,
-   "winPlayedMargin": 40.00833246545857,
-   "winNot": 40,
-   "winNotMargin": 42.941448508405024,
-   "avgTurn": 3
-  },
-  "double": {
-   "played": 3,
-   "winPlayed": 66.66666666666667,
-   "winPlayedMargin": 53.344443287278104,
-   "winNot": 28.571428571428573,
-   "winNotMargin": 33.46640106136302,
-   "avgTurn": 3
-  },
-  "jammer": {
-   "played": 5,
-   "winPlayed": 20,
-   "winPlayedMargin": 35.06154588719671,
-   "winNot": 60,
-   "winNotMargin": 42.941448508405024,
-   "avgTurn": 3.2
-  },
-  "handler": {
    "played": 7,
-   "winPlayed": 28.571428571428573,
-   "winPlayedMargin": 33.46640106136302,
+   "winPlayed": 42.857142857142854,
+   "winPlayedMargin": 36.66060555964672,
    "winNot": 66.66666666666667,
    "winNotMargin": 53.344443287278104,
-   "avgTurn": 3.142857142857143
+   "avgTurn": 4.571428571428571
   },
-  "mole": {
-   "played": 1,
-   "winPlayed": 0,
-   "winPlayedMargin": 0,
-   "winNot": 44.44444444444444,
-   "winNotMargin": 32.46439433999694,
-   "avgTurn": 2
-  },
-  "getaway": {
+  "double": {
    "played": 5,
    "winPlayed": 60,
    "winPlayedMargin": 42.941448508405024,
-   "winNot": 20,
-   "winNotMargin": 35.06154588719671,
-   "avgTurn": 2.8
+   "winNot": 40,
+   "winNotMargin": 42.941448508405024,
+   "avgTurn": 3.8
   },
-  "lookout": {
+  "jammer": {
    "played": 4,
-   "winPlayed": 50,
-   "winPlayedMargin": 49,
-   "winNot": 33.333333333333336,
+   "winPlayed": 25,
+   "winPlayedMargin": 42.43524478543749,
+   "winNot": 66.66666666666667,
    "winNotMargin": 37.72021758705555,
-   "avgTurn": 4
+   "avgTurn": 3.75
   },
-  "assassin": {
+  "handler": {
    "played": 6,
-   "winPlayed": 16.666666666666668,
-   "winPlayedMargin": 29.820450353059044,
-   "winNot": 75,
+   "winPlayed": 66.66666666666667,
+   "winPlayedMargin": 37.72021758705555,
+   "winNot": 25,
    "winNotMargin": 42.43524478543749,
-   "avgTurn": 4
+   "avgTurn": 2.8333333333333335
   },
-  "tripwire": {
+  "mole": {
    "played": 6,
    "winPlayed": 50,
    "winPlayedMargin": 40.00833246545857,
-   "winNot": 25,
-   "winNotMargin": 42.43524478543749,
-   "avgTurn": 4.333333333333333
+   "winNot": 50,
+   "winNotMargin": 49,
+   "avgTurn": 3.3333333333333335
   },
-  "impostor": {
+  "getaway": {
+   "played": 4,
+   "winPlayed": 50,
+   "winPlayedMargin": 49,
+   "winNot": 50,
+   "winNotMargin": 40.00833246545857,
+   "avgTurn": 4
+  },
+  "lookout": {
+   "played": 2,
+   "winPlayed": 50,
+   "winPlayedMargin": 69.29646455628166,
+   "winNot": 50,
+   "winNotMargin": 34.64823227814083,
+   "avgTurn": 3
+  },
+  "assassin": {
    "played": 6,
    "winPlayed": 33.333333333333336,
    "winPlayedMargin": 37.72021758705555,
+   "winNot": 75,
+   "winNotMargin": 42.43524478543749,
+   "avgTurn": 3.3333333333333335
+  },
+  "tripwire": {
+   "played": 4,
+   "winPlayed": 75,
+   "winPlayedMargin": 42.43524478543749,
+   "winNot": 33.333333333333336,
+   "winNotMargin": 37.72021758705555,
+   "avgTurn": 2.5
+  },
+  "impostor": {
+   "played": 6,
+   "winPlayed": 50,
+   "winPlayedMargin": 40.00833246545857,
    "winNot": 50,
    "winNotMargin": 49,
-   "avgTurn": 2.5
+   "avgTurn": 1.8333333333333333
   }
  },
  "cities": {
   "lisbon": {
-   "n": 3,
+   "n": 2,
    "decided": 2,
-   "agrees": 2
+   "agrees": 1
   },
   "vienna": {
    "n": 1,
-   "decided": 0,
-   "agrees": 0
+   "decided": 1,
+   "agrees": 1
   },
   "istanbul": {
-   "n": 4,
-   "decided": 3,
-   "agrees": 2
+   "n": 1,
+   "decided": 1,
+   "agrees": 1
   },
   "berlin": {
-   "n": 0,
-   "decided": 0,
-   "agrees": 0
+   "n": 1,
+   "decided": 1,
+   "agrees": 1
   },
   "havana": {
    "n": 1,
    "decided": 1,
-   "agrees": 0
+   "agrees": 1
   },
   "monaco": {
-   "n": 0,
-   "decided": 0,
-   "agrees": 0
+   "n": 2,
+   "decided": 2,
+   "agrees": 1
   },
   "hongkong": {
-   "n": 1,
+   "n": 2,
    "decided": 1,
-   "agrees": 1
+   "agrees": 0
   },
   "helsinki": {
    "n": 0,
@@ -208,19 +281,19 @@
    "agrees": 0
   },
   "moscow": {
-   "n": 1,
-   "decided": 1,
-   "agrees": 0
+   "n": 2,
+   "decided": 2,
+   "agrees": 1
   },
   "venice": {
-   "n": 2,
+   "n": 3,
    "decided": 2,
-   "agrees": 1
+   "agrees": 2
   },
   "tangier": {
-   "n": 2,
-   "decided": 2,
-   "agrees": 1
+   "n": 0,
+   "decided": 0,
+   "agrees": 0
   }
  }
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { CITY } from './js/data.js';
 // Scripted play-through run by `npm run check` (see scripts/check.mjs).
 // smoke(): one page — title, rivals, a solo match (its round title card and the First flip
 // token; a turn dropped by dragging a card onto a city, whose reveal is sped up, then skipped;
@@ -6,11 +8,19 @@
 // a rematch), the help sheet's tabs, turned assets, leaving mid-reveal, the escalation flash taking
 // every tap and key over the prompt, leaving over a round card or a flash, the final card
 // ending by itself, the final turn under reduced motion (no card), and skipAnimations (no round
-// card). Every round opens on a title card, so each step that starts one clears it first
-// (clearCard).
+// card). The stakes on the table: each side's escalation tokens and film frames, the film city's
+// canister on its plate and on the round card, a token spent by escalating, and a table with no
+// tokens left (Escalate disabled, E does nothing). Round ends: the pot in the result, the
+// Microfilm's line (who took a strip, or why the film stays put), the full reel (its card, then a
+// dossier that says so), a rival's fold behind a held round card (the flash, then the result),
+// my own fold (none of my agents left on the board), and in pass and play Enter and B waiting out a
+// fold's exit while the next round begins behind it (foldExit). On a phone the play screen must fit without
+// scrolling (phoneFits). Every round opens on a title card, so each step that starts one clears
+// it first (clearCard).
 // duo(): two pages in one browser joined over the BroadcastChannel transport (?net=local) —
 // host lobby, guest joins, the host locks in while the guest's round card is still up, a turn
-// each, an escalation answered across the wire (Space over the host's flash doesn't answer it),
+// each, an escalation answered across the wire (Space over the host's flash doesn't answer it;
+// both screens agree on the tokens, the escalator's side one chit down),
 // match over and a rematch, a guest reload during the rematch's first turn (it must not count the
 // match again, and a turn that resolves behind the guest's round card must still be revealed from
 // the turn-1 board), and the guest leaving.
@@ -58,6 +68,49 @@ async function checkToken(page, when) {
   if (t.n !== 1 || t.label !== t.want) throw new Error(`${when}: expected one First flip token labelled "${t.want}", got ${t.n} (${t.label})`);
   return t.want;
 }
+
+/**
+ * Where the play screen's parts end up (px from the top of the viewport): the scorebar's top (and
+ * its height), the board's bottom, the lowest card in the hand, Lock in's bottom, and the window's
+ * height. On a phone everything must fit between 0 and innerHeight, with no scrolling.
+ */
+const phoneFits = (page) =>
+  page.evaluate(() => {
+    const box = (sel) => document.querySelector(sel)?.getBoundingClientRect() ?? null;
+    const px = (n) => (Number.isFinite(n) ? Math.round(n) : null);
+    const cards = [...document.querySelectorAll('#hand .card')].map((c) => c.getBoundingClientRect().bottom);
+    return {
+      scorebarTop: px(box('.scorebar')?.top),
+      scorebarHeight: px(box('.scorebar')?.height),
+      boardBottom: px(box('#board')?.bottom),
+      handBottom: px(cards.length ? Math.max(...cards) : NaN),
+      lockBottom: px(box('[data-action=lock]')?.bottom),
+      innerHeight,
+    };
+  });
+
+/**
+ * The stakes on the table, as the view has them: on each side the live escalation chits match its
+ * tokens and the film frames match the reel; exactly one canister, on the film city's plate.
+ */
+async function checkMarks(page, when) {
+  const m = await page.evaluate(() => {
+    const v = window.__game.view;
+    const sides = v.scores.map((_, s) => {
+      const el = document.querySelector(`.scorebar .side.s-${s}`);
+      return { seat: s, tokens: v.tokens[s], live: el ? el.querySelectorAll('.tk:not(.spent)').length : null, frames: el ? el.querySelectorAll('.fr').length : null };
+    });
+    const cans = [...document.querySelectorAll('.plate .canister')];
+    return { reel: v.reel, film: v.round.film, sides, cans: cans.length, onFilm: cans.length === 1 && !!cans[0].closest(`#board .city.film[data-city="${v.round.film}"]`) };
+  });
+  const bad = m.sides.filter((x) => x.live !== x.tokens || x.frames !== m.reel);
+  if (bad.length) throw new Error(`${when}: each side should show its tokens as live chits and ${m.reel} film frames: ${JSON.stringify(m)}`);
+  if (m.film === null ? m.cans !== 0 : m.cans !== 1 || !m.onFilm) throw new Error(`${when}: expected one canister, on the film city's plate (city ${m.film}): ${JSON.stringify(m)}`);
+  return m;
+}
+
+/** Live escalation chits on a seat's side of the scorebar. */
+const liveTokens = (page, seat) => page.evaluate((s) => document.querySelectorAll(`.scorebar .side.s-${s} .tk:not(.spent)`).length, seat);
 
 /** Pick the first playable card, the first city it can go to, and lock in, through the real UI. */
 async function dropFirst(page) {
@@ -279,11 +332,94 @@ async function dragFirst(page, { shot = null } = {}) {
   await page.click('[data-action=lock]');
 }
 
+/**
+ * Pass and play: Red folds, and while the fold's exit plays over the old board (the result isn't up
+ * yet) Enter and B must wait, as they do while a card is up. Meanwhile both seats get ready
+ * through the table, as an online rival's ready lands on the host, so the next round begins behind
+ * the exit. Once the exit is over that round must open cleanly: no page error, its round card,
+ * then the cover. The fold flash is held, so the exit starts on our own Enter, and the keys and the
+ * readiness go in the same step, inside its 450 ms.
+ */
+async function foldExit(page, { log, fail }) {
+  const errors = [];
+  const onError = (e) => errors.push(e.message);
+  page.on('pageerror', onError);
+  const threw = () => errors.length && fail(`a new round behind the fold's exit threw: ${errors.join(' | ')}`);
+  // A wait that times out after a page error reports the error.
+  const waitFor = async (fn, what) => {
+    try {
+      await until(page, fn, null, what);
+    } catch (e) {
+      threw();
+      throw e;
+    }
+  };
+  try {
+    await page.evaluate(() => window.__game.startPass());
+    await clearCard(page);
+    await until(page, () => document.querySelector('.cover') && window.__game.ui.cover?.seat === 0, null, 'Red’s cover');
+    await page.click('[data-action=uncover]');
+    await until(page, () => document.querySelector('[data-action=fold]') && !window.__game.ui.updating, null, 'Red’s turn to fold on');
+    // A pick is standing when Red folds: it must not arm Lock in in the round that follows.
+    await page.click('.card:not([disabled])');
+    await page.click('.city.target .plate');
+    await page.click('[data-action=fold]');
+    const flash = await page.evaluate(() => {
+      document.querySelector('.modal [data-action=confirm-fold]').click();
+      window.__game.holdCard();
+      return !!document.querySelector('.cine.flash.fold');
+    });
+    if (!flash) fail('confirming the fold should put the fold flash up');
+    const exit = await page.evaluate(async () => {
+      const g = window.__game;
+      const key = (k) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+      key('Enter'); // skips the held flash: the exit starts
+      for (let i = 0; i < 50 && !/out of the round/.test(g.ui.caption); i++) await Promise.resolve();
+      const during = { holdBoard: g.ui.holdBoard, card: !!g.ui.card, caption: g.ui.caption, result: !!document.querySelector('.result') };
+      key('Enter');
+      key('b');
+      const keys = { phase: g.state.phase, ready: g.table.ready.some(Boolean), peek: g.ui.peek };
+      g.table.act(0, { a: 'next' });
+      g.table.act(1, { a: 'next' });
+      return { during, keys, roundNo: g.state.roundNo, phase: g.state.phase };
+    });
+    const d = exit.during;
+    if (!d.holdBoard || d.card || d.result || !/^Red pulls out of the round\.$/.test(d.caption)) fail(`skipping the fold flash should start the exit over the old board: ${JSON.stringify(exit)}`);
+    if (exit.keys.phase !== 'round-over' || exit.keys.ready || exit.keys.peek) fail(`Enter and B during the fold's exit should wait for the result: ${JSON.stringify(exit)}`);
+    if (exit.roundNo !== 1 || exit.phase !== 'plan') fail(`both seats ready should start round 2: ${JSON.stringify(exit)}`);
+    await waitFor(() => window.__game.view?.roundNo === 1 && !window.__game.ui.holdBoard && document.querySelector('.title-card'), 'round 2’s card once the exit is over');
+    await clearCard(page);
+    await waitFor(() => document.querySelector('.cover') && window.__game.ui.cover?.seat === 0 && window.__game.view.roundNo === 1 && !window.__game.ui.updating, 'Red’s cover for round 2');
+    await page.click('[data-action=uncover]');
+    await waitFor(() => document.querySelector('.hand .card') && document.querySelector('[data-action=lock]'), 'round 2’s plan screen');
+    const lock = await page.evaluate(() => {
+      const b = document.querySelector('[data-action=lock]');
+      return { disabled: b.disabled, ready: b.classList.contains('ready'), selected: window.__game.ui.selected, target: window.__game.ui.target };
+    });
+    if (!lock.disabled || lock.ready || lock.selected || lock.target !== null) fail(`Lock in must not be armed in the round after a fold, before anything is picked: ${JSON.stringify(lock)}`);
+    threw();
+    log('pass and play: Lock in stayed disarmed after the fold');
+    log('pass and play: Enter and B waited out the fold’s exit; round 2 began behind it and opened cleanly');
+  } finally {
+    page.off('pageerror', onError);
+  }
+}
+
 export default async function smoke(page, { log, shot, audit, phone = false }) {
   const fail = (m) => {
     throw new Error(m);
   };
   await until(page, () => window.__game && document.querySelector('.title-screen'), null, 'the title screen');
+  // A match saved by the Phase 1 build is cleared on load, with a toast, not resumed.
+  const old = readFileSync(new URL('./test/golden/v1-table.json', import.meta.url), 'utf8');
+  await page.evaluate((json) => localStorage.setItem('cg:dead-drop:match', JSON.stringify({ mode: 'solo', rival: 'wren', table: JSON.parse(json) })), old);
+  await page.reload();
+  await until(page, () => window.__game && document.querySelector('.title-screen'), null, 'the title screen after the old save');
+  // The toast lives 2.2 s: read its text in the wait itself, so a slow step can't miss it.
+  await until(page, () => /older version/.test(document.querySelector('.toast')?.textContent || ''), null, 'the old-save toast');
+  const cleared = await page.evaluate(() => ({ cont: !!document.querySelector('[data-action=continue]'), left: localStorage.getItem('cg:dead-drop:match') }));
+  if (cleared.cont || cleared.left !== null) fail(`an old save was not cleared: ${JSON.stringify(cleared)}`);
+  await shot('old-save');
   await until(page, () => window.__game.audio?.sceneName === 'title', null, 'the title music');
   await snap(page, shot, 'title');
   await audit('title');
@@ -336,6 +472,15 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   if (card.role !== 'dialog' || !/^Round 1: [^,]+, [^,]+, [^,]+$/.test(card.label || '')) fail(`the round card should be a dialog labelled "Round 1: A, B, C": ${JSON.stringify(card)}`);
   if (card.lines !== 3) fail(`the round card should list three cities, not ${card.lines}`);
   if (card.clipped.length) fail(`round card lines off screen or clipped: ${card.clipped.join(' | ')}`);
+  // The film city is named under the credits, and its slip carries the canister.
+  const film = await page.evaluate(() => {
+    const v = window.__game.view;
+    const line = document.querySelector('.title-card .film-line');
+    const tagged = [...document.querySelectorAll('.title-card .line')].map((l, i) => (l.querySelector('.film-tag .canister') ? i : -1)).filter((i) => i >= 0);
+    const r = line?.getBoundingClientRect();
+    return { id: v.round.film === null ? null : v.round.cities[v.round.film].id, film: v.round.film, text: line ? line.textContent.trim() : null, tagged, inView: !!r && r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight };
+  });
+  if (film.id === null ? film.text !== null : !film.text?.includes(CITY[film.id].name) || !film.inView || film.tagged.join() !== String(film.film)) fail(`the round card should say where the film travels, on screen, and tag that city's slip: ${JSON.stringify(film)}`);
   await page.keyboard.press('Enter');
   if (await page.$('.title-card')) fail('Enter did not skip the round card');
   log(`round card OK (${card.label})`);
@@ -343,6 +488,17 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   await until(page, () => window.__game.ui.screen === 'play' && document.querySelector('.hand .card'), null, 'the table');
   await snap(page, shot, 'play');
   await audit('play');
+  if (phone) {
+    const fit = await phoneFits(page);
+    log(`phone fit: ${JSON.stringify(fit)}`);
+    // A missing part measures null, and null <= innerHeight is true: fail on it first.
+    const missing = Object.keys(fit).filter((k) => fit[k] === null);
+    if (missing.length) fail(`the phone's play screen is missing ${missing.join(', ')}: ${JSON.stringify(fit)}`);
+    const over = ['boardBottom', 'handBottom', 'lockBottom'].filter((k) => !(fit[k] <= fit.innerHeight));
+    if (!(fit.scorebarTop >= 0) || over.length) fail(`the phone's play screen should show the scorebar, the cities, the hand and Lock in without scrolling: ${JSON.stringify(fit)}`);
+  }
+  const marks = await checkMarks(page, 'the first play screen');
+  log(`marks: tokens ${marks.sides.map((x) => x.live).join(' and ')}, a reel of ${marks.reel}, the film in city ${marks.film}`);
   log(`turn 1: ${await checkToken(page, 'turn 1')}`);
   // The table music starts with its bass (the first click unlocked audio); the riff comes in
   // from turn 2, so none plays on turn 1.
@@ -372,11 +528,16 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   log('turn 1 revealed (Space sped it up, then skipped it)');
   if (await page.evaluate(() => window.__game.state.phase === 'plan')) log(`turn 2: ${await checkToken(page, 'turn 2')}`);
 
-  // Escalate through the button; the bot must answer (play on or fold).
+  // Escalate through the button; the bot must answer (play on or fold). It spends one of my tokens:
+  // my side shows one chit fewer, and Escalate is disabled for the rest of the round.
   if (await page.$('[data-action=escalate]:not([disabled])')) {
+    const chits = await liveTokens(page, 0);
     await page.click('[data-action=escalate]');
     await until(page, () => !window.__game.state.round.pending, null, 'the rival to answer the escalation');
     log(`escalation answered: ${await page.evaluate(() => (window.__game.state.phase === 'plan' ? 'play on' : 'fold'))}`);
+    await until(page, (n) => document.querySelectorAll('.scorebar .side.s-0 .tk:not(.spent)').length === n && window.__game.state.tokens[0] === n, chits - 1, 'my side to show one escalation token fewer');
+    await until(page, () => window.__game.state.phase !== 'plan' || document.querySelector('[data-action=escalate]')?.disabled, null, 'Escalate to be disabled after escalating');
+    log(`escalating spent a token (${chits} -> ${chits - 1})`);
   }
   await idle(page);
   await snap(page, shot, 'after-escalate');
@@ -432,14 +593,40 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   if ((await page.evaluate(() => document.body.dataset.night)) !== '0') fail('round 2 should open by day');
   log('round 2 started (See the board and B both work; a tap skipped its card)');
 
-  // Jump to the end of the match.
-  await page.evaluate(() => {
-    window.__game.state.scores = [9, 3];
-    window.__game.state.target = 1;
-    window.__game.finishRound();
+  // Jump to the end of the match, with 2 points in the round's pot: the result counts them (a flip
+  // win adds them, a fold pays them, a dead heat leaves them). (Unless the rival has folded the
+  // round already, in its own time: then there is no pot to plant.)
+  const potPlanted = await page.evaluate(() => {
+    const g = window.__game;
+    const open = g.state.phase === 'plan';
+    if (open) g.state.round.pot = 2;
+    g.state.scores = [9, 3];
+    g.state.target = 1;
+    g.finishRound();
+    return open;
   });
-  await until(page, () => document.querySelector('[data-action=final]'), null, 'the final report button');
+  // A strip here may complete a reel, whose card comes before the result.
+  await until(page, () => document.querySelector('[data-action=final]') && !window.__game.ui.card && !window.__game.ui.updating, null, 'the final report button');
   if (await page.$('.result.peek')) fail('See the board carried over into the next round');
+  if (potPlanted) {
+    const pr = await page.evaluate(() => {
+      const v = window.__game.view;
+      const res = v.round.result;
+      return {
+        text: document.querySelector('.result .lines')?.textContent.replace(/\s+/g, ' ') ?? '',
+        folded: res.folded,
+        winner: res.winner,
+        strip: res.strip,
+        city: v.round.film === null ? null : v.round.cities[v.round.film].id,
+        stripLine: document.querySelector('.result .strip-line')?.textContent ?? null,
+      };
+    });
+    const potSaid = pr.folded !== null ? /and the pot/.test(pr.text) : pr.winner !== null ? /pot of 2/.test(pr.text) : /rolls? into the next round|left on the table/.test(pr.text);
+    if (!potSaid) fail(`the result should count the pot of 2: ${JSON.stringify(pr)}`);
+    // The Microfilm's line: who took the strip (naming the film city), or why the film stays put.
+    if (pr.strip !== null ? !pr.stripLine?.includes(CITY[pr.city].name) : pr.city !== null && !/the film stays put/.test(pr.text)) fail(`the result should say where the film went: ${JSON.stringify(pr)}`);
+    log(`the pot in the result: ${pr.text}`);
+  } else log('the rival folded round 2 before the jump: no pot to plant');
   await page.click('[data-action=final]');
   await page.waitForSelector('.over');
   if ((await page.evaluate(() => window.__game.audio.sceneName)) !== null) fail('the dossier should stop the music (scene null)');
@@ -572,6 +759,160 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   await snap(page, shot, 'turned');
   await audit('turned');
   log('turned assets stamped and inspected');
+
+  // Out of tokens: on a fresh table with my tokens gone (re-rendered through the table's own
+  // change signal), Escalate is disabled and says so, and E does nothing. The rival locks in its
+  // turn-1 drop behind the round card, so it makes no move of its own meanwhile.
+  await page.evaluate(() => window.__game.startSolo('wren'));
+  await until(page, () => document.querySelector('.title-card'), null, 'a round card on a fresh table');
+  if (!(await page.evaluate(() => window.__game.rivalLocks()))) fail('the rival could not lock in before the no-tokens check');
+  await clearCard(page);
+  await until(page, () => !window.__game.ui.updating && !window.__game.ui.card, null, 'a quiet table to run out of tokens on');
+  await page.evaluate(() => {
+    window.__game.state.tokens[0] = 0;
+    window.__game.table.touch();
+  });
+  await until(page, () => document.querySelector('[data-action=escalate]')?.disabled && !document.querySelector('.scorebar .side.s-0 .tk:not(.spent)'), null, 'Escalate disabled and no live chits with no tokens left');
+  const noTokens = await page.evaluate(() => {
+    const b = document.querySelector('[data-action=escalate]');
+    return { label: b.getAttribute('aria-label'), left: b.querySelector('.left')?.textContent, spent: document.querySelectorAll('.scorebar .side.s-0 .tk.spent').length };
+  });
+  if (noTokens.label !== 'Escalate: no tokens left' || noTokens.left !== '0 left' || !noTokens.spent) fail(`with no tokens left Escalate should say so: ${JSON.stringify(noTokens)}`);
+  await page.keyboard.press('e');
+  const afterE = await page.evaluate(() => ({ pending: window.__game.state.round.pending, tokens: window.__game.state.tokens[0], escalated: window.__game.state.round.escalated.some(Boolean), flash: !!document.querySelector('.cine.flash'), phase: window.__game.state.phase }));
+  if (afterE.pending !== null || afterE.tokens !== 0 || afterE.escalated || afterE.flash || afterE.phase !== 'plan') fail(`E with no tokens left should do nothing: ${JSON.stringify(afterE)}`);
+  await snap(page, shot, 'no-tokens');
+  await audit('no-tokens');
+  log('no tokens left: Escalate disabled and labelled, E did nothing');
+
+  // The pot's chit on the stake slip of a plan screen (a fresh table, the pot set through the
+  // table's own change signal): it must sit on the slip, and on a phone the screen still fits.
+  await page.evaluate(() => window.__game.startSolo('wren'));
+  await until(page, () => document.querySelector('.title-card'), null, 'a round card on a fresh table for the pot');
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, 'a quiet table for the pot');
+  await page.evaluate(() => {
+    window.__game.state.round.pot = 3;
+    window.__game.table.touch();
+  });
+  await until(page, () => document.querySelector('.stake .pot, .pot'), null, 'the pot chit on the stake slip');
+  const potBox = await page.evaluate(() => {
+    const r = document.querySelector('.pot').getBoundingClientRect();
+    return { text: document.querySelector('.pot').textContent, inView: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight };
+  });
+  if (potBox.text !== '+3' || !potBox.inView) fail(`the pot chit should read +3 and sit on screen: ${JSON.stringify(potBox)}`);
+  await snap(page, shot, 'pot');
+  await audit('pot');
+  if (phone) {
+    const fit = await phoneFits(page);
+    const bad = Object.keys(fit).filter((k) => fit[k] === null || (k !== 'scorebarTop' && k !== 'scorebarHeight' && k !== 'innerHeight' && !(fit[k] <= fit.innerHeight)));
+    if (bad.length || !(fit.scorebarTop >= 0)) fail(`with a pot the phone's plan screen should still fit: ${JSON.stringify(fit)}`);
+  }
+  log('the pot chit on a plan screen: on the slip and on screen');
+
+  // The full reel: both sides one strip short, and the round ends at once (quickTurns, so no
+  // reveal plays). Whoever takes this round's strip completes the reel, and its card comes up
+  // before the result. Under the comeback film a round's winner takes no strip, so a round can
+  // award none: then try again on a fresh table. Random drops award a strip in about one round in
+  // four (measured on the engine), so twenty tables miss about one run in 300 (ten: one in 18).
+  let reeled = null;
+  let tables = 0;
+  for (; tables < 20 && !reeled; tables++) {
+    await page.evaluate(() => window.__game.startSolo('wren'));
+    await clearCard(page);
+    await until(page, () => !window.__game.ui.updating && !window.__game.ui.card, null, 'a quiet table for the full reel');
+    // The card goes up inside finishRound(): hold it in the same step (it lasts 1.8 s).
+    const r = await page.evaluate(() => {
+      const g = window.__game;
+      if (g.state.phase !== 'plan') return { open: false };
+      g.state.strips = [g.state.reel - 1, g.state.reel - 1];
+      g.finishRound();
+      const card = !!document.querySelector('.cine.reel-card');
+      if (card) g.holdCard();
+      return { open: true, strip: g.view.round.result?.strip ?? null, winBy: g.state.winBy, winner: g.state.winner, card };
+    });
+    if (r.open && r.strip !== null) reeled = r;
+  }
+  if (!reeled) log('twenty fresh tables in a row awarded no strip of film, so the full reel was not checked');
+  else {
+    if (reeled.winBy !== 'reel' || reeled.winner !== reeled.strip) fail(`a strip that completes the reel should win the match: ${JSON.stringify(reeled)}`);
+    if (!reeled.card) {
+      await until(page, () => document.querySelector('.cine.reel-card'), null, 'the full reel card');
+      await page.evaluate(() => window.__game.holdCard());
+    }
+    // Measured once the strip has run in through the gate (it starts off to the right).
+    await snap(page, shot, 'reel-card');
+    await audit('reel-card');
+    const rc = await page.evaluate(() => {
+      const el = document.querySelector('.cine.reel-card');
+      const r = el.querySelector('.filmstrip')?.getBoundingClientRect();
+      return { big: el.querySelector('.big')?.textContent.trim(), small: el.querySelector('.small')?.textContent.trim(), label: el.getAttribute('aria-label'), strip: !!r && r.left >= 0 && r.right <= innerWidth };
+    });
+    if (!/^the full reel$/i.test(rc.big || '') || !/strips?\. The match is/.test(rc.small || '') || !rc.strip) fail(`the full reel card should read "The full reel" and whose it is, its strip of film on screen: ${JSON.stringify(rc)}`);
+    await page.keyboard.press('Enter');
+    await until(page, () => !window.__game.ui.card && document.querySelector('.result [data-action=final]'), null, 'the result after the full reel card');
+    await page.click('[data-action=final]');
+    await until(page, () => document.querySelector('.over .dossier'), null, 'the dossier after the full reel');
+    const dossier = await page.evaluate(() => document.querySelector('.over .dossier').textContent.replace(/\s+/g, ' '));
+    if (!/full reel/.test(dossier)) fail(`the dossier of a match won on film should say so: ${dossier}`);
+    await snap(page, shot, 'reel-dossier');
+    await audit('reel-dossier');
+    log(`the full reel on table ${tables}: "${rc.small}"; the dossier says so`);
+  }
+
+  // A fold that lands while the round card is up (Review Focus 4): the rival folds behind it, and
+  // once the card goes, the fold flash plays, then the result with the fold line. Nothing stale
+  // may paint over it. The card watcher records the flash, however short a slow step makes it.
+  await page.evaluate(() => window.__game.startSolo('wren'));
+  await until(page, () => document.querySelector('.title-card'), null, 'a round card to fold behind');
+  await watchCards(page);
+  const foldedBehind = await page.evaluate(() => {
+    const g = window.__game;
+    g.holdCard();
+    return g.rivalFolds();
+  });
+  if (!foldedBehind) fail('the rival could not fold behind the round card');
+  await page.keyboard.press('Enter');
+  await until(page, () => window.__cines.some((c) => c.cls.includes('flash') && c.cls.includes('fold')), null, 'the fold flash once the round card has gone');
+  await until(page, () => document.querySelector('.result .lines') && !window.__game.ui.card && !window.__game.ui.updating, null, 'the fold result after its flash');
+  const fr = await page.evaluate(() => {
+    const v = window.__game.view;
+    return { phase: window.__game.state.phase, folded: v.round.result.folded, film: v.round.film, head: document.querySelector('.result h2').textContent.replace(/\s+/g, ' ').trim(), text: document.querySelector('.result .lines').textContent.replace(/\s+/g, ' '), plan: !!document.querySelector('[data-action=lock], .modal.hot') };
+  });
+  await page.evaluate(() => window.__cineWatch.disconnect());
+  if (fr.phase !== 'round-over' || fr.folded !== 1 || !/folds/i.test(fr.head) || !/You score 1 \(the stake\)/.test(fr.text) || fr.plan) fail(`after the card, the rival's fold should show its result: ${JSON.stringify(fr)}`);
+  if (fr.film !== null && !/A fold: the film stays put/.test(fr.text)) fail(`a fold awards no strip, and the result should say so: ${JSON.stringify(fr)}`);
+  await snap(page, shot, 'fold-result');
+  await audit('fold-result');
+  log(`a fold behind the round card: the flash, then "${fr.text.trim()}"`);
+
+  // My fold through the Fold button and its confirm, two turns in: my agents pull out of the round,
+  // and See the board shows none of them left. (The 450 ms exit itself isn't caught: under load a
+  // smoke would miss it.) Both turns go straight through the table while the round card holds the
+  // rival, which then locks in its third drop, so it makes no move of its own.
+  let quiet = false;
+  for (let tries = 0; tries < 5 && !quiet; tries++) {
+    await page.evaluate(() => window.__game.startSolo('wren'));
+    await until(page, () => document.querySelector('.title-card'), null, 'a round card to play two turns behind');
+    quiet = await page.evaluate(() => {
+      const g = window.__game;
+      g.quickTurns(2);
+      return g.state.phase === 'plan' && g.rivalLocks();
+    });
+  }
+  if (!quiet) fail('five fresh tables in a row left the rival nowhere to drop on turn 3');
+  await clearCard(page);
+  await until(page, () => !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('[data-action=fold]'), null, 'turn 3 to fold on');
+  const mine = await page.evaluate(() => document.querySelectorAll('#board .chip.own-0').length);
+  await page.click('[data-action=fold]');
+  await page.click('.modal [data-action=confirm-fold]');
+  await until(page, () => document.querySelector('.result .lines') && !window.__game.ui.card && !window.__game.ui.updating, null, 'the result after my fold');
+  await page.click('[data-action=peek]');
+  await until(page, () => document.querySelector('.result.peek'), null, 'See the board after my fold');
+  const leftOn = await page.evaluate(() => ({ chips: document.querySelectorAll('#board .chip.own-0').length, exfil: document.querySelectorAll('.exfil').length, folded: window.__game.state.round.folded[0] }));
+  if (leftOn.chips || leftOn.exfil || !leftOn.folded) fail(`after my fold none of my agents should be left on the board: ${JSON.stringify(leftOn)}`);
+  log(`my fold pulled ${mine} agent${mine === 1 ? '' : 's'} off the board`);
+  await foldExit(page, { log, fail });
 
   // Mid-reveal, a click in any modal but help only skips the reveal: the quit modal's Leave
   // must not leave. Then leaving anyway (through the Leave action itself): the title is up at
@@ -807,6 +1148,23 @@ export async function duo([host, guest], { url, log, shot, audit, live = false, 
   await host.click('.modal.hot [data-action=respond][data-accept="1"]');
   await until(guest, () => window.__game.view.round.stake === 2, null, 'the doubled stake on the guest');
   log(`escalation crossed the wire${flashHeld ? ' (Space skipped the host’s flash without answering)' : ''}`);
+  // The token it spent crossed too: both views agree on the tokens, and on each screen the
+  // escalator's side (the guest's, seat 1) shows one live chit fewer than the host's.
+  for (const p of [host, guest]) {
+    await until(
+      p,
+      () => {
+        const v = window.__game.view;
+        const live = (s) => document.querySelectorAll(`.scorebar .side.s-${s} .tk:not(.spent)`).length;
+        return live(0) === v.tokens[0] && live(1) === v.tokens[1] && live(1) === live(0) - 1;
+      },
+      null,
+      'the escalator’s side to show one live token fewer',
+    );
+  }
+  const tokens = await Promise.all([host, guest].map((p) => p.evaluate(() => window.__game.view.tokens.join())));
+  if (tokens[0] !== tokens[1]) throw new Error(`host and guest disagree on the tokens: ${tokens.join(' vs ')}`);
+  log(`tokens agree across the wire (${tokens[0]})`);
 
   // Waits that also skip any reveal in progress, so a slow page never holds up the next step.
   const untilQuick = (p, fn, what) => until(p, `(window.__game.ui.animating && (window.__game.ui.skip = true), (${fn})())`, null, what);

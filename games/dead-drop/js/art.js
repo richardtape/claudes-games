@@ -690,3 +690,15 @@ export const agentSVG = (id) => make('a:' + id, 0.45, '0 0 100 100', AG[id]);
 export const citySVG = (id) => make('c:' + id, 0.6, '0 0 300 120', CT[id], ' preserveAspectRatio="xMidYMax meet"');
 /** The title-screen spy: full length, trench coat and fedora. */
 export const spySVG = () => make('spy', 0.8, '0 0 200 300', spy);
+
+/**
+ * The Microfilm: a film canister seen from above. A round tin lid with five holes punched round
+ * its hub, like a reel's, so the plate or slip behind shows through them.
+ */
+const film = () =>
+  ink(
+    E(12, 12, 11.2, 11.2, 17),
+    [0, 1, 2, 3, 4].map((k) => H(E(12 + 6.1 * Math.cos((k * 72 - 90) * RAD), 12 + 6.1 * Math.sin((k * 72 - 90) * RAD), 2.5, 2.5, 8))),
+  );
+/** The film canister (24 × 24): marks the city carrying the Microfilm. */
+export const filmSVG = () => make('film', 0.12, '0 0 24 24', film);

@@ -213,6 +213,23 @@ body[data-screen='title'] .mark {
   background: var(--paper);
   color: var(--red);
 }
+/* How many escalation tokens are left, under or beside the word. */
+.slip.esc .left {
+  margin-left: -4px;
+  font: 700 11px/1 var(--type);
+  letter-spacing: 0;
+  color: var(--ink);
+}
+/* Out of tokens: the button is spent like its last chit, an outline on the table. */
+.slip.esc.out {
+  background: transparent;
+  color: var(--line);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--line) 55%, transparent);
+  opacity: 0.75;
+}
+.slip.esc.out .left {
+  color: inherit;
+}
 .slip.ready {
   animation: ready 1.4s ease-in-out infinite;
 }
@@ -766,6 +783,113 @@ body[data-screen='title'] .mark {
 .turn {
   font-size: 12px;
 }
+/* Each side's marks sit between its name and its score: escalation tokens over film frames, in
+   the owner's colour. */
+.scorebar .s-0 {
+  --own: var(--c0);
+}
+.scorebar .s-1 {
+  --own: var(--c1);
+}
+.marks {
+  flex: none;
+  align-self: center;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+}
+/* Escalation tokens: slanted chits of coloured paper, one per token the match began with. A spent
+   one leaves only its outline. */
+.tokens {
+  display: flex;
+  gap: 5px;
+  padding: 0 3px;
+}
+.tk {
+  width: 10px;
+  height: 16px;
+  background: var(--own);
+  transform: skewX(-14deg);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3);
+}
+.tk:nth-child(2n) {
+  transform: skewX(-14deg) rotate(4deg);
+}
+.tk.spent {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--own);
+  opacity: 0.8;
+}
+/* Film strips: a short strip of film, one frame per strip the reel needs. Sprocket holes run
+   along both edges; a frame's window fills with the owner's colour once earned. */
+.reel {
+  display: flex;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3);
+}
+.fr {
+  --perf: rgb(240 226 196 / 0.72);
+  position: relative;
+  width: 16px;
+  height: 16px;
+  background:
+    linear-gradient(90deg, var(--perf) 0 2px, transparent 0) 1px 1px / 4px 2px repeat-x,
+    linear-gradient(90deg, var(--perf) 0 2px, transparent 0) 1px calc(100% - 1px) / 4px 2px repeat-x,
+    var(--ink);
+}
+.fr::before {
+  content: '';
+  position: absolute;
+  inset: 4px 2px;
+  background: rgb(240 226 196 / 0.16);
+}
+.fr.got::before {
+  background: var(--own);
+}
+/* A strip of film in flight, from the film city's canister to its frame in the scorebar (main.js
+   sizes and places it on the frame, and flies it in from the canister). */
+.fr.strip-fly {
+  position: fixed;
+  z-index: 45;
+  pointer-events: none;
+  box-shadow: 0 6px 0 rgb(0 0 0 / 0.3), 0 0 0 1px rgb(240 226 196 / 0.5);
+}
+/* It lands: the frame's window flares paper, then settles to the owner's colour. */
+.fr.landed::before {
+  animation: frame-land 0.5s ease-out;
+}
+@keyframes frame-land {
+  from {
+    background: var(--paper);
+    box-shadow: 0 0 10px 4px rgb(240 226 196 / 0.85);
+  }
+}
+/* The canister gives a jolt as the strip leaves it. */
+.plate .canister.sending {
+  animation: can-jolt 0.32s ease-out;
+}
+@keyframes can-jolt {
+  30% {
+    rotate: -16deg;
+  }
+  65% {
+    rotate: 7deg;
+  }
+}
+/* The pot: points a dead heat rolled over, on a mustard chit hanging off the stake slip's left
+   edge (the final turn's ×2 stamp keeps the right). */
+.pot {
+  position: relative;
+  align-self: center;
+  margin: -6px 4px -6px -26px;
+  padding: 4px 5px 1px;
+  background: var(--mustard);
+  color: var(--ink);
+  font: 22px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 0 0 2px var(--ink), 0 2px 0 rgb(0 0 0 / 0.35);
+  rotate: 7deg;
+}
 
 .board {
   display: grid;
@@ -853,6 +977,36 @@ body[data-screen='title'] .mark {
   margin: 0;
   font: 700 12px var(--type);
   color: var(--mustard);
+}
+/* The Microfilm: a mustard canister in the film city's top corner, its five holes showing the
+   plate through. */
+.canister {
+  flex: none;
+  display: block;
+  color: var(--mustard);
+}
+.canister svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.plate .canister {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.plate .canister svg {
+  width: 26px;
+  height: 26px;
+}
+.plate .canister b {
+  font: 13px/1 var(--display);
+  letter-spacing: 0.06em;
+  font-weight: 400;
 }
 .total {
   position: relative;
@@ -1128,6 +1282,23 @@ body[data-screen='title'] .mark {
     opacity: 0;
   }
 }
+/* A fold: the folder's agents lift off the board and fade, all at once, as if on a signal. */
+.chip.exfil {
+  z-index: 2;
+  pointer-events: none;
+  animation: exfil 0.45s cubic-bezier(0.4, 0, 0.7, 0.4) forwards;
+}
+@keyframes exfil {
+  35% {
+    transform: translateY(-8px) rotate(-5deg);
+    box-shadow: 0 12px 0 rgb(0 0 0 / 0.2), 0 0 0 3px var(--line);
+  }
+  to {
+    transform: translateY(-36px) rotate(-9deg);
+    box-shadow: 0 22px 0 rgb(0 0 0 / 0), 0 0 0 3px var(--line);
+    opacity: 0;
+  }
+}
 
 .ticker {
   margin: 0;
@@ -1356,6 +1527,29 @@ body[data-screen='title'] .mark {
 .pts {
   font-weight: 700;
 }
+/* The Microfilm's line: the canister when the film stays put, a frame in the taker's colour when
+   a strip changes hands. */
+.strip-line {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+.strip-line .canister {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--ink);
+}
+.strip-line .fr {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+.strip-line .fr::before {
+  inset: 4px 2px;
+}
 .tally {
   margin: 0;
   font: 26px var(--display);
@@ -1575,6 +1769,67 @@ body[data-screen='title'] .mark {
   font-size: 15px;
   line-height: 1.35;
 }
+.title-card .name {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+/* The film city's slip carries a small ink tab with the canister on it, as on its plate. */
+.film-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 2px 4px;
+  background: var(--ink);
+  color: var(--paper);
+  font: 700 12px/1.2 var(--type);
+  white-space: nowrap;
+  clip-path: var(--cut-2);
+}
+.film-tag .canister {
+  width: 16px;
+  height: 16px;
+}
+/* Under the credits, typed on ink slips: where the film travels, and any pot rolled over. They
+   come in with the third city (at 0.8 s), so each is fully up for at least 1.2 s of the 2.5 s card. */
+.title-card .notes {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: min(700px, calc(100vw - 32px));
+}
+.title-card .notes p {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 16px 7px 10px;
+  background: var(--ink);
+  color: var(--paper);
+  font: 700 16px/1.3 var(--type);
+  text-align: left;
+  clip-path: var(--cut);
+  animation: note-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: 0.8s;
+}
+.title-card .notes p + p {
+  animation-delay: 0.9s;
+}
+.title-card .notes .canister {
+  width: 24px;
+  height: 24px;
+}
+.title-card .film-line b {
+  color: var(--mustard);
+}
+@keyframes note-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
 
 /* The final turn's card: the house lights go down. Oxblood bars slam in from both sides (the
    card is up for only 1.2 s, so everything is in by 0.7 s), "Final drop" lands, a spotlight
@@ -1675,6 +1930,80 @@ body[data-screen='title'] .mark {
   }
 }
 
+/* The full reel: the match won on film. The bars come in in the winner's colour (own-N on the
+   card), a strip of film runs through the gate with every frame exposed in that colour, one after
+   another, the spy caught in each, and "The full reel" lands over the news on a paper slip. */
+.reel-card {
+  gap: 16px;
+}
+.reel-card .bars i:nth-child(4) {
+  background: var(--paper);
+}
+.reel-card .filmstrip {
+  --perf: rgb(240 226 196 / 0.85);
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding: 17px 24px;
+  background:
+    linear-gradient(90deg, var(--perf) 0 9px, transparent 0) 6px 5px / 18px 7px repeat-x,
+    linear-gradient(90deg, var(--perf) 0 9px, transparent 0) 6px calc(100% - 5px) / 18px 7px repeat-x,
+    var(--ink);
+  box-shadow: 0 0 0 2px rgb(240 226 196 / 0.28), 0 10px 0 rgb(0 0 0 / 0.35);
+  clip-path: var(--cut-2-px);
+  rotate: -2deg;
+  animation: gate 0.5s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.reel-card .filmstrip i {
+  position: relative;
+  width: 84px;
+  height: 62px;
+  overflow: hidden;
+  background: var(--own);
+  color: var(--ink);
+  clip-path: var(--cut-2);
+  animation: expose 0.32s calc(0.45s + var(--i) * 0.2s) ease-out both;
+}
+/* The same spy in every frame, a step further across in each, like frames of one shot. */
+.reel-card .filmstrip svg {
+  position: absolute;
+  left: calc(30% + var(--i) * 8%);
+  bottom: -4px;
+  height: 108%;
+  width: auto;
+}
+.reel-card .filmstrip .ac {
+  fill: var(--paper);
+}
+@keyframes gate {
+  from {
+    transform: translateX(70vw);
+  }
+}
+/* A frame is exposed: a flash of white light, then the owner's colour. */
+@keyframes expose {
+  from {
+    background: var(--paper);
+    color: var(--paper);
+  }
+}
+.reel-card .big {
+  font-size: clamp(64px, min(19vw, 16vh), 140px);
+  animation: slam 0.34s 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+.reel-card .small {
+  position: relative;
+  margin: 0;
+  max-width: min(40rem, calc(100vw - 32px));
+  padding: 6px 14px 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 18px/1.3 var(--type);
+  clip-path: var(--cut-2);
+  rotate: 0.6deg;
+  animation: slip-type 0.4s 0.6s steps(30) both;
+}
+
 /* Modals */
 .modal {
   position: fixed;
@@ -1716,6 +2045,24 @@ body[data-screen='title'] .mark {
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 14px;
+}
+/* What the Microfilm does with this choice: a strip of ink with the canister, like its plate. */
+.sheet .film-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  /* 12px top and bottom clear the cut (up to 11px deep at its corners). */
+  padding: 12px 16px 12px 12px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 13px;
+  line-height: 1.35;
+  clip-path: var(--cut-2-px);
+}
+.sheet .film-note .canister {
+  width: 22px;
+  height: 22px;
 }
 
 /* Help: header (title and tabs), one scrolling body, footer. A steady height, so the tabs
@@ -1926,6 +2273,20 @@ body[data-screen='title'] .mark {
 .final i {
   font-style: normal;
 }
+/* Each side's strips of film hang under its score: the scorebar's frames, a size up. The score
+   keeps the line's baseline, so the line is no wider than before. */
+.score-film {
+  display: inline-grid;
+  justify-items: center;
+  gap: 6px;
+}
+.final .fr {
+  width: 22px;
+  height: 22px;
+}
+.final .fr::before {
+  inset: 5px 3px;
+}
 .rounds {
   list-style: none;
   padding: 0;
@@ -1942,11 +2303,10 @@ body[data-screen='title'] .mark {
   padding: 4px 0 4px 10px;
   border-left: 6px solid var(--paper-2);
 }
-.rounds li.w-me {
-  border-color: var(--c0);
-}
+/* The winner's colour by seat (own-N), so a guest's own rounds are red on their screen too. */
+.rounds li.w-me,
 .rounds li.w-them {
-  border-color: var(--c1);
+  border-color: var(--own);
 }
 .rounds .n {
   font: 22px var(--display);
@@ -1956,6 +2316,17 @@ body[data-screen='title'] .mark {
   font-weight: 400;
   white-space: nowrap;
 }
+/* A round that gave a strip of film: a small frame in the taker's colour beside the film city. */
+.rounds .fr {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-left: 4px;
+  vertical-align: -2px;
+}
+.rounds .fr::before {
+  inset: 3px 2px;
+}
 .over .actions {
   display: flex;
   align-items: center;
@@ -1964,6 +2335,10 @@ body[data-screen='title'] .mark {
 }
 
 .toast {
+  /* Positioned from the middle of the screen, a toast would shrink to half its width: size it
+     to its text instead, up to most of a phone. */
+  width: max-content;
+  max-width: min(92vw, 28rem);
   background: var(--ink);
   color: var(--paper);
   font: 700 14px var(--type);
@@ -2016,6 +2391,26 @@ body[data-night='1'] .city.closed::before {
 }
 body[data-night='1'] .city:not(.won-me, .won-them, .closed) .plate {
   background-image: radial-gradient(ellipse 85% 58% at 50% -6%, rgb(255 218 160 / 0.38), rgb(255 205 140 / 0.1) 50%, transparent 88%);
+}
+/* The marks on the dark table: the chits and the strip take a paper hairline, so a teal one still
+   reads, and a spent chit's outline lightens toward paper. The canister catches the spotlight. */
+body[data-night='1'] .tk {
+  box-shadow: 0 0 0 1px rgb(240 226 196 / 0.55);
+}
+body[data-night='1'] .tk.spent {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--own) 45%, var(--paper));
+}
+body[data-night='1'] .reel {
+  box-shadow: 0 0 0 1px rgb(240 226 196 / 0.4);
+}
+body[data-night='1'] .plate .canister {
+  color: var(--paper);
+}
+/* At the final flip the house lights are down on the scorebar; they come back up on it as a strip
+   of film flies in, so the frame it lands in can be seen. */
+body[data-night='1'] .play.revealing > .scorebar.film-in:not(#board) {
+  opacity: 1;
+  transition: opacity 0.3s;
 }
 /* Your hand takes a red edge, as if lit by the warning lamp. */
 body[data-night='1'] .hand .card {
@@ -2085,16 +2480,104 @@ body[data-night='1']:has(.play.revealing) #top {
   .scorebar {
     gap: 6px;
   }
+  /* Each side wraps: its name on a line of its own, then the score with its marks beside it (on
+     the inside, toward the stake), so the marks cost no height. Your side reads upside down:
+     the score row on top, the name under it. */
   .scorebar .side {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 6px;
   }
-  .scorebar .side:last-child {
-    align-items: flex-end;
+  /* The name's line may run past its column into the gap, as it always has, rather than cut a
+     short name off: only a name past 12ch ends in an ellipsis. */
+  .scorebar .side .tag {
+    order: -1;
+    flex: 0 0 100%;
+    min-width: max-content;
+  }
+  .scorebar .side:first-child .marks {
+    order: 1;
+  }
+  .scorebar .side:last-child .tag {
+    order: 0;
+    justify-content: flex-end;
   }
   .scorebar .side:last-child .score {
     order: -1;
+  }
+  .scorebar .side:last-child .marks {
+    order: -2;
+  }
+  .marks {
+    gap: 3px;
+  }
+  .tokens {
+    gap: 3px;
+    padding: 0 2px;
+  }
+  .tk {
+    width: 7px;
+    height: 11px;
+  }
+  .fr {
+    width: 12px;
+    height: 14px;
+  }
+  .pot {
+    margin: -5px 3px -5px -20px;
+    padding: 3px 4px 1px;
+    font-size: 18px;
+  }
+  .plate .canister {
+    top: 7px;
+    left: 7px;
+    gap: 1px;
+  }
+  .plate .canister svg {
+    width: 16px;
+    height: 16px;
+  }
+  .plate .canister b {
+    font-size: 10px;
+  }
+  .controls .slip.esc {
+    flex-direction: column;
+    gap: 1px;
+    padding-top: 6px;
+    padding-bottom: 4px;
+  }
+  .slip.esc .left {
+    margin-left: 0;
+    font-size: 10px;
+  }
+  .reel-card .filmstrip {
+    gap: 8px;
+    padding: 15px 18px;
+  }
+  .reel-card .filmstrip i {
+    width: 64px;
+    height: 48px;
+  }
+  .reel-card .small {
+    font-size: 15px;
+  }
+  .final .fr {
+    width: 18px;
+    height: 18px;
+  }
+  .final .fr::before {
+    inset: 4px 2px;
+  }
+  .title-card .notes p {
+    font-size: 13px;
+    padding: 6px 12px 5px 8px;
+  }
+  .title-card .notes .canister {
+    width: 20px;
+    height: 20px;
+  }
+  .film-tag {
+    font-size: 11px;
   }
   .scorebar .who {
     font-size: 11px;
@@ -2338,6 +2821,14 @@ body[data-night='1']:has(.play.revealing) #top {
   }
   .title-card .line p {
     padding: 6px 0;
+  }
+  .title-card .notes {
+    grid-auto-flow: column;
+    gap: 10px;
+  }
+  .title-card .notes p {
+    font-size: 13px;
+    padding: 5px 10px 4px 8px;
   }
   /* Phones on their side: a smaller title leaves room for the body. */
   .sheet.help {

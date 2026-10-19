@@ -6,19 +6,21 @@
 //   --rounds N            volume per configuration, in rounds (default 5000), rounded up to whole batches
 //   --a ID --b ID         rivals (default heron, heron); --samples N overrides both (default: their own)
 //   --seats N             2 to 4 players (default 2); --c ID and --d ID fill seats three and four (default heron).
-//                         Three and four seats have no stakes, so escalation numbers read zero
-//   --target N            points to win a match (default 10)
+//                         Every table size plays the stake game (tokens, answers, the pot, the Microfilm)
+//   --target N            points to win a match (default: TARGET in js/data.js)
 //   --seed S              default "dd"
 //   --pin city            pin a city into every round (repeatable, at most 3)
 //   --set path=value      (repeatable) change data, e.g. heavy.power=5; applies to the base and every variant
 //   --variant name:key=value   (repeatable; repeat a name to set more than one key). Keys: a, b, samples,
 //                         a, b, c, d, seats, samples, target, pin, or a settings path
-//   --probe agents|cities agents: one "<id>+1" variant per agent (power + 1); cities: "pin-<id>" variants
+//   --probe agents|cities|stakes   agents: one "<id>+1" variant per agent (power + 1); cities: "pin-<id>" variants;
+//                         stakes: tokens2, tokens9, no-film (rules.reel=0) and no-rollover (rules.rollover=0)
 //   --ladder [all]        adjacent rival pairs (default) or all 10 pairs, no base run
 //   --workers W           default 4; 1 runs in-process with no threads
 //   --run NAME            batch log .tmp/dead-drop-sim/NAME.jsonl (default "sim"); --resume reuses it
 //   --out FILE            JSON summary (default .tmp/dead-drop-sim/NAME.json)
-//   --against FILE        compare this run's base with the base in a saved JSON
+//   --against FILE        compare this run's base with the base in a saved JSON. Against a phase2a 3- or 4-seat
+//                         baseline the stake keys will read as changed: expected, 2a had no stakes at those tables
 //   --json                print the JSON to stdout instead of the text report
 //
 // Every configuration plays batches 0, 1, 2, ... and keeps the shortest prefix that reaches --rounds, so
@@ -72,7 +74,7 @@ const splitOnce = (s, ch) => {
 
 // ---- configurations ----
 function buildConfigs(o) {
-  const common = { seed: o.seed ?? 'dd', samples: o.samples ?? null, target: o.target ?? 10, pin: o.pin };
+  const common = { seed: o.seed ?? 'dd', samples: o.samples ?? null, target: o.target, pin: o.pin };
   const withSets = (c) => o.set.reduce((acc, s) => applyVariant(acc, ...splitOnce(s, '=')), c);
   const named = (c, name) => ({ ...c, name });
   const list = [];
@@ -102,6 +104,8 @@ function buildConfigs(o) {
     }
   } else if (o.probe === 'cities') {
     for (const c of CITIES) variants.set(`pin-${c.id}`, applyVariant(base, 'pin', c.id));
+  } else if (o.probe === 'stakes') {
+    for (const [vname, key, value] of [['tokens2', 'rules.tokens', 2], ['tokens9', 'rules.tokens', 9], ['no-film', 'rules.reel', 0], ['no-rollover', 'rules.rollover', 0]]) variants.set(vname, applyVariant(base, key, value));
   } else if (o.probe) throw new Error(`unknown --probe: ${o.probe}`);
   for (const [name, c] of variants) list.push(named(c, name));
   return list;

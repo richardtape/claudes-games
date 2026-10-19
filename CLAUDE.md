@@ -276,7 +276,11 @@ document it here rather than burying it in the game.
   nothing moves. Check it first; drive canvas games with `__game.loop.manual = true` and
   `__game.advance(seconds)` (works hidden or visible), and dispatch real `PointerEvent`s on
   the canvas to test the actual input path. Evaluations over ~45 s time out, so keep
-  each `javascript_tool` call short. Batch steps with `browser_batch`. Set up state
+  each `javascript_tool` call short. A tab hidden for a few minutes runs chained timers only
+  about once a minute, so in-page `setTimeout` sleeps and timer-paced bots stall: Dead Drop's
+  play (2026-10-19) used `__game.skipAnimations(true)`, made the rival lock at once
+  (`rivalLocks()`), clicked synchronously and yielded with a `MessageChannel` round trip,
+  which hidden tabs don't throttle. Batch steps with `browser_batch`. Set up state
   through `window.__game` with `javascript_tool`; type with `computer` `type`. On layouts that
   change after each click, click via `element.click()` in `javascript_tool` or `find` refs
   rather than fixed coordinates. Right after a reload the first keystrokes can be dropped:
@@ -335,6 +339,27 @@ document it here rather than burying it in the game.
   count. Four-seat sims run at about 4 rounds/s on 4 workers: a 5,000-round run takes 20 minutes.
 - At N seats an agent's "win% when played" sits near 100/N, not 50, and power separates agents
   more than in a duel (Heavy 36 vs Lookout 26 at three seats): measure N-seat balance at N seats.
+- A bot's betting threshold moves *when* it bets and how often the bet wins, not *how often* it
+  bets: Dead Drop's escalation threshold from 0.35 to 0.65 cut escalation only from 96% to 88%
+  but lifted the escalator's wins from 62.6% to 74.2%, because a higher bar just waits for the
+  last turns, when one side nearly always sees a won round (`tools/SIMLOG.md` B14).
+- A scarce resource barely bites when the supply covers the game: Dead Drop's three escalation
+  tokens a match covered four or five rounds of one escalation each, so they left escalation
+  at 94% (98.7% unlimited, B12–B13).
+- A pace is the lever on frequency: bots that keep a token for every other round left, counting
+  rounds by the leader's distance to the target, escalated in 65% of rounds instead of 79%, and
+  the half-time leader won about 6 points less often, since the trailing side still had tokens
+  late (B15). If the pace makes value bets impossible early, bluffs must follow it too, or
+  every early bet is a bluff a player can learn to call (B21–B22).
+- Two rates that share an event trade and can't both move inward: a fold in answer counts as
+  the escalator's win, so the answer threshold moved them together (about 0.4 points of one per
+  point of the other) and the window holding both in band was about 0.02 wide (B17–B21). Find
+  such couplings before setting two bands on them.
+- A comeback prize needs a short race: Dead Drop's Microfilm (a strip for holding the film city
+  in a round you lose) decided 3% of matches at a reel of 3 and 21% at 2, and its winners came
+  from behind on points about 90% of the time (B20, B23).
+- Tune each table size at that size: the two-player pace and target gave 3- and 4-seat matches
+  of 4.2 and 3.5 rounds (B25–B26).
 
 ## Deploying
 
@@ -485,6 +510,33 @@ and new files.
   switch the music off with the game's own button and restore what they found. To show a
   flake predates your change, run the old commit in a worktree (`git worktree add`, symlink
   `node_modules`) with the suspected delay inserted.
+- Re-issuing a secret card's id doesn't hide it when the id's shape gives it away: Dead Drop's
+  uids ran `a0.0`–`a0.11` in deck order, so a Getaway's card re-issued as `a0.12` would still
+  have named the card sent home. Mint opaque ids from the state's RNG
+  (`<seat><round>.<4 base-36 characters>`) and re-key every card on its way back to a hand in
+  one function (`returnToHand`).
+- Check that the phone's play screen fits vertically, not only that nothing overflows sideways:
+  Dead Drop's smoke measures the scorebar, the cities, the hand and Lock in against
+  `innerHeight` (`phoneFits`). Fail first on a missing element: it measures `null`, and
+  `null <= 844` is true in JS, so the first version would pass with the hand gone.
+- A WAAPI animation's `.finished` doesn't settle in a hidden tab (Rich's Chrome often is), so
+  an update that awaits it outside a skippable reveal hangs there. Time those steps with plain
+  timers that resolve at once when skipping or under reduced motion (`outsideReveal()` in
+  Dead Drop); not a zero timer, since a hidden tab runs timers only about once a second.
+- After an `await` in an async UI update, use the state captured before it, not a variable
+  re-read since: Enter during Dead Drop's 450 ms fold exit started the next round, the resumed
+  code read the new round's view (no result yet) and threw, and pass and play froze. Capture
+  what the step plays (`const ended = v`), stop when the round changed (`upToDate()`), and
+  ignore action keys while a board is held (`ui.holdBoard`).
+- Calibrate a behaviour test on positions where the behaviour can show, and compare it with
+  the behaviour turned off rather than an absolute bar. Dead Drop's plan wanted a heavy film
+  weight to send the bot into the film city 70% of the time on turn 1, where one drop of six
+  barely moves who holds it: a correct build scored 13–17 of 30 at any weight. The kept test
+  uses last-turn positions and needs a clear gap over weight 0; with the weighting broken it
+  fails at 12 of 31, the same as weight 0.
+- When another session commits to the repo while a task runs, build the task's review diff
+  from its own commit's parent (`git diff <commit>^ <commit>`), not the base noted before it
+  started, or the reviewer reads the other session's files as the task's.
 
 ## Games so far
 

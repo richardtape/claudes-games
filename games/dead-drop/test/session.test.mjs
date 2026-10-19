@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTable, attachBot, hostSession, guestSession, restoreTable } from '../js/session.js';
+import { readFileSync } from 'node:fs';
+import { createTable, attachBot, hostSession, guestSession, restoreTable, canRestore, PROTOCOL } from '../js/session.js';
 import { createMemoryPair } from '../../../shared/net.js';
 import { RIVALS } from '../js/data.js';
 import { createRng } from '../../../shared/rng.js';
@@ -52,14 +53,14 @@ test('a third browser is turned away; the same guest can come back', async () =>
   const statuses = [];
   hostSession({ room: hostRoom, table, onStatus: (s) => statuses.push(s) });
   hostRoom.peers.add('g1');
-  hostRoom.handlers.hello({ v: 1, name: 'Agent Owl', token: 'tok' }, 'g1');
+  hostRoom.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: 'tok' }, 'g1');
   hostRoom.peers.add('g2');
-  hostRoom.handlers.hello({ v: 1, name: 'Agent Pike', token: 'other' }, 'g2');
+  hostRoom.handlers.hello({ v: PROTOCOL, name: 'Agent Pike', token: 'other' }, 'g2');
   assert.deepEqual(hostRoom.sent.filter((m) => m.to === 'g2').map((m) => m.type), ['nope']);
   hostRoom.peers.delete('g1');
   hostRoom.onPeerLeave('g1');
   hostRoom.peers.add('g3');
-  hostRoom.handlers.hello({ v: 1, name: 'Agent Owl', token: 'tok' }, 'g3');
+  hostRoom.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: 'tok' }, 'g3');
   assert.deepEqual(statuses, ['joined', 'left', 'back']);
   assert.equal(table.names[1], 'Agent Owl');
 });
@@ -87,7 +88,7 @@ test('a computer rival plays a whole match against a random player', async () =>
   human();
   await until(() => table.state.phase === 'match-over', 20000);
   bot.stop();
-  assert.ok(table.state.scores[table.state.winner] >= 6);
+  assert.ok(table.state.winBy === 'reel' || table.state.scores[table.state.winner] >= 6);
 });
 
 test('every match has an id that survives a save and changes on a rematch', () => {
@@ -112,7 +113,7 @@ test('the host only accepts codenames from the list', () => {
     const table = createTable({ seed: 4 });
     const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send() {}, leave() {} };
     hostSession({ room, table });
-    room.handlers.hello({ v: 1, name, token: 't' }, 'g');
+    room.handlers.hello({ v: PROTOCOL, name, token: 't' }, 'g');
     assert.equal(table.names[1], shown);
   }
 });
@@ -140,7 +141,7 @@ test('bye settles within 400 ms even if the send never settles', async () => {
   const table = createTable({ seed: 5 });
   const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send: () => new Promise(() => {}), leave() {} };
   const host = hostSession({ room, table });
-  room.handlers.hello({ v: 1, name: 'Agent Owl', token: 't' }, 'g');
+  room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: 't' }, 'g');
   const t0 = Date.now();
   await host.bye();
   assert.ok(Date.now() - t0 < 700);
@@ -155,7 +156,7 @@ test('bye resolves at once, sending nothing, when there is no peer left to tell'
   await lonely.bye();
   const room = fakeRoom(['g']);
   const host = hostSession({ room, table: createTable({ seed: 6 }) });
-  room.handlers.hello({ v: 1, name: 'Agent Owl', token: 't' }, 'g');
+  room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: 't' }, 'g');
   room.peers.delete('g');
   await host.bye();
   // Guest: no host yet, then a host who has gone.
@@ -195,7 +196,7 @@ test('a three-seat table of computer rivals plays a whole match', async () => {
   const bots = [0, 1, 2].map((seat) => attachBot(t, seat, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(seat + 1) }));
   await until(() => t.state.phase === 'match-over', 30000);
   bots.forEach((b) => b.stop());
-  assert.ok(t.state.scores[t.state.winner] >= 4);
+  assert.ok(t.state.winBy === 'reel' || t.state.scores[t.state.winner] >= 4);
 });
 
 test('a three-seat table keeps three seats across rounds, rematches and a save', () => {
@@ -245,4 +246,53 @@ test('an action from a seat outside the table changes nothing', () => {
       assert.equal(t.seq, seq);
     }
   }
+});
+
+test('protocol 2: a version-1 guest is turned away with the version message', () => {
+  assert.equal(PROTOCOL, 2);
+  const sent = [];
+  const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send(t, d, id) { sent.push([t, d, id]); }, leave() {} };
+  hostSession({ room, table: createTable({ seed: 1 }) });
+  room.handlers.hello({ v: 1, name: 'Agent Fox', token: '0123456789abcdef' }, 'g');
+  assert.deepEqual(sent, [['nope', { why: 'version' }, 'g']]);
+});
+
+test('saves: only a v2 table restores; a Phase 1 save is refused', () => {
+  const v1 = JSON.parse(readFileSync(new URL('./golden/v1-table.json', import.meta.url), 'utf8'));
+  assert.equal(canRestore(v1), false);
+  assert.throws(() => restoreTable(v1), /older version/);
+  for (const bad of [null, undefined, {}, { state: null }, { state: { v: 2 } }]) assert.equal(canRestore(bad), false);
+  const t = createTable({ seed: 2 });
+  const copy = JSON.parse(JSON.stringify(t.toJSON()));
+  assert.ok(canRestore(copy));
+  assert.deepEqual(restoreTable(copy).state, t.state);
+});
+
+test('saves: a mid-round table (a spent token, a pot, strips, a pending call) restores whole, and its bot answers', async () => {
+  const t = createTable({ seed: 17 });
+  assert.ok(t.act(0, { a: 'escalate' }));
+  t.state.round.pot = 2;
+  t.state.strips = [1, 0];
+  assert.ok(t.state.round.pending);
+  const copy = JSON.parse(JSON.stringify(t.toJSON()));
+  assert.ok(canRestore(copy));
+  const back = restoreTable(copy);
+  assert.deepEqual(back.state, t.state);
+  assert.equal(back.state.tokens[0], t.state.tokens[0]);
+  const owes = 1 - back.state.round.pending.by;
+  const bot = attachBot(back, owes, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(5) });
+  await until(() => !back.state.round.pending, 5000);
+  bot.stop();
+  assert.ok(back.state.round.called);
+  assert.equal(back.state.round.pending, null);
+});
+
+test('a three-seat table: one seat escalates and the computer rivals answer', async () => {
+  const t = createTable({ seed: 41, seats: 3 });
+  const bots = [1, 2].map((seat) => attachBot(t, seat, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(seat) }));
+  assert.ok(t.act(0, { a: 'escalate' }));
+  await until(() => !t.state.round.pending, 5000);
+  bots.forEach((b) => b.stop());
+  assert.equal(t.state.round.called.by, 0);
+  assert.ok(t.state.round.called.answers.every((a, s) => (s === 0 ? a === null : ['on', 'fold'].includes(a))));
 });
