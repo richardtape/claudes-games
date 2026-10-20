@@ -7,7 +7,7 @@
 //   --a ID --b ID         rivals (default heron, heron); --samples N overrides both (default: their own)
 //   --seats N             2 to 4 players (default 2); --c ID and --d ID fill seats three and four (default heron).
 //                         Every table size plays the stake game (tokens, answers, the pot, the Microfilm)
-//   --target N            points to win a match (default: TARGET in js/data.js)
+//   --target N            points to win a match (default: follows the seat count, targetFor(seats) in js/data.js)
 //   --seed S              default "dd"
 //   --pin city            pin a city into every round (repeatable, at most 3); the rest come from the match's pool
 //   --roster classic|mixed   classic (default): the original 12 agents and 11 cities. mixed: each match draws a

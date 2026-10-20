@@ -13,6 +13,10 @@ everyone: Classic (the original 12 agents and 11 cities) or Mixed. A ladder of f
 each brings new agents and cities and an announced rule twist, and what a rival brings joins your
 network when you beat it. Rounds are operations in a story told by cables from C.
 
+Since Phase 3, two to four can play: online, each on their own phone, with computer rivals in empty
+seats and a stand-in for a dropped line; solo at a Table against two or three rivals; or pass and
+play on one device (The table for three and four).
+
 ## The three loops
 
 - **The moment (seconds):** pick an agent, pick a city, lock in. Both cards fly in face down
@@ -106,13 +110,16 @@ changed. The last column is the confirm, B29 (20,098 rounds, Heron against Heron
 | Accomplice | 1 | drops with a partner: a second card from your hand, face down | The Countess | 49.1 ±0.9 |
 | Turncoat | 0 | flip: swaps sides with the weakest face-up rival agent here | Control | 47.9 ±1.0 |
 | Courier | 2 | flip: your strongest face-up agent in another city moves here | The Magpie | 45.9 ±1.0 |
-| Blackmailer | 2 | flip: escalates for free if nobody has yet; no folding in answer | The Magpie | 46.7 ±1.2 |
+| Blackmailer | 2 | flip: a free escalation, no token; rivals may still fold (since Phase 3) | The Magpie | 46.7 ±1.2 |
 | Decoy | 0 | drops face down; takes the hit for your next agent here to be taken out or turned | Mr Heron | 47.8 ±1.4 |
 
-The Classic 12 stay in band on Mixed too (the Lookout 46.7 to the Heavy 51.8). The readings below
-are the plan's Decision 4 and the rulings made while building it. Each is also stated plainly in the
-agent's `note` in `js/data.js`, which Help shows, so nobody has to guess (the numbered decisions
-cited in this file are the plan's, `docs/superpowers/plans/2026-10-18-dead-drop-phase-2b2.md`):
+The Blackmailer's row is B29's, under its 2b-ii rule (no folding in answer); under Phase 3's rule it
+wins 46.6 ±1.2 (B36, The Blackmailer can be refused). The Classic 12 stay in band on Mixed too (the
+Lookout 46.7 to the Heavy 51.8). The readings below are the plan's Decision 4 and the rulings made
+while building it. Each is also stated plainly in the agent's `note` in `js/data.js`, which Help
+shows, so nobody has to guess (the numbered decisions cited in this file are the plan's,
+`docs/superpowers/plans/2026-10-18-dead-drop-phase-2b2.md`, except in The table for three and four,
+which cites Phase 3's):
 
 - **Tricks while face down.** Only the Tripwire and the Decoy keep their tricks face down, and both
   lose them when jammed or in Vienna. Every other trick does nothing face down (a Blackmailer
@@ -152,14 +159,20 @@ cited in this file are the plan's, `docs/superpowers/plans/2026-10-18-dead-drop-
   Tripwires, Prague and Tokyo all apply, and the moved agent's bonus resets. Ties go to the latest
   arrival, then the lowest city index. It never moves an agent out of Moscow (into Moscow is
   allowed), never a face-down agent, and only with room.
-- **The Blackmailer.** It fires only if nobody has escalated this round. Then it doubles the stake
-  and records `called = { by, answers, free: true }`, with "on" for every active rival. No token is
-  spent, nobody is asked, nobody can fold in answer, and it uses up the round's one escalation. It
-  is an internal `freeEscalation(state, seat)`, not an option on `escalate`: `escalate` is a
-  planning action (a token, an open `pending` call, answers to wait for) that the UI, the bot, the
-  session's `act` and the sim all drive, while the Blackmailer fires inside the flip, where nobody
-  can answer. An option would also have opened a path for a guest's `{ a: 'escalate', free: true }`
-  through `table.act`. The two share `escalated` and the doubling, and nothing else.
+- **The Blackmailer** (Phase 3's rule; The Blackmailer can be refused says why). It fires only if
+  nobody has escalated this round, and never on the final turn, where nobody is left to answer. It
+  opens a call as an escalation does, with no token spent: `escalated[seat]` is set and
+  `pending = { by, from, calls, free: true }` asks every other seat still in, who answer at the start
+  of the next turn, play on or fold, as they would a token's call. It settles like any other call (`settleCall`:
+  folds land, then the stake doubles if anyone played on), so the settled `called` has no `free`
+  key, and it uses up the round's one escalation. It is an internal `blackmail(state, seat)`
+  (2b-ii's `freeEscalation`), not an option on `escalate`: `escalate` is a planning action (a token,
+  an open `pending` call, answers to wait for) that the UI, the bot, the session's `act` and the sim
+  all drive, while the Blackmailer fires inside the flip. An option would also have opened a path
+  for a guest's `{ a: 'escalate', free: true }` through `table.act`. `RULES.blackmailer` keeps the
+  older rules for the sim: 'free' (2b-ii's: the stake doubles at once, nobody may fold in answer,
+  and `called = { by, answers, free: true }` records "on" for every active rival) and 'token' (the
+  same, for one of its owner's tokens, and nothing without one).
 - **The Wiretap.** It taps your mark (`markOf`) for the next turn. It shows the mark's *current*
   locked city: taking it back clears it until they lock in again, and a pass or a fold shows
   nothing. On the final turn there is no next turn, so it taps nothing.
@@ -271,7 +284,8 @@ of rounds and folded 10% of answers (B12): three tokens cover four or five round
 escalation each, so tokens alone barely bit (B13).
 
 - **The pace: `scarce` 1, `roundPoints` 1.** A rival counts the rounds left as the leader's
-  distance to the target (÷ `roundPoints`) and keeps a token for every other one; each token
+  distance to the target (÷ `roundPoints`; at three and four seats `roundPoints3` and `roundPoints4`,
+  both 1: The table for three and four) and keeps a token for every other one; each token
   short adds a full point to the value it needs, which puts escalating all but out of reach
   (value runs from −1 to 1). A rival holding all three tokens spends its first once the
   leader has 4 points, its second from 6 and its third from 8 (B16). `roundPoints` 1 is
@@ -404,10 +418,11 @@ each rate.
   your network · no twist"), and its wins unlock nothing. The saved match carries `free`, so
   Continue reads "Continue free play against The Magpie".
 - **Online and pass and play aren't gated by unlocks.** The host's lobby has a Roster switch,
-  Classic (the default) or Mixed (all 20 agents and cities); it re-deals the untouched table
-  (`table.restart(setup)`) and goes away when a guest joins. Pass and play opens a sheet with
-  Classic ("Best for a first match.") and "Mixed: all 20 agents and cities". Meeting an agent online
-  doesn't unlock it for solo play; only beating rivals does.
+  Classic (the default) or Mixed (all 20 agents and cities), which sets the lobby's setup until the
+  host presses Start (The table for three and four; 2b-ii's switch re-dealt an untouched table and
+  went away when a guest joined). Pass and play opens a sheet with the players (2 to 4), Classic
+  ("Best for a first match.") and "Mixed: all 20 agents and cities". Meeting an agent online doesn't
+  unlock it for solo play; only beating rivals does.
 - **First meetings** (`meta.met`, `meet()` in `js/meta.js`). Classic counts as met (Decision 7), so
   the intros are only for the 8 new agents and 9 new cities, plus each rival's dossier (all five
   rivals, Wren included). A rival is met at its dossier (on the ladder only), agents just before the
@@ -441,22 +456,267 @@ no new history.
   this round · Hand h · Deck d". It is a planning tool: it opens only while planning, closes for the
   reveal and the result, takes U and Escape before a reveal's keys, opens over the escalation
   prompt's veil (so it can be read for the decision), and closes on an outside tap (which still does
-  what it does) or a drag.
+  what it does) or a drag. At three and four seats the list is in each rival's file (its tag sheet),
+  and U steps through the files.
+
+## The table for three and four (Phase 3)
+
+Two to four now sit at one table: online, each on their own phone, with computer rivals in empty
+seats; solo at a Table against two or three computer rivals; or pass and play on one device. The
+rules are the engine's at N seats (Seats and the engine) and the stakes are the same at every size;
+what changes is the target and the pace, the screens and the session. Two seats keep their screens:
+the scorebar, the full-size rival row and the two-player prompts. The numbered decisions cited here
+are Phase 3's plan's (`docs/superpowers/plans/2026-10-19-dead-drop-phase-3.md`). Still to come, in
+Part B: the turn timer (the lobby stores the choice and every view carries it, but nothing is timed
+yet), emotes on screen (the session relays them; there is no button or slip yet) and the phone-first
+polish.
+
+### The lobby and Start
+
+- **Opening a table** (Decision 4). "Play friends online" opens the host's lobby, "Open a table":
+  the invite link, the QR code and the room code, then the seats, one row each with a band in the
+  colour it would play in if the match started now: the host, each guest (with a connected dot),
+  "{rival} (computer)", or "Open seat". Beside them, Seats 2 | 3 | 4 (**4 open by default**, so
+  friends can arrive while the host decides; a size below the seats taken is disabled), Timer Off |
+  30 s | Blitz 10 s, and Roster Classic | Mixed (all 20 agents and cities). "Fill empty seats with
+  computer rivals" puts a rival in every open seat, the ladder's in order from Agent Wren whatever
+  the host has unlocked; "Clear computer rivals" takes them out.
+- **Start** is enabled once two seats are taken ("Start with N" while some are open) and plays with
+  the taken seats only: empty seats close, so a room of four with three people plays three. Nothing
+  starts by itself, two players included, so the host may still change the roster or the timer after
+  a friend arrives. Guests see "{host}'s table", "Waiting for {host} to start…", the same seats
+  read-only with theirs marked, and "4 seats · Timer off · Classic". A guest who leaves before Start
+  frees the seat. Start seats the computer rivals behind the round card's hold, so none locks in
+  while the card plays.
+- **Pure state.** The lobby is plain JSON in `js/lobby.js` (`createLobby`, `sit`, `away`, `resize`,
+  `setTimer`, `setSetup`, `fill`, `unfill`, `start`, `publicLobby`), kept by the host's session.
+  `start` turns the taken seats into the table's seats, names and bots; `publicLobby`, the only form
+  that goes on the wire, never carries a token.
+- **The host's save.** `host-CODE` holds `{ lobby, table, at }` from Start on (a lobby is never saved
+  before it). A host who reloads mid-match goes straight back to the table, and each guest's hello
+  takes their seat back.
+
+### Seats and tokens
+
+- **Tokens.** Every browser has a token (16 hex characters). The lobby seats guests in the order they
+  say hello, and the same token always gets the same seat back, at every table size, before the start
+  and after it.
+- **Renumbering at Start.** Start closes the empty seats, so seats renumber (host, open, Owl, Pike
+  plays as host, Owl, Pike). The session looks a peer's seat up by its token on every message
+  (`seatOf`) and keeps the stand-in clock by token, so views, actions and emotes follow the player,
+  and a guest's screen takes its seat from each view rather than from the welcome.
+- **Two tabs of one browser** share a token. A hello carrying the host's own token sits under
+  `tab:<token>`, which no real token can match, so a second tab of the host's browser gets a guest
+  seat (the check's duo plays this way), never the host's hand.
+- **PROTOCOL 4** (Decision 6). Host to guest: `welcome { name, seat, lobby }` (seat −1 for a
+  spectator), `lobby`, `view`, `emote { seat, i }`, `nope { why }`, `bye`. Guest to host:
+  `hello { v, name, token }`, `act`, `ping`, `emote { i }`, `bye`. A v3 browser in a v4 room, or the
+  reverse, gets the "different version" message on both sides. A hello without a proper token is
+  ignored.
+
+### Stand-ins
+
+- **When** (Decision 5). Guests ping every 10 s (`PING_MS`) while their page is visible. A seat quiet
+  for 30 s (`STANDIN_MS`: no ping, act or hello since the last one, or since the peer left) gets a
+  stand-in; a guest who says goodbye gets one at once, since a deliberate leave shouldn't make the
+  others wait half a minute. This holds at every table size, two players included. `STANDIN_MS` is a
+  named constant to move once Rich has felt it in play.
+- **How it plays.** At Mr Heron's level (`STAND_IN` 'heron', its samples capped by seat count), the
+  coordinator's choice over Wren, who would lose rounds the absent player cares about. It never
+  touches the stakes for them (`attachBot(…, { stakes: false })`): it never escalates or folds and
+  answers every call with play on, so their tokens are safe and they stay in the round. It accepts a
+  rematch, as the bots do; the seat and the token wait for the player.
+- **The seat back.** The moment a hello, ping or act arrives with the seat's token, the stand-in stops
+  and the seat is theirs again. A lock the stand-in made stands (Take back works as for any lock).
+- **On screen.** While a line is down and not yet covered, a banner: "Agent Fox lost connection. The
+  station covers the seat in 30 s." Then the toast "Agent Fox's line went dead. The station is
+  covering." (after a goodbye, "Agent Fox left the table. The station is covering."), and "Agent Fox
+  is back." on the return. Once a seat is covered, at three seats and more the tag's line dot says
+  so; at two, with no tags, the banner says "Agent Fox's line went dead. The station is covering."
+  until they're back.
+
+### Spectators
+
+- Anyone who opens the link after Start watches, and so does anyone who finds every seat taken
+  before it ("The table is full: you'll watch the match."). A spectator's welcome carries seat −1,
+  and every view it gets is `viewFor(state, −1)`: no hand, every face-down card masked. Up to four
+  watch (`MAX_SPECTATORS`); past that the host answers `nope { why: 'full' }` ("That table is full
+  and has all the spectators it can take."). A spectator never takes a bot's seat, and one who
+  arrived before Start isn't moved into a seat that frees.
+- The screen: "Watching Agent Fox, Agent Owl and Agent Pike's table.", no hand and no controls, seat
+  0 at the bottom and every tag a button, in fixed seat colours. Help and Leave work, the result
+  reads "Waiting for…" where Next round would be, the dossier has no rematch, no victory or defeat cue
+  plays, and a watched match isn't counted as played: no dead buttons. The watcher's toast is "You're
+  watching {host}'s table."; the players' is "{name} is watching."
+
+### On the table
+
+- **The tag bar** (Decision 10). At three seats and more the scorebar becomes one compact tag per
+  player, in table order from you: the name, the score, the tokens and the reel, the First flip coin
+  (it passes to the next seat still in when the holder has folded), a swatch for the player's mark
+  this round, and a line dot when they're away or covered. A folded seat's tag reads Out. Your tag
+  is a plain slip; a rival's is a button that opens its file. The strip of film flies to the taker's
+  tag.
+- **Lanes.** Each rival gets a thin lane of mini chips (22×24, 20×22 on phones) above each city's
+  plate, and your row stays full size below it; rival totals are small badges on the plate, and a
+  folded seat's lane dims. Every lane keeps its row's `data-row`, so the reveal's events play on lanes
+  unchanged.
+- **The sheets.** Tapping a plate that isn't a drop target opens the city's dossier: every agent there,
+  by seat. A rival's tag opens its file: score, tokens, strips, its mark ("Their rival's drop this
+  round"), the unseen list and counts (Card counting) and, online, its line. Sheets close on an outside
+  tap or Escape, when a reveal starts and when a card or flash comes, and the escalation prompt wins
+  over them.
+- **Colours and patterns** (Decision 9). You are always red; rivals take teal, cobalt (#2c4f9e) and
+  plum (#6b2a5a) in table order after you, each with a pattern so colour is never the only cue:
+  solid, a 45° hatch, dots and a cross-hatch, on chip bands, tags, lanes and badges (chip bands only
+  at three seats and more, so two-seat chips are unchanged). The colours go on `<body>` as one
+  `c<seat>-<colour>` class per seat, replacing `body[data-flip]`, so every `own-N` element anywhere
+  (flashes, cards, the cover) resolves. Pass and play and spectators use fixed seat colours: Red,
+  Teal, Cobalt, Plum.
+- **The answers card** (Decision 12). At three seats and more the answers to a call are revealed
+  together on a card: bars in the escalator's colour, "Answers", "To Teal's escalation" (or "To your
+  escalation"), and a paper slip per seat asked, in table order after the escalator, all dealt in at
+  once on the slam: "Agent Fox plays on." in the seat's colour, "Agent Owl aborts." stamped red.
+  1.5 s, skippable; then each aborting seat's agents pull out over the board. An answered
+  Blackmailer's call has the card too.
+- **Folds mid-round.** A fold that doesn't end the round flashes, the folder's agents pull out over
+  the live board, and the round goes on. The folder watches the rest: the hand dimmed and disabled,
+  no Lock in, the status "You're out of this round: the others play on for the pot (P).", their tag
+  Out; the reveals play as usual. The fold sheet and the escalation prompt say so ("the stake goes
+  into the pot, and the others play on for it"), and a round that ends in folds names everyone who
+  folded.
+- **Havana** passes each side's row to the next seat still in at the end of turn 4 (folded seats
+  skipped), and each row glides into its new owner's lane.
+- **The reveal's pace.** The base speed grows with the table (`REVEAL_SPEED` 1, 1.25 and 1.5 at two,
+  three and four seats), so the waits between tricks shorten; Speed up goes to 3× the base, and the
+  city flourishes play only at the base speed.
+- **Comings and goings** are toasts: "{name} sat down.", "{name} is back.", "{name} lost
+  connection.", "{name} left the table.", "{name} is watching."
+
+### The Table: solo at three or four
+
+Decision 11. The ladder stays two-player, since its twists were tuned there. The rivals screen gains
+a third tab, **Table**: Seats 3 | 4, your row, then a row per rival seat with a slip for each rung
+you have opened (Agent Wren always, and each rival whose predecessor you've beaten). A rung may sit
+more than once, the second copy named "Agent Wren II" and the third "III", so a new player can seat
+two or three Wrens; the defaults are the open rungs in order, repeating the last. The roster is
+Classic, or Mixed drawn from your network (`freeSetup(meta.beaten)`, open once the network passes
+Classic, as free play is: "Mixed opens once you beat The Magpie: it draws from your network.").
+There are no twists and no remarks, and wins unlock nothing, so the Table can't spoil the ladder. A
+Table saves its rivals, and the title offers "Continue the table against Agent Wren, The Magpie and
+Agent Wren II".
+
+### Pass and play for two to four
+
+The pass sheet gains Players 2 | 3 | 4 (remembered for the session) beside Classic and Mixed, and
+its copy counts the players ("Three spymasters…"). Seats are Red, Teal, Cobalt and Plum, in those
+colours whoever is looking. The cover hides each player's choice as before, skips a folded seat, and
+names who mustn't look ("Teal and Cobalt, no peeking."); after an escalation it covers each seat
+asked in turn.
+
+### The deal RNG
+
+Decision 1. `state.rng` is either one 32-bit number, mulberry32 through `shared/rng.js` as before,
+for every seeded match (so the sims, the goldens and a daily seed replay unchanged), or an array of
+four 32-bit numbers: xoshiro128\*\* with 128 bits of state, filled from `crypto.getRandomValues`
+(`randomState()` in the engine, never all zero). A real table, solo, online or pass and play, passes
+`seed: null`, gets the array and keeps `seed: null`; the array is plain JSON, so saves and resumes
+work as before. `rnd` picks the generator by `typeof state.rng`, so the number branch, and with it
+every seeded replay, is untouched, and `shared/rng.js` isn't changed. A real table's roster draw
+takes its own crypto seed (`randomSeed()`), since the roster is public.
+
+### Targets and pace
+
+- **The bands** (Decision 2). The spec's "about 15–20 minutes" is read through a round's length,
+  `ROUND_MINUTES = { 2: 2.0, 3: 2.75, 4: 3.5 }` (checked once in Chrome at Milestone A: a three-seat
+  round from Start to the result with quick play and one stand-in took 158 s), so a match should
+  run 5–7 rounds at three seats and 4.5–6 at four, each seat should win within 5 points of 1/N, and
+  the half-time leader should win at most 60% of matches and the full reel decide at most 30%.
+- **The bots score expected points** (Decision 3). At three and four seats a finished playout is
+  worth +1 when the seat won, −1/(n − 1) when a rival did and 0 in a dead heat, plus Monaco's point
+  at the same weights as a share of the round's points (`roundValue` in `js/bot.js`); two seats keep
+  +1 / 0 / −1. Under win-or-lose scoring an ordinary hand at a bigger table read below the answer
+  threshold, so the old bots folded most answers and the escalator collected. Scored by expected
+  points they play on (B37 against B25, B38 against B26, at the old targets 8 and 7): folds in answer
+  fell from 61.7 to 29.4% at three seats and from 73.3 to 22.3% at four, rounds ended by folds from
+  34.3 to 5.9% and 31.8 to 0.9%, the escalator's wins from 68.8 to 50.6% and 68.5 to 36.9%, and two
+  thirds of rounds were won at stake 2 or more. Matches ran 3.7 and 3.4 rounds, so the targets had to
+  rise.
+- **Samples are capped by seat count**: `SAMPLE_CAP = { 2: Infinity, 3: 24, 4: 12 }` (`samplesFor`),
+  in `attachBot`, the stand-in and the sim. B34 timed the capped bots on Mixed positions: the worst
+  p95 is 40.4 ms (Heron at three seats) against 45 ms on Rich's Mac for a phone's 150 ms budget. Skill
+  still tells at four seats with Control capped to 12 (B44): Control wins 32.1% of matches, two Herons
+  29.2 and 26.8, Wren 11.9.
+- **Four seats: target 9, `roundPoints4` 1** (B40's grid at 8 samples, B42's confirm at the bots' own
+  samples): 5.06 ±0.07 rounds a match (about 17.7 minutes), seats 24.0–26.3%, the half-time leader
+  32.7%, the reel 26.9% ±2.0, escalation 52.2%. Every band holds.
+- **Three seats: target 10, `roundPoints3` 1** (B39, B41, B45): 5.36 ±0.07 rounds (about 14.7
+  minutes), seats 31.9–34.6%, the half-time leader 39.1%, escalation 51.1%, and the full reel deciding
+  **33.4% ±2.1** of matches, 3.4 over its bar: an accepted miss. With a reel of 2 the reel follows the
+  match length whatever sets it (23.7 to 37.5% over 4.88 to 5.75 rounds, B45), so the length band and
+  the reel band leave a window about 0.15 rounds wide. The setting that held the reel, target 12 at
+  `roundPoints3` 2 (B43), ran 4.88 rounds and made escalation automatic (99.3% of rounds), which 2b-i
+  had tuned out at two seats, so it was dropped; a pace of 1.5 either sat at the automatic line
+  (80.7% at target 11) or pushed the reel to 35–38% (B45). A reel of 3 at three seats met every band
+  (5.82 rounds, the reel 6.2%, escalation 54.8%) but would need a reel by seat count and would let the
+  film decide only 6% of matches, the problem 2b-i's reel of 2 fixed (B20). A per-seat reel stays a
+  one-knob follow-up if Rich wants it.
+- The 8-sample grid put the three-seat reel 3–4 points low (B39 against B41 and B43), because the
+  24-sample bots fold in answer about a third less, so stake and reel picks are confirmed at the bots'
+  own samples. Every run here dealt Classic; Mixed at three and four seats hasn't been simulated.
+
+### The Blackmailer can be refused
+
+Decision 14. On 2b-i's stake knobs Mixed ran hot (B29, B30): 46.5% of rounds won at stake 2 or more
+against a bar of 40, folds in answer 23.7% against 25, and matches holding a Blackmailer 4.65 rounds
+against 5.68, because its escalation was free and couldn't be refused. B35 tried two fixes on the
+same seeds, 5,000 rounds each, against 45.9% won at stake 2 or more under the free rule. A token
+cost barely bit: players spend 1.26 of their 3 tokens a match, so the Blackmailer's token only
+replaced a later escalation (45.2%). Letting the others answer came nearer (43.4%), so
+`RULES.blackmailer` is now **'answer'**: a free escalation, no token, that every other seat still in
+may fold to at the start of the next turn ("Flip: a free escalation, no token; rivals may still
+fold."). On the final turn nobody is left to answer, so it does nothing.
+
+The confirm, B36 (20,034 Mixed rounds at the bots' own samples, against B29): stake 2 or more 43.5%
+±0.7 (bar 40) and folds in answer 21.2% ±0.7 (bar 25), both **accepted misses**, logged as B23's
+escalator was. The bots fold to only 13.7% of the Blackmailer's calls, which land at the start of
+turns 2–6, when a hand is seldom below the answer threshold, and to 23.6% of token escalations under
+any Blackmailer rule, so the fold shortfall is the bots' answer threshold on Mixed, not the card.
+Matches holding a Blackmailer run 4.95 rounds (5.69 without), escalation is 48.3% plus the
+Blackmailer's 15.7%, and its escalator wins 52.1%. Macau is unchanged and left as it is: its holder
+takes 73.7% of the points from 62.6% of the rounds. A Mixed-only answer threshold is a possible
+follow-up, not built.
+
+### Checking the table
+
+`npm run check -- dead-drop` runs `table(pages, ctx)` from `smoke.mjs` after the duo: four pages of one
+browser (a host, two guests and a watcher, `tablePages.local`) joined over BroadcastChannel play the ten
+steps of a three-seat match (lobby and Start, hands and no leaked identities, the spectator, an escalation
+with two answers, an emote and its rate limit, a closed page covered by a stand-in and its seat back, a
+reload by token and a host reload, a leave covered at once, a rematch). `npm run verify-live` plays the
+same with three separate browsers through the public relays. Local-only knobs make it deterministic: with
+`?net=local` a URL may carry `token=<16 hex>`, `name=<codename>` and `ping=<ms>` (in memory, never saved),
+and `__game.standInMs(ms)` shortens the stand-in wait; `__game.net` reports `{ role, code, seat }` and
+`__game.emote(i)` sends an emote. None of them touch the real transport.
 
 ## Ways to play
 
 - **Computer:** a ladder of five rival services (Monte Carlo bots with personalities, packs and
-  twists), and free play against the rivals you've beaten.
-- **Online:** host opens a room, shares a link or QR code; the host's browser runs the rules
-  (`shared/net.js` over Trystero). Invite-only, codenames from a list, no chat. Every match
-  carries an id, so Rematch brings both players back to a fresh table and the matches-played
-  count takes each match once, however often a player reloads. Leaving says goodbye: the
-  other side sees "Agent X left the table". The host picks the roster in the lobby (Classic by
-  default). Online stays two seats until Phase 3.
-- **Pass and play:** one device; a sheet picks Classic or Mixed, and a cover screen hides each
-  player's choice (a wiretapped mark plays before its wiretapper).
-- Online and pass and play have the roster card, the cable, New stamps and the unseen strip, but no
-  twist chip or remarks.
+  twists) and free play against the rivals you've beaten, both at two seats; and the **Table**, you
+  against two or three of the rivals you've opened, with no twists and no unlocks (The table for
+  three and four).
+- **Online, two to four:** the host opens a table and shares a link or QR code; friends join on their
+  own phones, computer rivals can fill the empty seats, and the host presses Start. The host's browser
+  runs the rules (`shared/net.js` over Trystero). Invite-only, codenames from a list, no chat. A line
+  that goes dead gets a stand-in until the player comes back by their token, and anyone who arrives
+  after the start watches. Every match carries an id, so Rematch brings everyone back to a fresh
+  table and the matches-played count takes each match once, however often a player reloads. Leaving
+  says goodbye: the others see "Agent X left the table". The host picks the roster in the lobby
+  (Classic by default).
+- **Pass and play:** one device for two to four; a sheet picks the players and Classic or Mixed, and
+  a cover screen hides each player's choice (a wiretapped mark plays before its wiretapper).
+- Online, the Table and pass and play have the roster card, the cable, New stamps and the unseen
+  counts, but no twist chip or remarks.
 
 ## Controls
 
@@ -469,6 +729,10 @@ music), ? opens help.
 After you pick an Accomplice and a city, tap a card (or press its number) to drop it as the partner,
 or press Drop alone. In Casablanca, V (or the face slip) turns the drop face up or face down. U
 opens and closes the unseen strip. In solo play the rival's Twist chip puts its twist in the ticker.
+
+At three and four seats, a tap on a rival's tag opens its file and a tap on a city's plate (when it
+isn't a drop target) opens the city's dossier; U steps through the rivals' files, and Escape or a tap
+outside closes them.
 
 During a reveal, Space (or a tap) speeds it up to 3×, and Space again skips it; the first
 400 ms ignore taps and keys, so a double-click on Lock in doesn't skip the flip. At a round's
@@ -572,8 +836,10 @@ body scrolls, and its cut corners are sized in px so they never clip the text.
 - **Seen.** Each card Control has seen wears a "Seen" stamp in the rival's colour.
 - **The tricks** play on the reveal's clock, each with its own sound of about 0.3 s: the
   Interrogator stays lit while the cards it reveals flip; the Turncoat's two chips trade places and
-  colours; the Courier's agent glides in; "{name}'s Blackmailer: the stake doubles to N." flashes the stake
-  slip; the Wiretap says who is tapped next turn; a Decoy flips, says "A Decoy takes the hit for
+  colours; the Courier's agent glides in; the ticker says "{name}'s Blackmailer escalates: the call is
+  open." and the call flashes "Blackmail!" over "{name}'s Blackmailer calls: play on or fold" (under
+  2b-ii's rule it flashed the stake slip: "the stake doubles to N."); the Wiretap says who is tapped
+  next turn; a Decoy flips, says "A Decoy takes the hit for
   {Kind}." and goes; the bridge's crossers leave and land face up in the next seat's row; Prague's
   reveals take one line a batch. Under reduced motion nothing glides.
 - **Result lines.** "+S Macau: {name} won the round holding it"; "Tied on cities: Zurich decides,
@@ -601,7 +867,8 @@ body scrolls, and its cut corners are sized in px so they never clip the text.
 The opening titles of a 1960s spy film: flat cut-paper shapes, hand-cut type (League Gothic,
 each letter jittered), dossier typewriter text (Courier Prime). A mustard table; cities are
 black cut-paper panels with skyline silhouettes; you are signal red, the rival is petrol teal;
-cards are paper with a black silhouette. Colour carries ownership.
+cards are paper with a black silhouette. Colour carries ownership. At a table of three or four the
+others take cobalt and plum, and each colour has its own pattern (The table for three and four).
 
 **Night** is the same titles after dark: the mustard table turns to ink with an oxblood glow
 from the top edge; each city stands in a flat, cut-paper cone of warm light (a city closed
@@ -671,11 +938,11 @@ the city plays its flourish, and the stake (doubled, plus any pot) slides to the
 score. If the loser held the film city, a strip of film then flies from its canister into
 their reel.
 
-## Seats and the engine (Phases 2a to 2b-ii: the engine plays 2–4)
+## Seats and the engine (Phases 2a to 3: two to four play)
 
-Every screen still seats two players, but the rules engine, the bots, the table and the
-simulator play 2, 3 or 4 seats (`MIN_SEATS`, `MAX_SEATS` and `SEAT_NAMES` in `js/data.js`). Each
-rule reduces to the two-player one at two seats:
+The rules engine, the bots, the table, the simulator and, since Phase 3, every screen play 2, 3 or
+4 seats (`MIN_SEATS`, `MAX_SEATS` and `SEAT_NAMES` in `js/data.js`; The table for three and four has
+the screens). Each rule reduces to the two-player one at two seats:
 
 - **Marks:** "your rival's drop" (Double Agent, Impostor) means your *mark's* drop. The mark of
   seat `s` in round `r` is `(s + 1 + r mod (N − 1)) mod N`, so marks rotate each round and two
@@ -689,14 +956,16 @@ rule reduces to the two-player one at two seats:
 - **Havana** passes every agent there to the next seat round the table at the end of turn 4
   (the swap, at two), skipping folded seats. A seat whose mark has folded keeps that mark, so its Double
   Agent and Impostor find no drop, as when a mark passes.
-- **The new rules at N seats** (Phase 2b-ii; Phase 3 puts them on screen). A Wiretap and the
+- **The new rules at N seats** (Phase 2b-ii; on screen since Phase 3). A Wiretap and the
   Countess's tap hear the tapper's *mark*: `round.taps` lists `{ by, on }` for everyone, and
   `round.tapped` gives the tapper its mark's locked city. Control's twist sees its mark's hand
   (`round.exposed`, shown to the watcher and to the card's current owner). Glienicke Bridge passes
   each active seat's strongest agent to the next active seat (0→1, 1→2, 2→0 at three). "Rival
   agents" for the Bodyguard, the Decoy, the Turncoat and the Interrogator means every other seat's.
-  The bot and the sim resolve a chain of taps (A taps B, B taps C) in waves; a three-way tap cycle
-  waits the full tap wait at every seat (Phase 3).
+  The bot and the sim resolve a chain of taps (A taps B, B taps C) in waves. At a live table
+  `round.tapped` is deduped by seat, and a tap ring (A taps B, B taps C, C taps A) no longer makes
+  every seat wait the full `TAP_WAIT_MS`: the ring's first seat in initiative order locks without
+  waiting (`waitingOnMark` in `js/session.js`, Decision 15 of Phase 3's plan).
 - **No card changes owner while face down** (Decision 11), so nothing on the board is re-keyed: the
   Turncoat swaps with a face-up rival (a Decoy it hits turns over first), Glienicke's crossers cross
   face up, and Havana already turns its defectors over. The cross-view property test checks that
@@ -710,9 +979,10 @@ rule reduces to the two-player one at two seats:
 - **Stakes play at every table size** (Phase 2b-i; see Stakes). The two-player pace and target
   don't carry over: simulated at 3 and 4 seats (targets 8 and 7), matches last 4.2 and 3.5
   rounds, escalation runs 73.9% and 68.2%, and the reel decides 6.9% and 5.1% of matches
-  (B25, B26). Phase 3 retunes the targets and the pace.
-- **Not yet:** online play refuses more than two seats, and no screen shows a third player
-  (Phase 3). A seat number outside the table sees as a spectator and can't act.
+  (B25, B26). Phase 3 had the bots score a round by expected points at three and four seats and
+  retuned the targets (10 at three seats, 9 at four) and the pace (The table for three and four).
+- **Spectators:** a seat number outside the table (−1) sees as a spectator and can't act;
+  `viewFor(state, −1)` is every view a spectator's screen gets (The table for three and four).
 - **Card uids are opaque.** Every uid is `<seat letter><round>.<4 random base-36 characters>`
   from the state's RNG (`mintUid`), and a card going back to a hand is re-keyed under a fresh one
   (`returnToHand`, the only way back to a hand; Phase 2b-ii's paths use it, and it also clears
@@ -721,35 +991,41 @@ rule reduces to the two-player one at two seats:
   re-issuing alone wasn't enough, because the uids were `a0.0`–`a0.11` in deck order, so a
   re-issued `a0.12` would have said "this is the card the Getaway sent home". A fresh uid looks
   like every other uid a rival has never seen.
-- **Versions.** The saved state is `v: 2` and the network `PROTOCOL` is 3 (Phase 2b-ii; Phase 3
-  takes 4): a 2b-i guest would crash on agents it doesn't know, so it gets the "different version"
-  message, as a v1 peer does. Phase 2b-ii added `roster`, `cityPool` and `twist` to the state,
-  `taps` and `exposed` to the round, and `partner` and `placed` to cards without bumping `v`
-  (Decision 6): `E.upgradeState(state)` fills every missing field with its Classic default, in
-  place, and `restoreTable` calls it, so a match a 2b-i build saved mid-round resumes, finishes and
-  rematches as Classic with no toast (the smoke resumes `test/golden/v2-table.json`). A bump would
-  have turned every 2b-i save away and changed every golden digest for no rules change. `canRestore`
-  also requires `round` to be an object and `reel` a number, so a v2 save `upgradeState` couldn't
-  complete is refused. A match saved before the stakes is dropped with one toast and no Continue.
+- **Versions.** The saved state is `v: 2` and the network `PROTOCOL` is 4 (3 in Phase 2b-ii; 4 since
+  Phase 3's lobby, spectators and stand-ins): a 2b-i guest would crash on agents it doesn't know, so
+  it gets the "different version" message, as a v1 peer does, and a 2b-ii browser and a Phase 3 room
+  turn each other away the same way. Phase 3 adds nothing to a seeded match's state or views; a real
+  table's `rng` is four numbers and its `seed` null (The deal RNG), and a table's save adds
+  `standIn`, `here` and `timer`, which `restoreTable` defaults. Phase 2b-ii added `roster`,
+  `cityPool` and `twist` to the state, `taps` and `exposed` to the round, and `partner` and `placed`
+  to cards without bumping `v` (Decision 6): `E.upgradeState(state)` fills every missing field with
+  its Classic default, in place, and `restoreTable` calls it, so a match a 2b-i build saved
+  mid-round resumes, finishes and rematches as Classic with no toast (the smoke resumes
+  `test/golden/v2-table.json`). A bump would have turned every 2b-i save away and changed every
+  golden digest for no rules change. `canRestore` also requires `round` to be an object and `reel` a
+  number, so a v2 save `upgradeState` couldn't complete is refused. A match saved before the stakes
+  is dropped with one toast and no Continue.
 - **Tables carry a setup** (Phase 2b-ii). `createTable({ …, setup = CLASSIC_SETUP, twistSeat = 1 })`
   deals every match of the table, rematches included, from `table.setup` through `matchOptions` (a
   Mixed roster is drawn from `createRng('<seed>:setup')`, so a Classic table's deals are unchanged),
   and the table saves its setup (a missing or malformed one restores as Classic).
-  `table.restart(setup)` re-deals an untouched table for the lobby's roster switch; call it from the
-  lobby only. The `lock` action passes `{ uid, city }` plus a string `partner` and a boolean `down`,
-  and nothing else, to the engine. Real tables seed from crypto (`randomSeed()`, 16 hex characters)
-  instead of `Date.now()`; that stops the cheap guess, but the deal RNG still has 32 bits of state,
-  which Phase 3 must widen for online play.
-- **Two-player play is guarded by golden replays.** `test/golden/two-player.json` holds
-  per-round digests of 24 seeded two-player bot matches (the state, each call's return and the
-  views for seats 0, 1 and −1 after every call), and `test/golden/sim-2p.json` a short
-  simulator run's summary; `test/golden.test.mjs` replays both. Through Phase 2a they were
-  compared call by call with a frozen copy of the Phase 1 engine; Phase 2b-i's tokens changed
-  two-player rules, so that copy was retired and both fixtures were re-recorded on the
-  finished 2b-i engine (`tools/golden.mjs --record --force`). They are the reference for Classic
-  two-player play, and Phase 2b-ii kept them. `test/golden/v1-table.json` is a table saved by the
-  Phase 1 build, kept to test that an old save is dropped, and `test/golden/v2-table.json` one saved
-  by the 2b-i build, kept to test that it resumes.
+  `table.restart(setup)` re-deals an untouched table; 2b-ii's lobby used it for the roster switch,
+  and since Phase 3 the lobby keeps the setup and the table is dealt at Start. The `lock` action
+  passes `{ uid, city }` plus a string `partner` and a boolean `down`, and nothing else, to the
+  engine. Real tables used to seed the 32-bit deal RNG from crypto (`randomSeed()`, 16 hex
+  characters, instead of `Date.now()`); since Phase 3 they pass `seed: null` and deal from 128 bits
+  (The deal RNG), and `randomSeed()` seeds only their roster draw.
+- **Two-player play is guarded by golden replays.** `test/golden/two-player.json` holds per-round
+  digests of 24 seeded two-player bot matches (the state, each call's return and the views for seats
+  0, 1 and −1 after every call), and `test/golden/sim-2p.json` a short simulator run's summary;
+  `test/golden.test.mjs` replays both. Through Phase 2a they were compared call by call with a
+  frozen copy of the Phase 1 engine; Phase 2b-i's tokens changed two-player rules, so that copy was
+  retired and both fixtures were re-recorded on the finished 2b-i engine
+  (`tools/golden.mjs --record --force`). They are the reference for Classic two-player play, and
+  Phases 2b-ii and 3 kept them.
+  `test/golden/v1-table.json` is a table saved by the Phase 1 build, kept to test that an old save
+  is dropped, and `test/golden/v2-table.json` one saved by the 2b-i build, kept to test that it
+  resumes.
 - **Classic is frozen** (Phase 2b-ii, Decision 10). A frozen copy of the 2b-i engine, bot and data
   sits in `test/golden/v2/`, and `test/golden.test.mjs` replays seeded Classic two-player bot
   matches on it and on the live modules side by side, comparing the state, each call's return and
@@ -761,10 +1037,13 @@ rule reduces to the two-player one at two seats:
   `node games/dead-drop/tools/golden.mjs --check --matches 400` runs the long version
   ("identical: 400 matches, 45113 steps" after every engine and bot task). The sim fixture's check
   compares every Classic agent and city exactly and requires the new ones to have played 0. Classic
-  is byte-identical to 2b-i.
-- **The UI:** mechanics that go over seats use lists (`allSeats`, `rivals`); two-player copy
-  and layout go through `foe()` in `js/main.js` (and `rivalsOf(...)[0]` with a note in
-  `js/board.js`), so Phase 3 can find every two-player assumption by searching for them.
+  is byte-identical to 2b-i. Phase 3 kept it so: it adds no key to a seeded match's state or views,
+  so `NEW_KEYS` didn't grow, and the 400-match check stayed identical after every engine, bot and
+  session task.
+- **The UI:** mechanics that go over seats use lists (`allSeats`, `rivals`). Phase 2b-ii routed
+  two-player copy and layout through `foe()` in `js/main.js` and `rivalsOf(...)[0]` in
+  `js/board.js` so Phase 3 could find them; Phase 3 replaced every one (`foe()` is gone), and two
+  seats keep their own layout through `renderPlay`'s scorebar branch (a `.play` without `many`).
 
 ## The bot and the new content (Phase 2b-ii)
 
@@ -800,14 +1079,14 @@ rule reduces to the two-player one at two seats:
   first rival a run times is cold, Heron 1.75×), accepted as noise after both trims above. Mixed
   positions hold barely more candidates (11.6 against 11.0), but each playout costs about 25% more:
   more flips, longer legal lists, Rome, Tokyo, the bridge. Classic means stayed within 2b-i's. Phase
-  3's samples cap by seat count must allow for Mixed ≈ 1.25×.
+  3's samples cap by seat count was sized on Mixed positions (B34, The table for three and four).
 - **The Classic-parity gate** in `determinize` (temporary). Since 2b-i, a seat's own card in a
   rival's hand (after Havana or Glienicke Bridge and a Getaway) was never placed in its playouts.
   Phase 2b-ii fills it for every roster and pool except exact Classic (roster `DECK`, pool
   `CLASSIC_CITIES`, no twist), where the gap stays so the frozen 2b-i comparison holds (12 of the
   400 golden matches would diverge). The gate is commented "2b-i parity; remove when the goldens are
-  re-recorded" (Phase 3). At three or more seats, a rival's card held by another rival isn't placed
-  either.
+  re-recorded". Phase 3 kept the goldens, so the gate stays until they are next re-recorded. At three
+  or more seats, a rival's card held by another rival isn't placed either.
 
 ## Simulation
 
@@ -815,8 +1094,10 @@ rule reduces to the two-player one at two seats:
 margin. `tools/SIMLOG.md` records each run (question, exact command, numbers, decision),
 starting from the Phase 1 baseline, Heron against Heron for 20,000 rounds
 (`tools/baselines/phase1-heron.json`). Since Phase 2b-i the two-player reference for Classic is the
-stakes' final check, B23 (`tools/baselines/phase2b1-final.json`); for Mixed rosters it is B29
-(`tools/baselines/phase2b2-final.json`). Measure every rule change against the one it touches:
+stakes' final check, B23 (`tools/baselines/phase2b1-final.json`); for Mixed rosters it is B36
+under Phase 3's Blackmailer (`tools/baselines/phase3-blackmailer-final.json`; B29,
+`phase2b2-final.json`, under 2b-ii's). At three and four seats the references are B41 and B42
+(Seats and the Blackmailer, below). Measure every rule change against the one it touches:
 
 ```
 nice -n 19 node games/dead-drop/tools/sim.mjs --run NAME --rounds 5000 --against games/dead-drop/tools/baselines/phase2b1-final.json
@@ -834,7 +1115,8 @@ rotates the bots one seat, and the report adds each seat's and each bot's share.
 at 3 and 4 seats (stake 1, no escalation) is SIMLOG B10 (`tools/baselines/phase2a-seats3.json`,
 `phase2a-seats4.json`): every seat inside 1/N ± 5 points. At N seats an agent's "win% when
 played" sits near 100/N, not 50. Four seats cost about 4 rounds a second on 4 workers, so batch
-those runs.
+those runs (with Phase 3's caps, the bots' own samples run about 13 rounds a second at both three
+and four seats: B41, B42).
 
 Skill still tells with the stakes on, a little less than before (B24): Control beats Wren in
 79.8% of matches (Phase 1: 85.4%), and no step of the ladder is inverted, but Countess against
@@ -871,13 +1153,14 @@ Playouts score rounds, not points, so content that pays in stakes can read avera
 while it moves points. `tools/points-by-roster.mjs --from FILE [--rounds N]` replays a saved run
 match by match and reports points per round with and without each agent in the roster or each city
 dealt, each one's share of the rounds and of the points, and rounds per match by roster (B30; the
-definitions are in its header). What it showed, on 2b-i's stake knobs: **Mixed stakes run hot.**
-46.5% of Mixed rounds are won at stake 2 or more (2b-i's bar is 40) and 23.7% of answers are folds
-(bar: 25 or more), because the Blackmailer doubles the stake without a token and without a fold in
-answer; matches holding one run 4.65 rounds (5.68 without). Its player takes 46.6% of the rounds and
-48.1% of the points, so it speeds matches rather than favouring its owner. Macau's holder takes
-61.8% of the rounds but 73.1% of the points: the bots score it like any other city. Phase 3 retunes
-the stakes; the lever is the Blackmailer's rule (a token, or folds allowed), not its power.
+definitions are in its header). What it showed, on 2b-i's stake knobs and the Blackmailer's 2b-ii
+rule: **Mixed stakes ran hot.** 46.5% of Mixed rounds were won at stake 2 or more (2b-i's bar is 40)
+and 23.7% of answers were folds (bar: 25 or more), because the Blackmailer doubled the stake without
+a token and without a fold in answer; matches holding one ran 4.65 rounds (5.68 without). Its player
+took 46.6% of the rounds and 48.1% of the points, so it sped matches rather than favouring its
+owner. Macau's holder took 61.8% of the rounds but 73.1% of the points: the bots score it like any
+other city (still so in B36). Phase 3 pulled the lever, the Blackmailer's rule rather than its
+power: its call can now be folded to (B35, B36; The Blackmailer can be refused).
 
 `tools/golden.mjs --check [--matches 400]` replays Classic against the frozen 2b-i modules in
 `test/golden/v2/`. `tools/art-sheet.mjs [--shot]` writes `.tmp/dead-drop-art.html` (and, with
@@ -885,6 +1168,22 @@ the stakes; the lever is the Blackmailer's rule (a token, or folds allowed), not
 
 `tools/think-time.mjs [--rivals heron,control] [--seats 2,3,4] [--positions 30] [--json]`
 times a bot's move per seat count (`--roster classic|mixed` times Mixed positions too: The bot and
-the new content). Thinking grows about 2.2× per added seat: Control at 3–4
-seats is too slow for a phone (p95 106 and 205 ms on Rich's Mac, which is 3–5× faster than a
-phone), so Phase 3 must cap samples by seat count.
+the new content). Thinking grows about 2.2× per added seat: uncapped, Control at 3–4 seats was
+too slow for a phone (p95 106 and 205 ms on Rich's Mac, which is 3–5× faster than a phone), so
+Phase 3 caps samples by seat count; `--cap` times the capped bots (B34).
+
+**Seats and the Blackmailer** (Phase 3):
+
+- `--target` defaults to `targetFor(seats)` (10, 10 and 9 at two, three and four seats), and a
+  `seats` variant re-resolves a target it wasn't given. The first line gives minutes a match from
+  `ROUND_MINUTES` ("≈ 14.7 min at 2.75 min a round").
+- At three and four seats the bots' own samples are capped (`samplesFor`: 24 and 12); `--samples N`
+  still overrides.
+- `--set rules.blackmailer=free|token|answer` (checked against `BLACKMAILER_COPY`) plays any of the
+  three rules. Escalation, escalator won and bluffs count token escalations only; the Blackmailer's
+  own are `freeEscalation`, `freeEscalatorWins` and `freeFoldInAnswer`. `foldInAnswer` counts every
+  answer and `tokenFoldInAnswer` only the answers to token escalations, the rate 2b-i's band was set
+  on; `compare` (`--against`) reads them all.
+- Baselines: `tools/baselines/phase3-blackmailer-final.json` (B36, Mixed at two seats),
+  `phase3-final3-t10.json` (B41, three seats; `phase3-final3.json` is B43's dropped 12 / 2) and
+  `phase3-final4.json` (B42, four seats).

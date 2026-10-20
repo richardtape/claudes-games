@@ -13,7 +13,7 @@
 // drops weighed leave out all but an Accomplice's strongest partner and Casablanca's weaker face-down
 // drops (candidates, quickDrop), with fewer samples each where those remain (think).
 import * as E from './engine.js';
-import { AGENT, CLASSIC_CITIES, DECK, STAKES, TURNS } from './data.js';
+import { AGENT, CLASSIC_CITIES, DECK, RULES, STAKES, TURNS, roundPointsFor } from './data.js';
 import { createRng } from '../../../shared/rng.js';
 
 function shuffleInPlace(arr, rng) {
@@ -346,7 +346,9 @@ export function quickDrop(state, seat, rng, only = null) {
         if (ours) v += 1;
         break;
       case 'blackmailer':
-        if (!R.escalated.includes(true)) v += 1;
+        // Worth a little while the round's escalation is still to take: when it costs a token, with one to spend;
+        // when it opens a call, before the final turn (then nobody is left to answer, as the Wiretap's next turn).
+        if (!R.escalated.includes(true) && (RULES.blackmailer !== 'token' || state.tokens[seat] > 0) && (RULES.blackmailer !== 'answer' || R.turn < TURNS)) v += 1;
         break;
       case 'wiretap':
         if (R.turn < TURNS) v += 1;
@@ -386,13 +388,28 @@ function playout(state, seat, firstDrop, rng, bind = null) {
   E.lock(state, seat, firstDrop);
   let first = bind !== null;
   while (state.phase === 'plan') {
+    // A Blackmailer's call (RULES.blackmailer 'answer') opened in the playout: everyone plays on, as determinize assumes.
+    const P = state.round.pending;
+    if (P) for (const s of P.from) E.respond(state, s, true);
     for (let s = 0; s < n; s++) if (!state.round.plans[s]) E.lock(state, s, quickDrop(state, s, rng, first && bind[s] !== undefined ? bind[s] : null));
     first = false;
     if (!E.resolveTurn(state)) break;
   }
-  const res = state.round.result;
-  if (!res || res.winner === null) return 0;
-  return res.winner === seat ? 1 : -1;
+  return roundValue(state.round.result, seat, n);
+}
+
+/**
+ * A finished round scored for `seat`. Two seats: +1 win, 0 dead heat (or no result), −1 loss. At 3–4 seats
+ * a rival's win costs 1/(n−1) (the points it takes are spread over the other seats), and Monaco's point
+ * counts at the same weight, as a share of the round's worth in points (so it is worth less in a big round).
+ */
+export function roundValue(res, seat, n) {
+  if (!res) return 0;
+  if (n === 2) return res.winner === null ? 0 : res.winner === seat ? 1 : -1;
+  const lose = -1 / (n - 1);
+  const win = res.winner === null ? 0 : res.winner === seat ? 1 : lose;
+  const monaco = res.monaco === null || res.monaco === undefined ? 0 : res.monaco === seat ? 1 : lose;
+  return win + monaco / Math.max(1, res.points || res.stake * 2 + res.pot);
 }
 
 /** The Microfilm after a playout: +1 if `seat` took the round's strip, −1 if a rival did, 0 if nobody did. */
@@ -544,7 +561,7 @@ export function stakeCall(view, value, rival, rng) {
   const tokens = view.tokens[seat];
   if (view.phase !== 'plan' || V.escalated.some(Boolean) || tokens < 1) return null;
   // Spend a token on a strong hand, a stronger one when tokens are short of one every other round left.
-  const roundsLeft = Math.max(1, Math.ceil((view.target - Math.max(...view.scores)) / STAKES.roundPoints));
+  const roundsLeft = Math.max(1, Math.ceil((view.target - Math.max(...view.scores)) / roundPointsFor(view.scores.length)));
   const short = Math.max(0, Math.ceil(roundsLeft / 2) - tokens);
   if (V.turn >= 2 && v > STAKES.escalate - nerve + short * STAKES.scarce) return 'escalate';
   // Bluffs keep to the same pace: a rival that bluffed while holding its tokens back for value would

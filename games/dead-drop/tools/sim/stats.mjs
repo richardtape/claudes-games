@@ -1,5 +1,5 @@
 // Mergeable tallies from match records, with 95% margins. Stats stay plain JSON.
-import { AGENTS, CITIES, DECK } from '../../js/data.js';
+import { AGENTS, CITIES, DECK, ROUND_MINUTES } from '../../js/data.js';
 
 export function emptyStats(seats = 2) {
   const zeros = () => new Array(seats).fill(0);
@@ -9,6 +9,10 @@ export function emptyStats(seats = 2) {
     pointsHist: {}, escalated: 0, escalatorWon: 0, answers: 0, answeredFold: 0,
     reelWins: 0, reelComebacks: 0, strips: 0, filmDecided: 0, filmAgrees: 0, potHist: {}, carries: 0, tokensSpentHist: {}, outOfTokens: 0, maxStake: 0,
     bluffs: 0, escTurnHist: {},
+    // The Blackmailer's escalations (records marked `free`), kept apart: `escalated`, `escalatorWon`, `bluffs` and
+    // `escTurnHist` count token escalations only (as B29 read them). Answers to its call (RULES.blackmailer
+    // 'answer') count in `answers` and `answeredFold` too, and in the free* tallies.
+    freeEscalations: 0, freeEscalatorWon: 0, freeAnswers: 0, freeAnsweredFold: 0,
     // inRoster: rounds dealt with the agent in the match's roster (folds included).
     agents: Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, wonPlayed: 0, notPlayed: 0, wonNotPlayed: 0, turnSum: 0, inRoster: 0 }])),
     cities: Object.fromEntries(CITIES.map((c) => [c.id, { n: 0, decided: 0, agrees: 0 }])),
@@ -30,6 +34,19 @@ export function addMatch(stats, rec) {
     const res = r.result;
     bump(stats.pointsHist, res.points);
     for (const e of r.escalations) {
+      if (e.free) {
+        stats.freeEscalations++;
+        if (res.winner === e.seat) stats.freeEscalatorWon++;
+        for (const a of e.answers) {
+          stats.answers++;
+          stats.freeAnswers++;
+          if (a.call === 'fold') {
+            stats.answeredFold++;
+            stats.freeAnsweredFold++;
+          }
+        }
+        continue;
+      }
       stats.escalated++;
       if (res.winner === e.seat) stats.escalatorWon++;
       for (const a of e.answers) {
@@ -166,6 +183,12 @@ export function summarize(s) {
     maxStake: rate(s.maxStake, s.rounds),
     escalatorWins: rate(s.escalatorWon, s.escalated),
     foldInAnswer: rate(s.answeredFold, s.answers),
+    // Folds in answer to token escalations alone (B36's band reading; foldInAnswer also counts answers to a Blackmailer's call).
+    tokenFoldInAnswer: rate(s.answeredFold - (s.freeAnsweredFold ?? 0), s.answers - (s.freeAnswers ?? 0)),
+    // The Blackmailer's escalations: a share of rounds, its escalator's round wins, and the folds among answers to its call.
+    freeEscalation: rate(s.freeEscalations ?? 0, s.rounds),
+    freeEscalatorWins: rate(s.freeEscalatorWon ?? 0, s.freeEscalations ?? 0),
+    freeFoldInAnswer: rate(s.freeAnsweredFold ?? 0, s.freeAnswers ?? 0),
     reelWins: rate(s.reelWins, finished),
     reelComeback: rate(s.reelComebacks, s.reelWins),
     filmHolderWins: rate(s.filmAgrees, s.filmDecided),
@@ -183,6 +206,7 @@ export function summarize(s) {
     halfLeaderWins: rate(s.halfLeader.won, s.halfLeader.n),
     bluffs: s.bluffs,
     seats: s.matchWins.length,
+    minutesPerMatch: histMean(s.roundsHist).mean * ROUND_MINUTES[s.matchWins.length],
     seatRounds: s.seatRoundWins.map((k) => rate(k, s.decided)),
     seatMatches: s.seatMatchWins.map((k) => rate(k, finished)),
     botMatches: s.matchWins.map((k) => rate(k, finished)),
@@ -194,7 +218,7 @@ export function summarize(s) {
   };
 }
 
-const RATE_KEYS = ['escalation', 'maxStake', 'escalatorWins', 'foldInAnswer', 'folds', 'deadHeats', 'tiebreaks', 'seat0Rounds', 'aMatchWins', 'seat0Matches', 'halfLeaderWins', 'reelWins', 'reelComeback', 'filmHolderWins', 'rollovers', 'outOfTokens'];
+const RATE_KEYS = ['escalation', 'freeEscalation', 'maxStake', 'escalatorWins', 'freeEscalatorWins', 'foldInAnswer', 'tokenFoldInAnswer', 'freeFoldInAnswer', 'folds', 'deadHeats', 'tiebreaks', 'seat0Rounds', 'aMatchWins', 'seat0Matches', 'halfLeaderWins', 'reelWins', 'reelComeback', 'filmHolderWins', 'rollovers', 'outOfTokens'];
 const MEAN_KEYS = ['pointsPerRound', 'roundsPerMatch', 'tokensSpent', 'potTaken'];
 
 /** Row per headline number; `sig` when the difference is bigger than the two margins combined. */
@@ -218,10 +242,13 @@ const num = (v, d = 1) => (v === null ? 'n/a' : v.toFixed(d));
 export function formatSummary(sum, title = 'Dead Drop sim') {
   const L = [];
   L.push(`${title}`);
-  L.push(`${sum.rounds} rounds, ${sum.matches} matches (${sum.capped} capped), ${num(sum.roundsPerMatch.mean)} ±${num(sum.roundsPerMatch.margin, 2)} rounds/match, A wins ${pc(sum.aMatchWins)}, seat 0 wins ${pc(sum.seat0Matches)} of matches`);
+  L.push(`${sum.rounds} rounds, ${sum.matches} matches (${sum.capped} capped), ${num(sum.roundsPerMatch.mean)} ±${num(sum.roundsPerMatch.margin, 2)} rounds/match (≈ ${num(sum.minutesPerMatch)} min at ${ROUND_MINUTES[sum.seats]} min a round), A wins ${pc(sum.aMatchWins)}, seat 0 wins ${pc(sum.seat0Matches)} of matches`);
   L.push(`folds ${pc(sum.folds)}  dead heats ${pc(sum.deadHeats)}  tie-breaks ${pc(sum.tiebreaks)}  seat 0 wins ${pc(sum.seat0Rounds)} of decided rounds  half-time leader wins ${pc(sum.halfLeaderWins)}`);
   L.push(`points/round ${num(sum.pointsPerRound.mean, 2)} ±${num(sum.pointsPerRound.margin, 2)}  won at stake 2 or more in ${pc(sum.maxStake)} of rounds`);
-  L.push(`escalations ${pc(sum.escalation)} of rounds, escalator won ${pc(sum.escalatorWins)}, answers were folds ${pc(sum.foldInAnswer)}, bluffs ${sum.bluffs}`);
+  // The Blackmailer's escalations show beside the token ones whenever a run had any (a summary from before them has no key).
+  const free = sum.freeEscalation?.n && sum.freeEscalation.pct > 0 ? sum.freeEscalation : null;
+  L.push(`escalations ${pc(sum.escalation)} of rounds${free ? ` (+ ${pc(free)} Blackmailer)` : ''}, escalator won ${pc(sum.escalatorWins)}, answers were folds ${pc(sum.foldInAnswer)}${sum.freeFoldInAnswer?.n ? ` (to token escalations ${pc(sum.tokenFoldInAnswer)})` : ''}, bluffs ${sum.bluffs}`);
+  if (free) L.push(`Blackmailer: its escalator won ${pc(sum.freeEscalatorWins)}${sum.freeFoldInAnswer.n ? `, answers to its call were folds ${pc(sum.freeFoldInAnswer)}` : ''} (the escalations, escalator and bluffs above count tokens only; the answers count both)`);
   L.push(`Stakes: ${num(sum.tokensSpent.mean, 2)} tokens spent per player per match, ${pc(sum.outOfTokens)} of rounds begun with a seat out of tokens, pot taken ${num(sum.potTaken.mean, 2)} on average, ${pc(sum.rollovers)} of rounds rolled over`);
   L.push(`Microfilm: strips ${num(sum.stripsPerMatch, 2)} per match, reel wins ${pc(sum.reelWins)} of matches, ${pc(sum.reelComeback)} of those from behind on points, film city's holder took the round ${pc(sum.filmHolderWins)}`);
   if (sum.seats > 2) {

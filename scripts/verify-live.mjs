@@ -5,7 +5,9 @@
 // absolute URLs that escape /claudes-games/).
 //
 // Multiplayer games (smoke.mjs exports `duo`) also get a live two-player run: two separate
-// browsers join a fresh room through the real public relays and play a turn.
+// browsers join a fresh room through the real public relays and play a turn. Games of three
+// players and more (smoke.mjs exports `table`) get a live table too: `tablePages.live` separate
+// browsers (default 3), ctx = { url, live: true, code, log, shot, audit } (shot and audit do nothing).
 //
 //   npm run verify-live                      https://richardtape.github.io/claudes-games/
 //   npm run verify-live -- http://host/path/ another base URL
@@ -57,7 +59,7 @@ for (const g of games) {
   await page.close();
 
   const smokePath = join(ROOT, 'games', g.slug, 'smoke.mjs');
-  const { duo } = existsSync(smokePath) ? await import(pathToFileURL(smokePath).href) : {};
+  const { duo, table, tablePages } = existsSync(smokePath) ? await import(pathToFileURL(smokePath).href) : {};
   if (typeof duo === 'function') {
     const ctxs = [await browser.newContext(), await browser.newContext()];
     const pages = await Promise.all(ctxs.map((c) => c.newPage()));
@@ -73,6 +75,26 @@ for (const g of games) {
     } catch (e) {
       failures++;
       console.log(`  ✗ ${g.slug}: live two-player run failed: ${e.message.split('\n')[0]}`);
+    }
+    await Promise.all(ctxs.map((c) => c.close()));
+  }
+  if (typeof table === 'function') {
+    const n = tablePages?.live ?? 3;
+    const ctxs = [];
+    for (let i = 0; i < n; i++) ctxs.push(await browser.newContext());
+    const pages = await Promise.all(ctxs.map((c) => c.newPage()));
+    const errs = [];
+    // Relay hiccups log WebSocket errors; only real page errors count.
+    pages.forEach((p) => p.on('pageerror', (e) => errs.push(`uncaught: ${e.message}`)));
+    const code = `LIVE${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    try {
+      const t0 = Date.now();
+      await table(pages, { url: new URL(g.href, base).href, live: true, code, log: () => {}, shot: async () => {}, audit: async () => {} });
+      if (errs.length) throw new Error(errs[0]);
+      console.log(`  ✓ ${g.slug}: ${n} browsers played a table online through the public relays (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    } catch (e) {
+      failures++;
+      console.log(`  ✗ ${g.slug}: live table run failed: ${e.message.split('\n')[0]}`);
     }
     await Promise.all(ctxs.map((c) => c.close()));
   }

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
-import { determinize, think, stakeCall, filmWeightFor, couldBe, constraints, candidates, quickDrop, estimateLocked } from '../js/bot.js';
-import { DECK, RIVALS, RULES, STAKES, TARGET } from '../js/data.js';
+import { roundValue, determinize, think, stakeCall, filmWeightFor, couldBe, constraints, candidates, quickDrop, estimateLocked } from '../js/bot.js';
+import { DECK, RIVALS, RULES, STAKES, TARGET, TURNS } from '../js/data.js';
 import { drawRoster } from '../js/roster.js';
 import { createRng } from '../../../shared/rng.js';
-import { play, withPatch, ALL_AGENTS, ALL_CITIES, mixed, setHand } from './helpers.mjs';
+import { play, withPatch, withRules, ALL_AGENTS, ALL_CITIES, mixed, setHand } from './helpers.mjs';
 
 /** Random legal play for a few turns, to get varied mid-round positions. */
 function midRound(seed, turns) {
@@ -335,4 +335,57 @@ test('think and estimateLocked play a wiretapped mark’s locked city into their
   assert.notDeepEqual(values(view), values(unheard), 'think’s playouts');
   const locked = (v) => [1, 2, 3, 4, 5].map((seed) => estimateLocked(v, 8, createRng(seed)));
   assert.notDeepEqual(locked(view), locked(unheard), 'rescore’s playouts');
+});
+
+test('the stake pace at three seats reads roundPoints3, and two seats never read it', () => {
+  const v3 = E.viewFor(E.newMatch({ seed: 3, seats: 3 }), 0);
+  v3.round.turn = 2;
+  const calls = (view, patch) => withPatch(STAKES, patch, () => Array.from({ length: 40 }, (_, i) => stakeCall(view, 0.95, { noise: 0, nerve: 0, bluff: 0 }, createRng(i))));
+  // A tiny pace keeps every token back (short > 0), so a strong hand still waits.
+  assert.ok(calls(v3, { roundPoints3: 0.01 }).every((c) => c === null));
+  assert.ok(calls(v3, { roundPoints3: 100 }).some((c) => c === 'escalate'));
+  const v2 = E.viewFor(E.newMatch({ seed: 3 }), 0);
+  v2.round.turn = 2;
+  assert.deepEqual(calls(v2, { roundPoints3: 0.01, roundPoints4: 0.01 }), calls(v2, {}));
+});
+
+test('roundValue: two seats as before; at more seats a rival’s win costs 1/(n−1), Monaco counts at the round’s worth', () => {
+  const R = (winner, points, monaco = null) => ({ winner, points, stake: 1, pot: 0, monaco });
+  assert.deepEqual([roundValue(R(0, 2), 0, 2), roundValue(R(1, 2), 0, 2), roundValue(R(null, 0), 0, 2)], [1, -1, 0]);
+  assert.deepEqual([roundValue(R(0, 2), 0, 3), roundValue(R(1, 2), 0, 3), roundValue(R(null, 0), 0, 3)], [1, -0.5, 0]);
+  assert.equal(roundValue(R(2, 4), 0, 4), -1 / 3);
+  assert.equal(roundValue(R(0, 2, 1), 0, 3), 1 - 0.5 / 2);
+  assert.equal(roundValue(R(0, 2, 1), 0, 2), 1, 'two seats ignore Monaco, as before');
+});
+
+test('think at three seats values a sure win at 1 and a rival’s sure win at −0.5', () => {
+  // By turn 6 Helsinki (closed after turn 3) and Venice (closed on even turns) are seat 0's alone,
+  // so whatever the rivals drop into Berlin, seat 0 holds two of three.
+  const s = E.newMatch({ seed: 11, seats: 3, cities: ['helsinki', 'venice', 'berlin'] });
+  play(s, ['heavy', 0], ['lookout', 2], ['lookout', 2]);
+  play(s, ['mole', 2], null, null);
+  play(s, ['veteran', 1], null, null);
+  for (let t = 4; t < TURNS; t++) play(s, null, null, null);
+  assert.equal(s.round.turn, TURNS);
+  const win = think(E.viewFor(s, 0), { samples: 12, rng: createRng(2) }).value;
+  assert.ok(win > 0.9, `seat 0 holds two closed cities: ${win}`);
+  const lose = think(E.viewFor(s, 2), { samples: 12, rng: createRng(3) }).value;
+  assert.ok(lose < -0.4 && lose > -0.6, `seat 2 watches seat 0 win: ${lose}`);
+});
+
+test('quickDrop: under the answer rule a Blackmailer is worth nothing extra on the final turn, where its flip does nothing', () => {
+  // A Blackmailer against a Mole (both power 2, no other term) on an empty board: how often the quick policy drops the Blackmailer.
+  const share = (rule, turn) =>
+    withRules({ blackmailer: rule }, () => {
+      const s = mixed(['monaco', 'zurich', 'hongkong']);
+      for (let t = 1; t < turn; t++) play(s, null, null);
+      setHand(s, 0, ['blackmailer', 'mole']);
+      let n = 0;
+      for (let i = 0; i < 400; i++) if (s.round.cards[quickDrop(s, 0, createRng(i)).uid].kind === 'blackmailer') n++;
+      return n / 400;
+    });
+  const last = share('answer', TURNS);
+  assert.ok(last > 0.4 && last < 0.6, `answer, final turn: ${last}`);
+  assert.ok(share('answer', TURNS - 1) > 0.65, 'answer, turn 5: still worth its escalation');
+  assert.ok(share('free', TURNS) > 0.65, 'free, final turn: it still escalates then');
 });

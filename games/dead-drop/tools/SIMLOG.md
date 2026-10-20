@@ -846,3 +846,273 @@ Agents at 8 samples (win% when played): Heavy 50.8 ±1.4, Sleeper 51.0 ±1.5, Ve
 
   Strictly falling: yes. Control at least 20%: yes (34.6). Every step larger than its combined margin: all but Countess to Control, which misses by 0.1 point.
 - Decision: two retune rounds are spent, so take the closest, `control.count` 3, and tell the coordinator: it is one step past the brief's notch list (1 to 2), and B32's `control.count` 2 (a 2.7-point step) is the fallback if three seen cards (of a four-card opening hand) is too strong a twist to announce. The gap is the rivals themselves: without twists Control is no harder than the Countess (B31: 39.1 against 41.0), so Control's twist has to make the whole step. The Magpie, Heron and Countess keep their twists as first written (lookout, sleeper, from 6): their steps hold. `TWISTS.control.count` is 3 in `js/data.js`.
+
+## 2026-10-19 · B34 Samples cap by seat count (`SAMPLE_CAP` 2: none, 3: 24, 4: 12)
+- Question: With playouts scoring expected points at 3-4 seats, can the Monte Carlo bots think inside a phone's budget (about 150 ms a move, 3.5x this Mac, so 45 ms here) if their samples are capped by seat count? Sized on the Mixed roster (about 1.25x Classic).
+- Configuration: `nice -n 19 node games/dead-drop/tools/think-time.mjs --rivals heron,control --seats 3,4 --cap --roster mixed` (then `--roster classic`), 30 positions per row, commit 7b28b01 plus the Task 3 change, load 3.5 before, 3.6 after. Not a sim: a timing run of `think` alone. One run only, since no row was over the bar.
+- Numbers (ms on this Mac, per move):
+
+| Roster | Seats | Rival | Samples | Mean | p95 | Max |
+|---|---|---|---|---|---|---|
+| mixed | 3 | heron | 24 | 22.24 | 40.37 | 47.60 |
+| mixed | 3 | control | 24 | 21.15 | 37.50 | 39.92 |
+| mixed | 4 | heron | 12 | 16.16 | 25.87 | 28.03 |
+| mixed | 4 | control | 12 | 16.31 | 28.50 | 32.82 |
+| classic | 3 | heron | 24 | 18.36 | 26.55 | 35.75 |
+| classic | 3 | control | 24 | 17.35 | 26.29 | 26.37 |
+| classic | 4 | heron | 12 | 12.23 | 19.45 | 20.86 |
+| classic | 4 | control | 12 | 12.42 | 20.78 | 20.87 |
+
+- Decision: every Mixed p95 is at or under the 45 ms bar (worst: 40.4 at three seats), so the caps stay 24 and 12; the 16 and 8 fallbacks were not needed. Three-seat Mixed has the least headroom (max 47.6 ms), so retime if the roster or the playout grows. In the sim, "own samples" at 3-4 seats now means these capped counts (`--samples N` still overrides).
+
+## 2026-10-19 · B35 The Blackmailer's cost: a token (a) or a fold in answer (b), 5,000 rounds per configuration (Phase 3 Task 4 Step 4)
+- Question: B29 found Mixed's stake game hot at two seats (rounds won at stake 2 or more 46.5%, over 40; folds in answer 23.7%, under 25), and B30 traced the short matches to the Blackmailer's free escalation. On the same seeds, does either fix to its rule put every spec 2.8 band inside: (a) `rules.blackmailer=token`, the flip spends one of its player's tokens and does nothing without one, or (b) `rules.blackmailer=answer`, no token is spent but its call can be folded to (answered at the start of the next turn; nothing on the final turn)? Bands: `maxStake` <= 40, `foldInAnswer` 25-35, escalation 35-60 (token escalations; the Blackmailer's rate reported beside it), escalator wins 55-65, 5-7 rounds a match, reel wins <= 25.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-blackmailer --roster mixed --rounds 5000 --workers 4 --variant token:rules.blackmailer=token --variant answer:rules.blackmailer=answer --out games/dead-drop/tools/baselines/phase3-blackmailer.json` (the brief's command plus `--workers 4`), commit b7fcf0f (the rule switch, default `'free'`), seed dd, Heron x Heron at 24 samples, Mixed rosters, two seats. Base (`free`) 5,093 rounds / 1,000 matches, token 5,091 / 1,000, answer 5,016 / 960 (0 capped), 29 rounds/s (525.6 s for all three, 4 workers), load 5.1 before, 5.5 after. No resume.
+- Counting (new in this commit, `tools/sim/stats.mjs`): the sim now records the Blackmailer's escalations, marked `free`, apart from token escalations. Escalation, escalator won and bluffs count token escalations only, as B29 read them; "+ Blackmailer" is the share of rounds where its flip escalated (under `answer`, opened a call), and its escalator's round wins beside it. Answers to its call (under `answer` only; the other rules ask none) count in "answered with a fold" and are also shown on their own, with the token answers alone beside them.
+- Numbers (95% margins):
+
+| Rate | Band | free (base, 2b-ii's rule) | token (a) | answer (b) |
+|---|---|---|---|---|
+| Won at stake 2 or more (`maxStake`) | <= 40 | **45.9** ±1.4 | **45.2** ±1.4 | **43.4** ±1.4 |
+| Answered with a fold, all answers | 25-35 | **23.6** ±1.7 | **23.1** ±1.7 | **20.6** ±1.4 |
+| ... token escalations' answers | | 23.6 ±1.7 (592 / 2,512) | 23.1 ±1.7 (531 / 2,303) | 23.4 ±1.7 (565 / 2,415) |
+| ... the Blackmailer's call | | none asked | none asked | 11.7 ±2.3 (90 / 770) |
+| Escalation (tokens) | 35-60 | 49.3 ±1.4 | 45.2 ±1.4 | 48.1 ±1.4 |
+| + the Blackmailer | report | 15.6 ±1.0 | 17.3 ±1.0 | 15.4 ±1.0 |
+| Escalator won (tokens) | 55-65 | 66.2 ±1.9 | 65.2 ±1.9 | 64.6 ±1.9 |
+| The Blackmailer's escalator won | report | 46.7 ±3.5 | 47.1 ±3.3 | 51.9 ±3.5 |
+| Rounds per match | 5-7 | 5.09 ±0.10 | 5.09 ±0.10 | 5.22 ±0.10 |
+| Reel wins | 5-25 | 18.3 ±2.4 | 19.6 ±2.5 | 19.9 ±2.5 |
+| Half-time leader wins | report | 62.8 ±3.3 | 62.5 ±3.3 | 59.2 ±3.4 |
+| Points per round | report | 2.85 ±0.04 | 2.84 ±0.04 | 2.78 ±0.04 |
+| Tokens spent per player per match | report | 1.26 | 1.59 | 1.26 |
+| Rounds begun with a seat out of tokens | report | 1.4 ±0.3 | 3.1 ±0.5 | 1.6 ±0.3 |
+| Folds (rounds) | report | 21.4 ±1.1 | 20.3 ±1.1 | 22.4 ±1.2 |
+| Blackmailer, win% when played | report | 46.8 ±2.3 | 47.3 ±2.3 | 46.1 ±2.3 |
+| Macau, winner took the round | report | 63.7 ±4.1 | 63.0 ±4.1 | 61.4 ±4.2 |
+
+  Bands missed (by how much, against the margin): **free**: `maxStake` over by 5.9 (±1.4), folds in answer under by 1.4 (±1.7), escalator won over by 1.2 (±1.9). **token**: `maxStake` over by 5.2 (±1.4), folds in answer under by 1.9 (±1.7), escalator won over by 0.2 (±1.9). **answer**: `maxStake` over by 3.4 (±1.4), folds in answer under by 4.4 counting every answer (±1.4), or by 1.6 (±1.7) on token escalations' answers alone; escalator won inside. Every other band is inside for all three. Against the base on the same seeds (the sim's comparison, * past the combined margin): token moves escalation -4.1 ±1.9 *, the Blackmailer +1.7 ±1.4 *, `maxStake` -0.7 ±1.9; answer moves `maxStake` -2.5 ±1.9 *, folds in answer (all) -3.0 ±2.2 *, the Blackmailer's escalator +5.3 ±5.0 *. The base reproduces B29 (45.9 against 46.5, 23.6 against 23.7, rounds a match 5.09 against 5.10).
+- Findings:
+  - Neither rule lands `maxStake`. A token barely costs anything: players spend 1.26 of their 3 tokens a match, so the Blackmailer nearly always has one (rounds begun with a seat out of tokens: 3.1%). The token it spends is a token escalation that doesn't happen later (token escalations -4.1, the Blackmailer +1.7, since more rounds are still unescalated when it flips), and a round goes to stake 2 about as often (escalated rounds 64.9% to 62.5%). The answer rule asks, but the bots fold to only 11.7% of its calls: the call lands at the start of turns 2-6, when their round value is seldom below the -0.29 answer threshold (they fold to 23% of token escalations, which come from a seat that chose to bet on a strong hand). So `maxStake` falls only 2.5 points.
+  - The folds-in-answer shortfall is not the Blackmailer's: the token escalations' answers fold 23.1-23.6% under every rule, against 27.2% on Classic (B23). Counting the Blackmailer's answers under the answer rule lowers the rate further (its calls are folded to less), so no Blackmailer rule can lift it into 25-35. That points at the answer threshold on Mixed rosters (rule c, `stakes.answer`), not at the Blackmailer.
+  - Size of the gap: `maxStake` is 15.7 points over Classic's 30.2 (B23), about the Blackmailer's own 15.6% of rounds. Getting to 40 needs about 6 points off, so about 40% of the Blackmailer's stake-2 rounds gone; the answer rule took off 2.5 points with an 11.7% fold rate. The Blackmailer is in 50.5% of rounds' rosters (2,570 of 5,093) and escalates in about 31% of those.
+  - The answer rule is the closer of the two on `maxStake` (3.4 over against 5.2) and escalator won (inside against a near miss), and about level with the token rule on folds in answer if read on token escalations (23.4 against 23.1), but farther if every answer counts (20.6).
+- Decision: neither rule puts every band inside, so (as the coordinator decided beforehand) nothing is chosen: `RULES.blackmailer` stays `'free'`, Step 5 (the 20,000-round confirm and the points by roster) is not run, and both configurations' numbers go to the coordinator. Options the numbers suggest, theirs to approve: retune the bots' answer threshold (`stakes.answer`; rule c) on Mixed, which is what folds in answer need under any Blackmailer rule; a stronger Blackmailer rule (the answer rule's call plus a token, or the Blackmailer's call only on turns where folding saves something); or accept Mixed's hotter stakes as the content's character. Then: the coordinator chose `answer` and accepted its two misses; B36 confirms it.
+
+## 2026-10-19 · B36 The Blackmailer's call can be folded to (`rules.blackmailer` answer): the Mixed confirm, 20,000 rounds, and points by roster (Phase 3 Task 4 Steps 5-6)
+- Question: The coordinator chose rule (b) from B35, `answer` (the Blackmailer's flip escalates without a token, and its rivals may fold in answer at the start of the next turn; on the final turn it does nothing), and accepted its two misses in advance. At the bots' own samples and 20,000 rounds on Mixed rosters, two seats: where do the stake rates land against B29 (2b-ii's `free` rule), are every agent, every city and seat 0 still in band, and do the Blackmailer and Macau still pay in points as B30 found (plan Risk 1)?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-blackmailer-final --roster mixed --rounds 20000 --workers 4 --set rules.blackmailer=answer --against games/dead-drop/tools/baselines/phase2b2-final.json --out games/dead-drop/tools/baselines/phase3-blackmailer-final.json`, commit 57d9eb9. The rule came from `--set`, since 57d9eb9 still had `'free'` written; the next commit writes `'answer'` into `RULES.blackmailer`, which plays the same. Seed dd, Heron x Heron at 24 samples, 20,034 rounds / 3,800 matches (0 capped), 29 rounds/s (688.6 s, 4 workers), load 2.8 before, 5.5 after. No resume. Two-seat play is otherwise B29's: the Classic goldens hold, and B35's `free` base reproduced B29. Then `nice -n 19 node games/dead-drop/tools/points-by-roster.mjs --from games/dead-drop/tools/baselines/phase3-blackmailer-final.json --rounds 10000 --workers 4`: this run's first 10,042 rounds / 1,900 matches, 29 rounds/s (347.6 s), load 4.2 before, 6.0 after. Its roster section covers all 3,800 matches.
+- Numbers (95% margins; "change" is the sim's comparison with B29's saved base, * past the combined margin):
+
+| Rate | Band | B29, `free` | B36, `answer` | Change | In band? |
+|---|---|---|---|---|---|
+| Won at stake 2 or more (`maxStake`) | <= 40 | 46.5 ±0.7 | **43.5** ±0.7 | -3.0 ±1.0 * | **no: 3.5 over (accepted)** |
+| Answered with a fold, every answer | 25-35 | 23.7 ±0.8 | **21.2** ±0.7 | -2.5 ±1.1 * | **no: 3.8 under (accepted)** |
+| ... token escalations' answers (`tokenFoldInAnswer`) | 25-35 | 23.7 ±0.8 | 23.6 ±0.8 | | no: 1.4 under |
+| ... the Blackmailer's call | report | none asked | 13.7 ±1.2 (3,153 answers) | | |
+| Escalation (tokens) | 35-60 | 49.7 ±0.7 | 48.3 ±0.7 | -1.3 ±1.0 * | yes |
+| + the Blackmailer | report | not recorded (about 15.6, B35) | 15.7 ±0.5 | | |
+| Escalator won (tokens) | 55-65 | 64.9 ±0.9 | 64.1 ±1.0 | -0.9 ±1.3 | yes |
+| The Blackmailer's escalator won | report | (46.7 ±3.5, B35) | 52.1 ±1.7 | | |
+| Rounds per match | 5-7 | 5.10 ±0.05 | 5.27 ±0.05 | +0.2 ±0.1 * | yes |
+| Reel wins | 5-25 | 19.5 ±1.2 | 19.8 ±1.3 | +0.3 ±1.8 | yes |
+| `reelComeback` | report | 91.9 ±1.9 | 90.6 ±2.1 | | |
+| Half-time leader wins | report | 60.2 ±1.7 | 60.4 ±1.7 | | |
+| Points per round | report | 2.86 ±0.02 | 2.78 ±0.02 | -0.1 ±0.0 * | |
+| Folds (rounds) / dead heats / tie-breaks | report | 21.1 / 2.7 / 17.7 | 23.0 / 2.6 / 16.9 | | |
+| Tokens spent per player per match | report | 1.27 | 1.27 | | |
+| Seat 0 wins (matches) | 45-55 | 49.8 ±1.6 | 49.0 ±1.6 | | yes |
+
+  Every agent's win% when played is inside 44-56: the Wiretap at 45.7 is the lowest, the Heavy at 51.9 the highest, and the Blackmailer reads 46.6 ±1.2 (B29: 46.7 ±1.2). Every city's "winner took the round" is inside 55-80: Havana at 61.6 is the lowest, Lisbon at 76.3 the highest, and Macau reads 62.3 ±2.1. The full tables are in the JSON.
+
+  Points by roster, beside B30 (the same method on B29's `free` run):
+
+| Rate | B30, `free` | B36, `answer` |
+|---|---|---|
+| Points per round, Blackmailer in the roster | 3.14 ±0.04 (5,188 rounds) | 2.97 ±0.04 (5,331 rounds) |
+| Points per round, Blackmailer not in the roster | 2.55 ±0.04 (4,909 rounds) | 2.55 ±0.04 (4,711 rounds) |
+| Rounds per match with / without the Blackmailer in the roster (all matches) | 4.65 / 5.68 | 4.95 / 5.69 |
+| The Blackmailer played, to the flip: its seat's share of the rounds / of the points | 46.6 ±1.6 / 48.1 (3,608 seat-rounds) | 46.8 ±1.7 / 48.7 (3,416) |
+| Points per round, Macau dealt / not dealt | 3.37 ±0.09 / 2.76 ±0.03 | 3.33 ±0.10 / 2.67 ±0.03 |
+| Macau held at the flip: its holder's share of the rounds / of the points | 61.8 ±2.9 / 73.1 (1,047 rounds) | 62.6 ±3.0 / 73.7 (1,023) |
+
+  Every other agent's matches run 5.24 (the Courier) to 5.35 (the Jammer) rounds with it in the roster.
+- Findings:
+  - The rule does what it can. Rounds won at stake 2 or more fall 3.0 points (46.5 to 43.5). Matches holding a Blackmailer gain 0.3 rounds (4.65 to 4.95, against 5.69 without), and they pay 0.17 fewer points a round. Every band but two is inside.
+  - The two misses are accepted, as B23's escalator miss was. `maxStake` is 43.5 ±0.7, 3.5 over its 40. Folds in answer are 21.2 ±0.7 counting every answer, 3.8 under its 25. Both come from the same place: the bots fold to only 13.7% ±1.2 of the Blackmailer's calls (11.7 ±2.3 at 5,000 rounds, B35). The call lands at the start of turns 2-6, whatever their hands, and their round value is seldom below the -0.29 answer threshold then. They fold to 23.6% of token escalations, which come from a seat that chose to bet. The fold shortfall is not the Blackmailer's: token escalations' answers fold 23.1-23.6% on Mixed under every rule (B35; 23.6 ±0.8 here, 23.7 in B29), against 27.2% on Classic (B23). That is the bots' answer threshold (`stakes.answer`) on Mixed rosters, which no Blackmailer rule can move. Counting the Blackmailer's answers in the rate lowers it further.
+  - Its escalator now wins 52.1% ±1.7 of those rounds, against 46.7 ±3.5 when nobody could fold (B35), since a fold in answer is its win. The Blackmailer still reads average in round wins (46.6 when played) and in points (48.7% of the points from 46.8% of the rounds). It still speeds matches, but less.
+  - Macau's holder still takes more than 70% of the points from about 62% of the rounds: 73.7% from 62.6% (B30: 73.1% from 61.8%). As B30 found, that is its rule, and the bots underrate it. Left as it is: a change there is a design call for the coordinator.
+- Decision: `RULES.blackmailer` is `'answer'` in `js/data.js`, with a comment naming B35-B36. The Blackmailer's card text reads "Flip: a free escalation, no token; rivals may still fold." Its Help note, which the roster card shows too, says rivals answer at the start of the next turn and that it does nothing on the final turn. `tools/baselines/phase3-blackmailer-final.json` is the two-seat Mixed reference from now on (in place of `phase2b2-final.json`).
+
+## 2026-10-19 · B37 Re-baseline at 3 seats after expected-points scoring (Phase 3 Task 5 Step 1)
+- Question: Task 3 made the bots score a playout by expected points at 3-4 seats (B25 scored it as win/lose: P(win) − P(lose)). On B25's configuration (Heron × 3 at 8 samples, Classic, target 8), what did that move? Folds in answer and escalation are the ones to watch (B25: 61.7% of answers were folds, 73.9% escalation).
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-base3 --seats 3 --samples 8 --rounds 5000 --roster classic --workers 4 --against games/dead-drop/tools/baselines/phase2b1-seats3.json --out games/dead-drop/tools/baselines/phase3-base3.json` (the brief's command plus `--roster classic`, the default, and `--workers 4`; the sim's default target at 3 seats is `TARGETS[3]` = 8, as B25's `--target 8`), commit 8f58714, seed dd, 5,005 rounds / 1,360 matches (0 capped), 41 rounds/s (122 s), load 1.7 before, 4.9 after. No resume.
+- Numbers (B25 in brackets; * = the change is past the combined margin):
+
+| Rate | Value |
+|---|---|
+| Rounds per match | 3.68 ±0.05 [4.25] * (≈ 10.1 min at 2.75 min a round) |
+| Answered with a fold | 29.4% ±1.0 [61.7] * |
+| Escalation | 76.2% ±1.2 [73.9] * |
+| Escalator won | 50.6% ±1.6 [68.8] * |
+| Won at stake 2 or more | 67.8% ±1.3 [38.9] * |
+| Folds (rounds) | 5.9% ±0.7 [34.3] * |
+| Tie-breaks | 34.1% ±1.3 [21.4] * |
+| Dead heats | 3.6% ±0.5 [3.1] |
+| Half-time leader wins | 44.2% ±2.7 [51.3] * |
+| Reel wins | 12.9% ±1.8 [6.9] * (93.7% from behind) |
+| Points per round | 3.66 ±0.04 [3.28] * |
+| Seat shares (matches) | 33.5 / 32.6 / 34.0 (each ±2.5) |
+| Other | pot taken 0.52 [1.29], 0.94 tokens spent per player [1.05], 0.5% of rounds begin with a seat out [1.5] |
+
+- Decision: the new baseline at 3 seats. Expected points stopped the folding: a win/lose value sits near 1/3 − 2/3 for an ordinary hand at three seats, under the −0.29 answer threshold, so B25's bots folded 62% of answers and 34% of rounds ended in folds; scored by points, playing on is worth something and only 29% of answers (6% of rounds) are folds. Escalation barely moved (+2.3), but more escalated rounds are now played out, so stake 2 or more wins 68% of rounds (from 39%), points per round rise and matches get shorter still (3.7 rounds, against the 5-7 band): the pace is now the target's job (Step 2). The escalator wins 50.6%, still above a fair 33%.
+
+## 2026-10-19 · B38 Re-baseline at 4 seats after expected-points scoring (Phase 3 Task 5 Step 1)
+- Question: The same at four seats, on B26's configuration (Heron × 4 at 8 samples, Classic, target 7). B26: 73.3% of answers were folds, 68.2% escalation.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-base4 --seats 4 --samples 8 --rounds 5000 --roster classic --workers 4 --against games/dead-drop/tools/baselines/phase2b1-seats4.json --out games/dead-drop/tools/baselines/phase3-base4.json` (default target `TARGETS[4]` = 7, as B26's `--target 7`), commit 8f58714, seed dd, 5,060 rounds / 1,480 matches (0 capped), 20 rounds/s (252 s), load 4.3 before, 5.7 after. No resume.
+- Numbers (B26 in brackets; * = past the combined margin):
+
+| Rate | Value |
+|---|---|
+| Rounds per match | 3.42 ±0.06 [3.45] (≈ 12.0 min at 3.5 min a round) |
+| Answered with a fold | 22.3% ±0.8 [73.3] * |
+| Escalation | 73.0% ±1.2 [68.2] * |
+| Escalator won | 36.9% ±1.6 [68.5] * |
+| Won at stake 2 or more | 67.6% ±1.3 [35.4] * |
+| Folds (rounds) | 0.9% ±0.3 [31.8] * |
+| Tie-breaks | 54.3% ±1.4 [27.0] * |
+| Dead heats | 6.7% ±0.7 [4.4] * |
+| Half-time leader wins | 42.0% ±2.6 [43.9] |
+| Reel wins | 11.9% ±1.6 [5.1] * (92.6% from behind) |
+| Points per round | 3.79 ±0.05 [3.96] * |
+| Seat shares (matches) | 26.6 / 24.2 / 25.1 / 24.2 (each ±2.2) |
+| Other | pot taken 0.63 [2.06], 0.62 tokens spent per player [0.59], 0.4% of rounds begin with a seat out [0.4] |
+
+- Decision: the new baseline at 4 seats. The same shift, larger: folds in answer fall from 73% to 22% and rounds ending in folds from 32% to under 1% (a round ends in folds only when all three others fold), so the escalator, who used to collect the folds, now wins 36.9% (a fair share is 25%). Points per round fall a little (3.96 to 3.79: far fewer folders pay their stake into the pot, while more rounds are won at stake 2 or more), so matches stay at 3.4 rounds, well under the 4.5-6 band: the target has to rise (Step 2).
+
+## 2026-10-19 · B39 The 3-seat grid: targets 8, 10, 12 and the pace `roundPoints3` 2 (Phase 3 Task 5 Step 2)
+- Question: B37 left 3-seat matches at 3.7 rounds. Which target and pace put every band inside? Bands (spec, "Phase 3 tuning"): 5-7 rounds a match (centre 6), each seat's match share 33.3 ±5 (28.3-38.3), half-time leader wins <= 60, reel wins <= 30; escalation, escalator won, folds in answer, stake 2 or more and points per round reported only.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-grid3 --seats 3 --samples 8 --rounds 5000 --roster classic --workers 4 --target 10 --variant t8:target=8 --variant t12:target=12 --variant t10p2:stakes.roundPoints3=2 --variant t12p2:target=12 --variant t12p2:stakes.roundPoints3=2 --out games/dead-drop/tools/baselines/phase3-grid3.json` (the brief's command plus `--roster classic` and `--workers 4`; the two `t12p2` flags compose one two-key variant, as the CLI's header says), commit 8f58714, seed dd, Heron × 3 at 8 samples, Classic, five configurations on the same seeds, 25,176 rounds in 600 s (42 rounds/s), load 4.9 before, 6.4 after. No resume. `t8` is B37's configuration (same config hash, same numbers).
+- Numbers (95% margins; minutes at 2.75 a round; seat shares each about ±3):
+
+| Config | Target | `roundPoints3` | Rounds / matches | Rounds per match | Minutes | Half-time leader | Reel wins | Seat shares | Escalation | Escalator won | Folds in answer | Stake 2+ | Points per round | Bands |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| base (t10) | 10 | 1 | 5,062 / 960 | 5.27 ±0.09 | 14.5 | 38.1 ±3.6 | 29.2 ±2.9 | 35.9 / 30.5 / 33.5 | 50.9 ±1.4 | 51.0 ±1.9 | 31.1 ±1.3 | 44.4 ±1.4 | 3.08 ±0.04 | all met (0.73 from 6) |
+| t8 | 8 | 1 | 5,005 / 1,360 | 3.68 ±0.05 | 10.1 | 44.2 ±2.7 | 12.9 ±1.8 | 33.5 / 32.6 / 34.0 | 76.2 ±1.2 | 50.6 ±1.6 | 29.4 ±1.0 | 67.8 ±1.3 | 3.66 ±0.04 | rounds under by 1.32 |
+| t12 | 12 | 1 | 5,050 / 760 | 6.64 ±0.15 | 18.3 | 39.2 ±3.9 | **50.1** ±3.6 | 35.0 / 30.8 / 34.2 | 33.4 ±1.3 | 54.0 ±2.4 | 31.7 ±1.6 | 28.8 ±1.2 | 2.68 ±0.04 | reel over by 20.1 |
+| t10p2 | 10 | 2 | 5,027 / 1,240 | 4.05 ±0.07 | 11.1 | 55.6 ±3.0 | 14.7 ±2.0 | 35.3 / 31.5 / 33.1 | 99.6 ±0.2 | 47.9 ±1.4 | 27.8 ±0.9 | 88.6 ±0.9 | 4.17 ±0.03 | rounds under by 0.95 |
+| t12p2 | 12 | 2 | 5,032 / 1,000 | 5.03 ±0.09 | 13.8 | 49.5 ±3.4 | 20.8 ±2.5 | 35.6 / 32.0 / 32.4 | 99.2 ±0.2 | 48.4 ±1.4 | 28.0 ±0.9 | 88.1 ±0.9 | 4.16 ±0.03 | all met (0.97 from 6) |
+
+- Findings: at `roundPoints3` 1 the target sets the length, and the Microfilm's reel takes over as matches lengthen: reel wins go 12.9, 29.2, 50.1% at targets 8, 10, 12 (89% or more of them from behind), since a longer match hands out more strips (1.58 a match at 10) while the points race slows. `roundPoints3` 2 counts fewer rounds left, so the rivals stop saving tokens: escalation is automatic again (99%), 88% of rounds are won at stake 2 or more and points per round jump by about 1.1, which shortens matches (t12p2 5.0 rounds) and so holds the reel down (20.8), but lifts the half-time leader (49.5) and leaves no betting decision. Seats are fair everywhere (no share outside 30.5-35.9).
+- Decision: two configurations meet every band, t10 (5.27 rounds, 0.73 from the centre) and t12p2 (5.03, 0.97). By Step 3's rule the nearest the centre wins: **target 10, `roundPoints3` 1** (it also keeps escalation a choice, 51% against 99%). The margin to watch is the reel: 29.2 ±2.9 against a bar of 30, so Step 5's confirm at the bots' own 24 samples decides whether it holds.
+
+## 2026-10-19 · B40 The 4-seat grid: targets 9, 10, 11 and the pace `roundPoints4` 2 (Phase 3 Task 5 Step 2)
+- Question: B38 left 4-seat matches at 3.4 rounds. Which target and pace put every band inside? Bands: 4.5-6 rounds a match (centre 5.25), each seat's match share 25 ±5 (20-30), half-time leader wins <= 60, reel wins <= 30; the rest reported only.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-grid4 --seats 4 --samples 8 --rounds 5000 --roster classic --workers 4 --target 10 --variant t9:target=9 --variant t11:target=11 --variant t10p2:stakes.roundPoints4=2 --out games/dead-drop/tools/baselines/phase3-grid4.json` (the brief's command plus `--roster classic` and `--workers 4`), commit 8f58714, seed dd, Heron × 4 at 8 samples, Classic, four configurations on the same seeds, 20,197 rounds in 1,009 s (20 rounds/s), load 5.3 before, 6.8 after. No resume.
+- Numbers (95% margins; minutes at 3.5 a round; seat shares each about ±3):
+
+| Config | Target | `roundPoints4` | Rounds / matches | Rounds per match | Minutes | Half-time leader | Reel wins | Seat shares | Escalation | Escalator won | Folds in answer | Stake 2+ | Points per round | Bands |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| base (t10) | 10 | 1 | 5,032 / 900 | 5.59 ±0.11 | 19.6 | 30.6 ±3.5 | **34.2** ±3.1 | 27.4 / 24.2 / 25.0 / 23.3 | 49.1 ±1.4 | 39.1 ±1.9 | 23.8 ±1.0 | 46.0 ±1.4 | 3.20 ±0.05 | reel over by 4.2 |
+| t9 | 9 | 1 | 5,037 / 1,020 | 4.94 ±0.09 | 17.3 | 34.4 ±3.4 | 27.2 ±2.7 | 24.4 / 25.2 / 25.4 / 25.0 | 52.2 ±1.4 | 36.4 ±1.8 | 23.0 ±0.9 | 48.4 ±1.4 | 3.25 ±0.05 | all met (0.31 from 5.25) |
+| t11 | 11 | 1 | 5,094 / 780 | **6.53** ±0.15 | 22.9 | 30.6 ±3.7 | **46.2** ±3.5 | 28.2 / 26.2 / 23.6 / 22.1 | 36.0 ±1.3 | 40.5 ±2.2 | 24.4 ±1.1 | 33.3 ±1.3 | 2.85 ±0.04 | rounds over by 0.53, reel over by 16.2 |
+| t10p2 | 10 | 2 | 5,034 / 1,220 | **4.13** ±0.08 | 14.4 | 51.0 ±3.1 | 19.2 ±2.2 | 23.6 / 25.7 / 25.4 / 25.2 | 99.8 ±0.1 | 36.5 ±1.3 | 21.0 ±0.7 | 93.2 ±0.7 | 4.45 ±0.04 | rounds under by 0.37 |
+
+- Findings: the same shape as B39. At `roundPoints4` 1 the reel climbs with the target (27.2, 34.2, 46.2% at 9, 10, 11; 82-85% of them from behind) and is the band that binds. `roundPoints4` 2 again makes escalation automatic (99.8%) and short matches (4.1 rounds). Seats are fair everywhere (22.1-28.2). The half-time leader wins only 31-34% at `roundPoints4` 1 (a seat's fair share is 25%): a 4-seat match is still wide open at half time, and the reel's comebacks are part of why.
+- Decision: one configuration meets every band, t9: **target 9, `roundPoints4` 1** (4.94 rounds, 0.31 from the centre; about 17 minutes). The reel is again the closest band (27.2 ±2.7 against 30), for Step 5's confirm at the bots' own 12 samples.
+
+## 2026-10-19 · B41 The 3-seat confirm at the bots' own samples: target 10, `roundPoints3` 1 (Phase 3 Task 5 Step 5)
+- Question: Does B39's choice (target 10, `roundPoints3` 1) hold every band with Heron at its own capped 24 samples (`SAMPLE_CAP[3]`, B34)?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-final3 --seats 3 --rounds 10000 --roster classic --workers 4 --out games/dead-drop/tools/baselines/phase3-final3.json` (the brief's command plus `--roster classic` and `--workers 4`), commit 8f58714 plus this task's `data.js` (`TARGETS[3]` 10, `TARGETS[4]` 9, `roundPoints3/4` 1; uncommitted at the time), seed dd, Heron × 3 at 24 samples, Classic, 10,078 rounds / 1,880 matches (0 capped), 13 rounds/s (757 s), load 4.8 before, 6.1 after. No resume. The JSON was then renamed `phase3-final3-t10.json`, so that `phase3-final3.json` holds the configuration taken (B43).
+- Numbers (B39's t10 at 8 samples in brackets):
+
+| Rate | Band | Value |
+|---|---|---|
+| Rounds per match | 5-7 | 5.36 ±0.07 [5.27] (≈ 14.7 min) |
+| Seat shares (matches) | 28.3-38.3 | 33.5 / 31.9 / 34.6 (each ±2.2) [35.9 / 30.5 / 33.5] |
+| Half-time leader wins | <= 60 | 39.1% ±2.6 [38.1] |
+| Reel wins | <= 30 | **33.4% ±2.1** [29.2] (86.1% from behind; 1.67 strips a match [1.58]) |
+| Escalation | report | 51.1% ±1.0 [50.9] |
+| Escalator won | report | 49.5% ±1.4 [51.0] |
+| Answered with a fold | report | 20.4% ±0.8 [31.1] |
+| Won at stake 2 or more | report | 46.2% ±1.0 [44.4] |
+| Points per round | report | 3.04 ±0.03 [3.08] |
+| Other | report | folds 2.5% [4.3], tie-breaks 42.8% [38.0], dead heats 5.2%, pot taken 0.28, 0.91 tokens spent per player; bots A/B/C win 32.2 / 33.7 / 34.1 (±2.1) |
+
+- Decision: the reel band is missed by 3.4 points, more than its ±2.1 margin, so (Step 5) the choice goes back to Step 3 once. The 24-sample bots fold in answer a third less (20.4 against 31.1), so more rounds reach the final flip and more strips change hands (1.67 a match), and the reel rose 4.2 points over the 8-sample grid; the other bands barely moved. Back at Step 3, the one other configuration in B39 that met every band is t12p2 (target 12, `roundPoints3` 2: 5.03 rounds, reel 20.8 ±2.5, so about 9 points of room for the same shift), so it is the rule's next choice and goes to its own confirm (B43). Its cost, reported here rather than banded: rivals escalate in 99% of rounds at `roundPoints3` 2 (B39).
+
+## 2026-10-19 · B42 The 4-seat confirm at the bots' own samples: target 9, `roundPoints4` 1 (Phase 3 Task 5 Step 5)
+- Question: Does B40's choice (target 9, `roundPoints4` 1) hold every band with Heron at its own capped 12 samples (`SAMPLE_CAP[4]`, B34)?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-final4 --seats 4 --rounds 10000 --roster classic --workers 4 --out games/dead-drop/tools/baselines/phase3-final4.json` (the brief's command plus `--roster classic` and `--workers 4`), commit 8f58714 plus this task's `data.js` (as B41), seed dd, Heron × 4 at 12 samples, Classic, 10,025 rounds / 1,980 matches (0 capped), 13 rounds/s (756 s), load 4.4 before, 5.3 after (under the skip threshold of 10). No resume.
+- Numbers (B40's t9 at 8 samples in brackets):
+
+| Rate | Band | Value |
+|---|---|---|
+| Rounds per match | 4.5-6 | 5.06 ±0.07 [4.94] (≈ 17.7 min) |
+| Seat shares (matches) | 20-30 | 26.3 / 24.0 / 24.9 / 24.8 (each ±1.9) [24.4 / 25.2 / 25.4 / 25.0] |
+| Half-time leader wins | <= 60 | 32.7% ±2.5 [34.4] |
+| Reel wins | <= 30 | 26.9% ±2.0 [27.2] (89.7% from behind; 1.71 strips a match) |
+| Escalation | report | 52.2% ±1.0 [52.2] |
+| Escalator won | report | 38.0% ±1.3 [36.4] |
+| Answered with a fold | report | 18.1% ±0.6 [23.0] |
+| Won at stake 2 or more | report | 49.0% ±1.0 [48.4] |
+| Points per round | report | 3.21 ±0.03 [3.25] |
+| Other | report | folds 0.4%, tie-breaks 55.5%, dead heats 6.0%, pot taken 0.38, 0.66 tokens spent per player; bots A/B/C/D win 25.2 / 25.0 / 25.8 / 24.0 (±1.9) |
+
+- Decision: every band holds, so **target 9, `roundPoints4` 1** stand at four seats (5.06 rounds, 0.19 from the centre, about 18 minutes a match). The reel kept its 3-point margin here (12 samples sit nearer 8 than B41's 24 do). This file is the 4-seat baseline for later phases.
+
+## 2026-10-19 · B43 The 3-seat confirm, second choice: target 12, `roundPoints3` 2 (Phase 3 Task 5 Step 5, after B41)
+- Question: B41 sent the 3-seat choice back to Step 3 once; the rule's next choice is B39's t12p2. Does it hold every band at the bots' own 24 samples?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-final3b --seats 3 --rounds 10000 --roster classic --workers 4 --out games/dead-drop/tools/baselines/phase3-final3.json`, commit 8f58714 plus this task's `data.js` with `TARGETS[3]` 12 and `roundPoints3` 2 (uncommitted at the time; the sim reads them as defaults, so the config has no patches), seed dd, Heron × 3 at 24 samples, Classic, 10,047 rounds / 2,060 matches (0 capped), 14 rounds/s (721 s), load 3.9 before, 5.1 after. No resume.
+- Numbers (B39's t12p2 at 8 samples in brackets; B41's t10 at 24 samples in braces):
+
+| Rate | Band | Value |
+|---|---|---|
+| Rounds per match | 5-7 | **4.88 ±0.06** [5.03] {5.36} (≈ 13.4 min) |
+| Seat shares (matches) | 28.3-38.3 | 34.9 / 33.0 / 32.1 (each ±2.1) [35.6 / 32.0 / 32.4] |
+| Half-time leader wins | <= 60 | 53.2% ±2.4 [49.5] {39.1} |
+| Reel wins | <= 30 | 23.7% ±1.8 [20.8] {33.4} (87.1% from behind; 1.44 strips a match [1.31]) |
+| Escalation | report | 99.3% ±0.2 [99.2] {51.1} |
+| Escalator won | report | 45.6% ±1.0 [48.4] {49.5} |
+| Answered with a fold | report | 17.4% ±0.5 [28.0] {20.4} |
+| Won at stake 2 or more | report | 91.8% ±0.5 [88.1] {46.2} |
+| Points per round | report | 4.11 ±0.02 [4.16] {3.04} |
+| Other | report | folds 2.8% [7.2], tie-breaks 39.4%, dead heats 4.7%, 1.61 tokens spent per player, 8.1% of rounds begun with a seat out of tokens; bots A/B/C win 32.8 / 34.1 / 33.2 (±2.0) |
+
+- Decision: rounds per match miss the band by 0.12 (4.88 against 5), twice the ±0.06 margin, so this confirm fails too, and Step 5 allows only the one return to Step 3. As at target 10 (B41), the 24-sample bots fold in answer less (17.4 against 28.0) and more strips change hands, so the reel ends more matches early (23.7, up 2.9) and matches are 0.15 rounds shorter. Neither 3-seat configuration holds every band at the bots' own samples: target 10 / `roundPoints3` 1 misses the reel by 3.4 points (33.4 ±2.1, about 11% over its bar of 30), target 12 / `roundPoints3` 2 misses the length by 0.12 rounds (about 2% under 5, some 20 seconds a match). The nearer miss, t12p2, stays in `data.js` and goes to the coordinator with the other: it costs automatic escalation (rivals escalate in 99% of rounds, 92% of rounds are won at stake 2 or more), which 2b-i tuned out at two seats (B12-B22), against t10's 51%. What the numbers suggest, the coordinator's call: a 3-seat grid at the bots' own 24 samples (the 8-sample grid moved the reel by +3 to +4 points and the length by ±0.15 rounds at three seats), between the two: `roundPoints3` 1.5 at targets 11-12, or t13 at `roundPoints3` 2.
+
+## 2026-10-19 · B44 Skill still tells at a 4-seat table: Wren, Heron, Heron, Control (Phase 3 Task 5 Step 6, report only)
+- Question: With samples capped at 12 at four seats (B34), does Control (80 samples, capped to 12, noise 0.02) still beat Wren (6 samples, noise 0.35), and is Control's share at least the Herons' (24 capped to 12, noise 0.15)?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-mixed4 --seats 4 --a wren --b heron --c heron --d control --rounds 3000 --roster classic --workers 4 --out games/dead-drop/tools/baselines/phase3-mixed4.json` (the brief's command plus `--roster classic` and `--workers 4`), commit 4b942d3 (another session's lobby commits since 8f58714; the engine, bot, roster and sim code are unchanged) plus this task's `data.js` (`TARGETS[4]` 9, `roundPoints4` 1), seed dd, samples 6 / 12 / 12 / 12, Classic, 3,076 rounds / 620 matches (0 capped), 13 rounds/s (228 s), load 3.6 before, 5.4 after. No resume.
+- Numbers (`botMatches`, 95% margins):
+
+| Bot (seat) | Rival | Samples | Matches won |
+|---|---|---|---|
+| A (0) | Wren | 6 | 11.9% ±2.6 |
+| B (1) | Heron | 12 | 29.2% ±3.6 |
+| C (2) | Heron | 12 | 26.8% ±3.5 |
+| D (3) | Control | 12 | 32.1% ±3.7 |
+
+  The table itself: 4.96 ±0.12 rounds a match (≈ 17.4 min), half-time leader 38.1% ±4.5, reel wins 29.0% ±3.6, escalation 51.4%, escalator won 38.9%.
+- Decision: report only. Skill still tells at four seats: Control wins 2.7 times Wren's share (32.1 against 11.9) and Control's share is not under either Heron's (29.2, 26.8; the gaps are inside the margins at 3,000 rounds, so the cap leaves Control at least level with Heron, not clearly ahead).
+
+## 2026-10-19 · B45 The 3-seat grid at the bots' own samples: `roundPoints3` 1.5 at targets 11 and 12, `roundPoints3` 2 at 13, and a reel of 3 at target 10 (Phase 3 Task 5b)
+- Question: B41 and B43 found no 3-seat setting that held every band at the bots' own 24 samples (t10/rp1: reel 33.4 ±2.1; t12/rp2: 4.88 ±0.06 rounds and escalation in 99% of rounds), and the 8-sample grid (B39) had misjudged the reel by 3-4 points. Between the two, at 24 samples, does any configuration hold every band? Bands as B39: 5-7 rounds a match (centre 6), each seat's match share 28.3-38.3, half-time leader wins <= 60, reel wins <= 30; escalation, escalator won, folds in answer, stake 2 or more and points per round reported only. The coordinator's rule: (1) of the configurations meeting every band, the nearest 6 rounds (tie: `roundPoints3` nearer 1, then the target nearer 10); (2) if none does, automatic escalation (about 80% or more) is the miss not accepted, a reel slightly over (up to about 33) or rounds slightly short are preferred to it, and the fallback is t10/rp1 (B41) rather than t12/rp2 (B43).
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p3-grid3b --seats 3 --rounds 5000 --roster classic --workers 4 --target 11 --set stakes.roundPoints3=1.5 --variant t12p15:target=12 --variant t12p15:stakes.roundPoints3=1.5 --variant t13p2:target=13 --variant t13p2:stakes.roundPoints3=2 --variant t10p1r3:target=10 --variant t10p1r3:stakes.roundPoints3=1 --variant t10p1r3:rules.reel=3 --out games/dead-drop/tools/baselines/phase3-grid3b.json`, commit 2743bef, seed dd, Heron × 3 at 24 samples (`SAMPLE_CAP[3]`; no `--samples`), Classic, four configurations on the same seeds, 20,233 rounds in 1,503 s (13 rounds/s), load 2.6 before, 4.3 after. No resume. Every configuration names its target and `roundPoints3` (the base through `--set`, which the variants override), so the run doesn't depend on the three-seat values in `data.js`. `rules.reel` is the one reel for every table size (`RULES.reel`, read into `state.reel` by `newMatch`); the sim sets it for this configuration only.
+- Numbers (95% margins; minutes at 2.75 a round; seat shares each about ±3; B41 and B43, the 10,000-round confirms at 24 samples, for comparison):
+
+| Config | Target | `roundPoints3` | Reel | Rounds / matches | Rounds per match | Minutes | Half-time leader | Reel wins | Seat shares | Escalation | Escalator won | Folds in answer | Stake 2+ | Points per round | Bands |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| base (t11p15) | 11 | 1.5 | 2 | 5,074 / 1,020 | **4.97** ±0.09 | 13.7 | 47.0 ±3.2 | 27.4 ±2.7 | 30.8 / 34.2 / 35.0 | 80.7 ±1.1 | 48.2 ±1.5 | 19.3 ±0.9 | 74.1 ±1.2 | 3.71 ±0.04 | rounds under by 0.03 (inside ±0.09); escalation at the 80% line |
+| t12p15 | 12 | 1.5 | 2 | 5,060 / 880 | 5.75 ±0.12 | 15.8 | 39.9 ±3.7 | **37.5** ±3.2 | 34.4 / 32.6 / 33.0 | 63.0 ±1.3 | 47.5 ±1.7 | 20.5 ±1.0 | 57.4 ±1.4 | 3.32 ±0.04 | reel over by 7.5 |
+| t13p2 | 13 | 2 | 2 | 5,093 / 900 | 5.66 ±0.11 | 15.6 | 46.3 ±3.4 | **35.3** ±3.1 | 30.8 / 33.8 / 35.4 | 82.9 ±1.0 | 47.7 ±1.5 | 19.1 ±0.8 | 76.0 ±1.2 | 3.75 ±0.04 | reel over by 5.3; escalation over 80 |
+| t10p1r3 | 10 | 1 | **3** | 5,006 / 860 | 5.82 ±0.09 | 16.0 | 45.0 ±3.9 | 6.2 ±1.6 | 30.0 / 33.5 / 36.5 | 54.8 ±1.4 | 45.1 ±1.9 | 18.9 ±1.0 | 50.4 ±1.4 | 3.15 ±0.04 | all met (0.18 from 6) |
+| B41 t10p1 | 10 | 1 | 2 | 10,078 / 1,880 | 5.36 ±0.07 | 14.7 | 39.1 ±2.6 | **33.4** ±2.1 | 33.5 / 31.9 / 34.6 | 51.1 ±1.0 | 49.5 ±1.4 | 20.4 ±0.8 | 46.2 ±1.0 | 3.04 ±0.03 | reel over by 3.4 |
+| B43 t12p2 | 12 | 2 | 2 | 10,047 / 2,060 | **4.88** ±0.06 | 13.4 | 53.2 ±2.4 | 23.7 ±1.8 | 34.9 / 33.0 / 32.1 | 99.3 ±0.2 | 45.6 ±1.0 | 17.4 ±0.5 | 91.8 ±0.5 | 4.11 ±0.02 | rounds under by 0.12; escalation automatic |
+
+  Other rates: reel wins from behind 86.0 / 85.8 / 84.0 / 96.2%; strips a match 1.51 / 1.76 / 1.72 / 1.94; tokens spent per player 1.34 / 1.21 / 1.56 / 1.06; rounds begun with a seat out of tokens 3.3 / 2.6 / 6.5 / 1.1%; bots A/B/C win 32.2-34.3 in every configuration.
+- Findings:
+  - At a reel of 2 the reel follows the match length, whatever sets it: 23.7, 27.4, 33.4, 35.3 and 37.5% at 4.88, 4.97, 5.36, 5.66 and 5.75 rounds (B43, t11p15, B41, t13p2, t12p15). Reel wins of 30 or less need matches of about 5.15 rounds or less, so with a reel of 2 the length band (5 or more) and the reel band leave a window about 0.15 rounds wide, little more than a 10,000-round confirm's ±0.06-0.07. Of the settings with a reel of 2 here, only t11p15 sits in it, and it escalates in 80.7% of rounds.
+  - `roundPoints3` 1.5 counts fewer rounds left than 1, so rivals spend tokens sooner: escalation is 80.7% at target 11 and 63.0% at 12 (51.1% at 1, 99.3% at 2 and target 12). Target 13 at 2 brings it to 82.9%, still past the line.
+  - A reel of 3 takes the reel out of the binding: 6.2% of matches, 96% of them comebacks, with 1.94 strips a match, so matches run to 5.82 rounds on points with escalation a choice (54.8%). At two seats (B20) a reel of 3 decided 3.0% of matches, under that table's 5% floor; at three seats it decides 6.2 ±1.6.
+- Decision: **target 10, `roundPoints3` 1 (B41's configuration), by step 2 of the rule.** Step 1 took t10p1r3, the only configuration meeting every band (t11p15 is 0.03 rounds short; even counted in, t10p1r3 is the nearer 6, 0.18 against 1.03). The coordinator declined it: it needs a rule that differs by table size (`RULES.reel` is one reel for every table, read by `newMatch`), and it would let the film decide only 6.2% of three-seat matches, the problem 2b-i fixed by lowering the reel from 3 to 2 (B20, B23: 3% to 21%). It stays a one-knob follow-up (a reel by seat count) if Rich wants it. Of the rest, the 1.5-pace candidates either sit at the automatic-escalation line (t11p15: 80.7%) or push the reel to 35-38% (t12p15 37.5, t13p2 35.3 with escalation at 82.9%), and t12/rp2 (B43, the value in `data.js` before this entry) runs 4.88 rounds with escalation in 99% of rounds. So step 2 falls back to t10/rp1, whose reel at about a third of matches the coordinator accepted beforehand for the bigger table. Its confirm is B41, not rerun: the same seeds and configuration at 10,000 rounds and 24 samples give 5.36 ±0.07 rounds, reel 33.4 ±2.1 (3.4 over its bar, the miss accepted), escalation 51.1%, half-time leader 39.1 ±2.6, seats 33.5 / 31.9 / 34.6. `TARGETS[3]` is 10 and `STAKES.roundPoints3` 1 in `js/data.js`, and `tools/baselines/phase3-final3-t10.json` (B41) is the 3-seat baseline for later phases (`phase3-final3.json` stays B43's t12/rp2).

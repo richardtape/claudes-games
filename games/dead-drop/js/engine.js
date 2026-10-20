@@ -15,17 +15,38 @@
 // rival can't recognise it later face down. Any new path that sends a card to a hand must use
 // returnToHand (Phase 2b-ii).
 import { createRng, hashString } from '../../../shared/rng.js';
-import { AGENT, CAPACITY, CITY, CLASSIC_CITIES, DECK, MAX_HAND, MAX_SEATS, MIN_SEATS, RULES, START_HAND, TARGET, TURNS } from './data.js';
+import { AGENT, CAPACITY, CITY, CLASSIC_CITIES, DECK, MAX_HAND, MAX_SEATS, MIN_SEATS, RULES, START_HAND, TURNS, targetFor } from './data.js';
 
 // ── randomness kept inside state.rng ─────────────────────────────────────────
 const rng = createRng(0);
+const rotl = (x, k) => ((x << k) | (x >>> (32 - k))) >>> 0;
+/** 128 bits of entropy for an unseeded match, as a plain array so the state stays JSON. */
+export const randomState = () => {
+  const u = new Uint32Array(4);
+  do globalThis.crypto.getRandomValues(u);
+  while (!(u[0] | u[1] | u[2] | u[3]));
+  return Array.from(u);
+};
 function rnd(state) {
+  if (typeof state.rng !== 'number') {
+    // xoshiro128** on the four-word state, updated in place
+    const s = state.rng;
+    const result = Math.imul(rotl(Math.imul(s[1], 5), 7), 9) >>> 0;
+    const t = s[1] << 9;
+    s[2] = (s[2] ^ s[0]) >>> 0;
+    s[3] = (s[3] ^ s[1]) >>> 0;
+    s[1] = (s[1] ^ s[2]) >>> 0;
+    s[0] = (s[0] ^ s[3]) >>> 0;
+    s[2] = (s[2] ^ t) >>> 0;
+    s[3] = rotl(s[3], 11);
+    return result / 4294967296;
+  }
   rng.state = state.rng;
   const v = rng.next();
   state.rng = rng.state;
   return v;
 }
-const rint = (state, n) => Math.floor(rnd(state) * n);
+export const rint = (state, n) => Math.floor(rnd(state) * n);
 function rshuffle(state, arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -93,15 +114,15 @@ function mintUid(state, seat) {
  * ladder matches. `feature` (ids from the pool) makes round 1 deal one of them. `twist` is a ladder rival's
  * twist ({ ...TWISTS[id], seat }) or null. `cities` deals those three ids in round 1 instead (tests, the sim).
  */
-export function newMatch({ seed = Date.now(), target = TARGET, cities = null, seats = 2, film = null, roster = DECK, pool = CLASSIC_CITIES, feature = null, twist = null } = {}) {
+export function newMatch({ seed = null, seats = 2, target = targetFor(seats), cities = null, film = null, roster = DECK, pool = CLASSIC_CITIES, feature = null, twist = null } = {}) {
   if (!Number.isInteger(seats) || seats < MIN_SEATS || seats > MAX_SEATS) throw new RangeError(`seats must be ${MIN_SEATS} to ${MAX_SEATS}, got ${seats}`);
   if (film !== null && !(Number.isInteger(film) && film >= 0 && film <= 2)) throw new RangeError(`film must be null or 0 to 2, got ${film}`);
   if (!roster.length || !roster.every((id) => AGENT[id])) throw new RangeError(`unknown agent in roster: ${roster}`);
   if (pool.length < 3 || !pool.every((id) => CITY[id])) throw new RangeError(`a city pool needs 3 or more known cities, got ${pool}`);
   const state = {
     v: STATE_VERSION,
-    seed: String(seed),
-    rng: typeof seed === 'number' ? seed >>> 0 : hashString(String(seed)),
+    seed: seed === null ? null : String(seed),
+    rng: seed === null ? randomState() : typeof seed === 'number' ? seed >>> 0 : hashString(String(seed)),
     target,
     scores: Array(seats).fill(0),
     tokens: Array(seats).fill(RULES.tokens),
@@ -530,15 +551,34 @@ function settleCall(state) {
 }
 
 /**
- * The Blackmailer's flip (Decision 4): the round's one escalation, free and settled on the spot. If nobody
- * has escalated this round, `seat` has: the stake doubles and every other seat still in is recorded as
- * playing on (`called.free`). No token is spent and nobody answers: it fires while a turn resolves, after
- * every plan is locked. Internal on purpose (never an option on `escalate`, so no table action reaches it).
- * Returns whether it escalated.
+ * The Blackmailer's flip (Decision 4): the round's one escalation, if nobody has escalated this round. It
+ * fires while a turn resolves, after every plan is locked. Internal on purpose (never an option on
+ * `escalate`, so no table action reaches it). What it costs is RULES.blackmailer (tools/SIMLOG.md B35-B36):
+ * - 'free': the stake doubles on the spot and every other seat still in is recorded as playing on
+ *   (`called.free`). No token is spent and nobody answers.
+ * - 'token': the same, but it spends one of `seat`'s tokens; with none left it does nothing.
+ * - 'answer': no token is spent; it opens a call like escalate's (`pending.free`), which the others answer at
+ *   the start of the next turn and which settles as any other (settleCall: folds land, then the stake
+ *   doubles if anyone played on; `called` has no `free` key, which means nobody was asked). On the final
+ *   turn nobody is left to answer, so it does nothing.
+ * Returns whether it escalated (or, under 'answer', opened its call).
  */
-function freeEscalation(state, seat) {
+function blackmail(state, seat) {
   const R = state.round;
   if (R.escalated.some(Boolean)) return false;
+  const rule = RULES.blackmailer;
+  if (rule === 'answer') {
+    if (R.turn >= TURNS) return false;
+    const n = seatCount(state);
+    R.escalated[seat] = true;
+    // As escalate builds it, plus `free`. A fresh array: never store the frozen seat list in the state.
+    R.pending = { by: seat, from: rivalSeats(n, seat).filter((s) => !R.folded[s]), calls: Array(n).fill(null), free: true };
+    return true;
+  }
+  if (rule === 'token') {
+    if (state.tokens[seat] < 1) return false;
+    state.tokens[seat]--;
+  }
   R.escalated[seat] = true;
   R.stake *= 2;
   // A fresh array, as settleCall's answers are.
@@ -885,9 +925,13 @@ function flipTrick(state, uid, seat, ev) {
       }
       break;
     }
-    case 'blackmailer':
-      ev.push({ t: 'trick', uid, kind: 'blackmailer', stake: freeEscalation(state, seat) ? R.stake : null });
+    case 'blackmailer': {
+      // `stake`: the stake it raised the round to, or null. Under 'answer' it raises nothing yet: `call` says its call is open.
+      const done = blackmail(state, seat);
+      if (done && R.pending) ev.push({ t: 'trick', uid, kind: 'blackmailer', stake: null, call: true });
+      else ev.push({ t: 'trick', uid, kind: 'blackmailer', stake: done ? R.stake : null });
       break;
+    }
     case 'wiretap': {
       // Next turn `seat` hears which city its mark locks (viewFor's `tapped`). The final turn has no next turn.
       const on = markOf(seatCount(state), seat, R.no);
@@ -1248,8 +1292,11 @@ export function viewFor(state, seat) {
       pot: R.pot,
       escalated: R.escalated.slice(),
       // Who has answered, but not how: answers stay secret until the call settles.
+      // A Blackmailer's call (RULES.blackmailer 'answer') says so with `free` (present only then).
       pending: R.pending
-        ? { by: R.pending.by, from: R.pending.from.slice(), answered: R.pending.calls.map((c) => c !== null), mine: player ? R.pending.calls[seat] : null }
+        ? R.pending.free
+          ? { by: R.pending.by, from: R.pending.from.slice(), answered: R.pending.calls.map((c) => c !== null), mine: player ? R.pending.calls[seat] : null, free: true }
+          : { by: R.pending.by, from: R.pending.from.slice(), answered: R.pending.calls.map((c) => c !== null), mine: player ? R.pending.calls[seat] : null }
         : null,
       called: R.called ? (R.called.free ? { by: R.called.by, answers: R.called.answers.slice(), free: true } : { by: R.called.by, answers: R.called.answers.slice() }) : null,
       folded: R.folded.slice(),

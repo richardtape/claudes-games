@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveConfig, applyVariant, withPatches, configHash } from '../tools/sim/config.mjs';
 import { playMatch, playBatch } from '../tools/sim/play.mjs';
 import { emptyStats, addMatch, mergeStats, margin, summarize, compare, formatSummary } from '../tools/sim/stats.mjs';
-import { AGENT, CLASSIC_CITIES, RULES, TARGET, TWISTS } from '../js/data.js';
+import { AGENT, CLASSIC_CITIES, RULES, ROUND_MINUTES, TARGET, TARGETS, TWISTS } from '../js/data.js';
 import { ladderSetup } from '../js/roster.js';
 
 const tiny = (o = {}) => resolveConfig({ samples: 2, target: 4, ...o });
@@ -323,4 +323,61 @@ test('the agent and city probes cover what a Mixed base can deal', () => {
   assert.deepEqual([r.runs['courier+1'].config.force, r.runs['courier+1'].config.set], [['courier'], { 'courier.power': AGENT.courier.power + 1 }]);
   const c = sim('--workers', '2', '--run', 'test-sim-probe-ladder', '--setup', 'magpie', '--probe', 'cities', '--rounds', '1');
   assert.deepEqual(Object.keys(c.runs).filter((k) => k !== 'base'), cities.map((id) => `pin-${id}`));
+});
+
+test('the sim targets by seat count unless told, and estimates minutes', () => {
+  assert.equal(resolveConfig({ seats: 3 }).target, TARGETS[3]);
+  assert.equal(resolveConfig({ seats: 3, target: 12 }).target, 12);
+  assert.equal(applyVariant(resolveConfig({ seats: 2 }), 'seats', 4).target, TARGETS[4]);
+  assert.equal(applyVariant(resolveConfig({ seats: 2, target: 6 }), 'seats', 4).target, 6);
+  const sum = summarize(playBatch(tiny({ seats: 3 }), 0, 2).stats);
+  assert.ok(Math.abs(sum.minutesPerMatch - sum.roundsPerMatch.mean * ROUND_MINUTES[3]) < 1e-9);
+  assert.match(formatSummary(sum), /min at 2\.75 min a round/);
+});
+
+test('a rival’s own samples are capped by seat count; --samples overrides', () => {
+  assert.equal(resolveConfig({ a: 'control', seats: 4 }).bots[0].samples, 12);
+  assert.equal(resolveConfig({ a: 'control', seats: 4, samples: 8 }).bots[0].samples, 8);
+  assert.equal(resolveConfig({ a: 'control', seats: 2 }).bots[0].samples, 80);
+});
+
+test('the Blackmailer under answer: a call open at the top of a turn is answered and recorded as free; no hang', () => {
+  const c = tiny({ roster: 'mixed', force: ['blackmailer'], set: { 'rules.blackmailer': 'answer' } });
+  const ms = withPatches(c.set, () => [3, 0, 1, 2, 4, 5].map((i) => playMatch(c, i)));
+  assert.equal(ms[0].index, 3, 'match 3 finishes');
+  const stats = emptyStats(2);
+  for (const m of ms) addMatch(stats, m);
+  const all = ms.flatMap((m) => m.rounds.flatMap((r) => r.escalations));
+  const free = all.filter((e) => e.free);
+  assert.ok(stats.freeEscalations + stats.escalated >= free.length);
+  assert.deepEqual([stats.freeEscalations, stats.escalated], [free.length, all.length - free.length], 'the escalation rate counts token escalations only');
+  assert.ok(free.some((e) => e.answers.length === 1), 'some Blackmailer calls were answered');
+  for (const e of free) assert.ok(e.answers.every((a) => a.seat !== e.seat && ['accept', 'fold'].includes(a.call)));
+  assert.match(formatSummary(summarize(stats)), /of rounds \(\+ \d+\.\d% ±\d+\.\d Blackmailer\)/);
+});
+
+test('the Blackmailer under free and token is recorded as a free escalation with no answers', () => {
+  for (const rule of ['free', 'token']) {
+    const c = tiny({ roster: 'mixed', force: ['blackmailer'], set: { 'rules.blackmailer': rule } });
+    const free = withPatches(c.set, () => [0, 1, 2, 3].flatMap((i) => playMatch(c, i).rounds.flatMap((r) => r.escalations))).filter((e) => e.free);
+    assert.ok(free.length > 0, rule);
+    for (const e of free) assert.deepEqual(e.answers, [], rule);
+  }
+});
+
+test('rules.blackmailer takes only a rule the game has copy for', () => {
+  assert.throws(() => withPatches({ 'rules.blackmailer': 'tokn' }, () => {}), /rules\.blackmailer must be one of free, token, answer/);
+  assert.throws(() => applyVariant(tiny(), 'rules.blackmailer', 'nope'), /rules\.blackmailer must be one of/);
+  assert.equal(withPatches({ 'rules.blackmailer': 'token' }, () => RULES.blackmailer), 'token');
+  assert.equal(applyVariant(tiny(), 'rules.blackmailer', 'answer').set['rules.blackmailer'], 'answer');
+});
+
+test('summaries read folds in answer on token escalations alone, beside every answer', () => {
+  const c = tiny({ roster: 'mixed', force: ['blackmailer'], set: { 'rules.blackmailer': 'answer' } });
+  const stats = withPatches(c.set, () => playBatch(c, 0, 6).stats);
+  const sum = summarize(stats);
+  const k = stats.answeredFold - stats.freeAnsweredFold, n = stats.answers - stats.freeAnswers;
+  assert.deepEqual([sum.tokenFoldInAnswer.n, sum.tokenFoldInAnswer.pct], [n, n ? (100 * k) / n : null]);
+  assert.ok(compare(sum, sum).some((r) => r.key === 'tokenFoldInAnswer'));
+  assert.match(formatSummary(sum), /answers were folds [\d.]+% ±[\d.]+ \(to token escalations [\d.]+% ±[\d.]+\)/);
 });

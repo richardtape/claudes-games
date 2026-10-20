@@ -1,11 +1,25 @@
 // The table on screen: cities, agents (chips on the board, cards in hand) and the reveal
 // animation that plays a turn's events over the board before it re-renders from the new view.
-import { AGENT, CITY } from './data.js';
-import { deckList, rivalsOf, seatCount } from './engine.js';
+import { AGENT, CITY, RULES } from './data.js';
+import { deckList, markOf, rivalsOf, seatCount, turnOrder } from './engine.js';
 import { agentSVG, citySVG, filmSVG } from './art.js';
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const $ = (sel, root = document) => root.querySelector(sel);
+
+/** A count in words where it reads better ("two strips"); digits past ten. */
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+export const inWords = (n) => NUMBER_WORDS[n] ?? String(n);
+/** "two strips", "one strip": a count in words with its noun. */
+export const counted = (n, one, many = `${one}s`) => `${inWords(n)} ${n === 1 ? one : many}`;
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+/** "Two strips win the match": how many strips of film the full reel needs, as a sentence. */
+export const reelSentence = (reel) => `${capital(counted(reel, 'strip'))} ${reel === 1 ? 'wins' : 'win'} the match`;
+
+/** Every seat in table order from `me` (the seat at the bottom); a spectator, or any seat off the table, gets seat order. */
+const fromSeat = (n, me) => turnOrder(n, Number.isInteger(me) && me >= 0 && me < n ? me : 0);
+/** A seat's name when the caller gives no label: the view's names, or its colour's place. */
+const nameOf = (view, s) => view.names?.[s] ?? `Seat ${s + 1}`;
 
 /** Power badge classes: boosted or weakened compared to the printed number. */
 function powClass(cv) {
@@ -75,18 +89,47 @@ function rowHTML(cards, capacity, ci, seat, ghosts = [], x2 = null) {
 }
 
 /**
+ * A rival's agent in its lane: a mini chip with its power and a small silhouette (a face-down one
+ * shows its back and "?"). Rome's strongest wears a small turned-down corner (`x2`).
+ */
+function miniHTML(cv, x2) {
+  const back = !cv.kind;
+  const said = back ? 'Face-down agent' : `${AGENT[cv.kind].name}, power ${cv.power}${cv.faceDown ? ', face down' : ''}${x2 ? ', counts double here' : ''}`;
+  const cls = `mini chip own-${cv.owner}${back ? ' back' : ''}${!back && cv.faceDown ? ' fd' : ''}${x2 ? ' x2' : ''}`;
+  return `<i class="${cls}" data-uid="${cv.uid}" data-action="inspect" role="img" aria-label="${esc(said)}"><b>${back ? '?' : cv.power}</b>${back ? '' : agentSVG(cv.kind)}</i>`;
+}
+
+/**
+ * A rival's thin lane above a city's plate (three seats and more): one mini chip per agent, then
+ * sockets up to the city's capacity. It keeps the board row's `data-row`, so a reveal finds it as
+ * it finds a row (playEvents' rowEl), and a chip landing in it from a reveal is drawn small by CSS.
+ */
+export function laneHTML(view, ci, seat) {
+  const city = view.round.cities[ci];
+  const side = city.sides[seat];
+  const x2 = city.id === 'rome' ? strongest(side) : null;
+  const n = side.length;
+  const out = !!view.round.folded?.[seat];
+  const said = `${nameOf(view, seat)} in ${CITY[city.id].name}: ${n} agent${n === 1 ? '' : 's'}${out ? ', out of this round' : ''}`;
+  const empty = Math.max(0, city.capacity - n);
+  return `<div class="row lane own-${seat}${out ? ' out' : ''}" data-row="${ci}-${seat}" role="group" aria-label="${esc(said)}">${side.map((cv) => miniHTML(cv, cv.uid === x2)).join('')}${'<i class="slot mini" aria-hidden="true"></i>'.repeat(empty)}</div>`;
+}
+
+/**
  * A side's total on the plate. Reykjavik counts heads: there the total shows the side's number of
  * agents (public, face-down ones too), with its power in the title text.
  */
-function totalHTML(city, seat, mine) {
+function totalHTML(city, seat, mine, slot = null) {
   const hidden = city.hiddenCount[seat];
   const n = city.known[seat];
+  // At three seats and more each rival's total is a small badge in the plate's top edge, placed by `--slot`.
+  const badge = slot === null ? '' : ` badge" style="--slot:${slot}`;
   if (city.id === 'reykjavik') {
     const count = city.sides[seat].length;
     const title = `${count} agent${count === 1 ? '' : 's'} here, power ${n}${hidden ? ' and more' : ''}`;
-    return `<span class="total t-${seat}${mine ? ' me' : ''} count" data-total="${seat}" title="${title}">${count}</span>`;
+    return `<span class="total t-${seat}${mine ? ' me' : ''} count${badge}" data-total="${seat}" title="${title}">${count}</span>`;
   }
-  return `<span class="total t-${seat}${mine ? ' me' : ''}" data-total="${seat}">${n}${hidden ? `<small>+?</small>` : ''}</span>`;
+  return `<span class="total t-${seat}${mine ? ' me' : ''}${badge}" data-total="${seat}">${n}${hidden ? `<small>+?</small>` : ''}</span>`;
 }
 
 /** Rome: the side's strongest agent whose power this view knows (the first of equals), or null. */
@@ -130,21 +173,34 @@ export const canisterHTML = ({ label = true } = {}) =>
  * drop (an Accomplice's with its partner) as ghosts; `choosing` highlights cities you can drop the
  * selected card in. The city carrying the Microfilm gets class `film` and the canister on its plate.
  * A wiretapper sees a "Tapped" slip, in the mark's colour, on the plate of the city its mark locked
- * (`tapFresh`: it has just appeared, so it comes in once).
+ * (`tapFresh`: it has just appeared, so it comes in once). `won` (after a round's flip) is the
+ * city's winner, or null for nobody.
+ *
+ * Two seats: the rival's full row above the plate and yours below. Three and more: a thin lane per
+ * rival above the plate (table order after you), their totals as badges along the plate's top edge,
+ * and your full row below; a plate that isn't a drop target opens the city dossier (city-sheet).
  */
-export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false } = {}) {
+export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false, won = undefined } = {}) {
   const city = view.round.cities[ci];
   const def = CITY[city.id];
-  const them = rivalsOf(seatCount(view), me)[0]; // two-player: Phase 3 makes this a lane per rival
+  const n = seatCount(view);
+  const many = n > 2;
+  const seated = Number.isInteger(me) && me >= 0 && me < n;
+  const others = rivalsOf(n, me);
   const target = choosing && legalCities.includes(ci);
   const closedNow = !city.open && view.phase === 'plan';
   const leader = city.leader;
   const film = view.round.film === ci;
-  const cls = ['city', `c-${city.id}`];
+  const cls = ['city'];
+  if (won !== undefined) cls.push(won === null ? 'won-none' : won === me ? 'won-me' : 'won-them');
+  cls.push(`c-${city.id}`);
   if (film) cls.push('film');
   if (target) cls.push('target');
   if (closedNow) cls.push('closed');
   if (leader !== null && leader !== undefined) cls.push(leader === me ? 'lead-me' : 'lead-them');
+  // At three seats and more, "them" is a particular rival: the one who won the city, or else leads it.
+  const them = won !== undefined && won !== null && won !== me ? won : leader !== null && leader !== undefined && leader !== me ? leader : null;
+  const themAttr = many && them !== null ? ` data-them="${them}"` : '';
   const keys = ['A', 'S', 'D'];
   const rome = city.id === 'rome';
   // One slip per mark: a `tap` twist and a Wiretap on the same mark give two identical entries.
@@ -156,20 +212,183 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
     })
     .join('');
   const ghosts = ghost && ghost.city === ci ? ghost.cvs : [];
-  return `<section class="${cls.join(' ')}" data-city="${ci}" ${target ? `data-action="city" role="button" tabindex="0" aria-label="Drop in ${esc(def.name)}"` : ''}>
-    ${rowHTML(city.sides[them], city.capacity, ci, them, [], rome ? strongest(city.sides[them]) : null)}
-    <div class="plate">
+  const above = others.map((s) => (many ? laneHTML(view, ci, s) : rowHTML(city.sides[s], city.capacity, ci, s, [], rome ? strongest(city.sides[s]) : null))).join('');
+  const totals = others.map((s, i) => totalHTML(city, s, false, many ? i : null)).join('');
+  const sheet = many && !target ? ` data-action="city-sheet" role="button" tabindex="0" aria-label="${esc(`${def.name}: ${def.rule} Open the city dossier.`)}"` : '';
+  return `<section class="${cls.join(' ')}" data-city="${ci}"${themAttr} ${target ? `data-action="city" role="button" tabindex="0" aria-label="Drop in ${esc(def.name)}"` : ''}>
+    ${above}
+    <div class="plate"${sheet}${many ? ` style="--slots:${others.length}"` : ''}>
       <div class="sky" aria-hidden="true">${citySVG(city.id)}</div>
       ${film ? canisterHTML() : ''}
-      ${taps}
-      ${totalHTML(city, them, false)}
+      ${many && taps ? `<span class="taps">${taps}</span>` : taps}
+      ${totals}
       <h3>${esc(def.name)}${target ? `<kbd>${keys[ci]}</kbd>` : ''}</h3>
       <p class="rule">${esc(def.rule)}</p>
       ${closedNow ? '<p class="shut">Closed</p>' : ''}
-      ${totalHTML(city, me, true)}
+      ${seated ? totalHTML(city, me, true) : ''}
     </div>
-    ${rowHTML(city.sides[me], city.capacity, ci, me, ghosts, rome ? strongest(city.sides[me]) : null)}
+    ${seated ? rowHTML(city.sides[me], city.capacity, ci, me, ghosts, rome ? strongest(city.sides[me]) : null) : ''}
   </section>`;
+}
+
+/**
+ * The seat whose flip tricks go first this turn: the First flip holder (the initiative), or, if it has
+ * folded, the next seat still in round the table from it (the engine skips folded seats as it resolves).
+ */
+export function firstFlip(view) {
+  const R = view.round;
+  if (!R.folded?.[R.initiative]) return R.initiative;
+  return turnOrder(seatCount(view), R.initiative).find((s) => !R.folded[s]) ?? R.initiative;
+}
+
+/**
+ * The First flip coin beside `seat` while it holds the initiative this turn, or the empty slot that
+ * keeps names still. `initShown` is the seat the coin was last drawn beside: when it changes hands
+ * it flips across once (`moved`).
+ */
+export function coinHTML(view, seat, { label, initShown = null }) {
+  const holder = view.phase === 'plan' ? firstFlip(view) : null;
+  if (seat !== holder) return '<i class="ff-slot" aria-hidden="true"></i>';
+  const name = label(seat);
+  const whose = name === 'You' ? 'your' : `${name}’s`;
+  return `<span class="first-flip${holder !== initShown ? ' moved' : ''}" role="img" aria-label="First flip: ${esc(name)}" title="First flip: ${esc(whose)} flip tricks go first this turn">1st</span>`;
+}
+
+/**
+ * One side's marks: its escalation tokens (one chit per token it started the match with, spent
+ * ones outlined) and, with a reel, its film frames (filled once earned).
+ */
+export function marksHTML(v, seat) {
+  const left = v.tokens[seat];
+  const chits = Math.max(RULES.tokens, left);
+  const tokens = `<span class="tokens" role="img" aria-label="${left} escalation token${left === 1 ? '' : 's'} left" title="Escalation tokens: ${left} of ${chits} left">${Array.from({ length: chits }, (_, i) => `<i class="tk${i < left ? '' : ' spent'}"></i>`).join('')}</span>`;
+  const got = v.strips[seat];
+  const reel = v.reel > 0 ? `<span class="reel" role="img" aria-label="${got} of ${v.reel} film strips" title="Film strips: ${got} of ${v.reel}. ${reelSentence(v.reel)}.">${Array.from({ length: v.reel }, (_, i) => `<i class="fr${i < got ? ' got' : ''}"></i>`).join('')}</span>` : '';
+  return `<span class="marks">${tokens}${reel}</span>`;
+}
+
+/**
+ * The board as it stands once `seats` have pulled out of the round, before anything else in `next` is
+ * shown (a turn that resolved in the same update, the last fold or answer having completed it): their
+ * agents off every city, with their totals and any lead, their tags out, and no call pending. With
+ * `called` (a call settled: its answers were just shown) the call's record and stake come from `next`;
+ * the pot always does (a fold pays the stake into it). The fold's exit plays over `view`, and the
+ * turn's reveal over this. `view` is left as it was.
+ */
+export function pulledOut(view, seats, next, { called = false } = {}) {
+  const R = view.round;
+  const out = (s) => seats.includes(s);
+  return {
+    ...view,
+    round: {
+      ...R,
+      pending: null,
+      called: called ? next.round.called : R.called,
+      stake: called ? next.round.stake : R.stake,
+      pot: next.round.pot,
+      folded: R.folded.map((f, s) => f || out(s)),
+      cities: R.cities.map((c) => ({
+        ...c,
+        sides: c.sides.map((side, s) => (out(s) ? [] : side)),
+        known: c.known.map((k, s) => (out(s) ? 0 : k)),
+        hiddenCount: c.hiddenCount.map((h, s) => (out(s) ? 0 : h)),
+        leader: c.leader !== null && out(c.leader) ? null : c.leader,
+      })),
+    },
+  };
+}
+
+/** How a seat's line stands, online: here, covered by the stand-in, or gone. */
+const lineOf = (view, s) => (view.standIn?.[s] ? 'covered' : (view.here?.[s] ?? true) ? 'here' : 'away');
+const LINE_WORDS = { here: 'Connected', covered: 'Line quiet: the station is covering', away: 'Left the table' };
+
+/**
+ * The tag bar (three and four seats; it works at two): one compact tag per seat in table order from
+ * `me` (the seat at the bottom; a spectator gets seat order), each with the name, the score, the
+ * escalation tokens and film strips, the First flip coin (or its slot), the swatch of the seat whose
+ * drop is its "rival's drop" this round (not at two seats) and a line light for a seat that is away
+ * or covered. A rival's tag is a button that opens its tag sheet; your own (`own`, by default `me`;
+ * -1 for a spectator, whose tags are all buttons) is not. `colours` names each seat's colour,
+ * `label(seat)` its name, `initShown` as coinHTML.
+ */
+export function tagsHTML(view, me, { colours = [], label = (s) => nameOf(view, s), initShown = null, own = me } = {}) {
+  const n = seatCount(view);
+  const R = view.round;
+  const tags = fromSeat(n, me).map((s) => {
+    const name = label(s);
+    const folded = !!R.folded?.[s];
+    const line = lineOf(view, s);
+    const m = n > 2 ? markOf(n, s, view.roundNo) : null;
+    const pts = view.scores[s];
+    const left = view.tokens[s];
+    const said = [
+      `${name}${colours[s] ? `, ${colours[s]}` : ''}: ${pts} point${pts === 1 ? '' : 's'}`,
+      `${left} token${left === 1 ? '' : 's'} left`,
+      ...(view.reel > 0 ? [`${view.strips[s]} of ${view.reel} film strips`] : []),
+      ...(folded ? ['out of this round'] : []),
+      ...(line !== 'here' ? [LINE_WORDS[line].toLowerCase()] : []),
+    ].join(', ');
+    const cls = `tag own-${s} s-${s}${folded ? ' out' : ''}${line === 'away' ? ' away' : ''}${line === 'covered' ? ' covered' : ''}`;
+    const mark = m === null ? '' : `<i class="mark own-${m}" title="${esc(`Their rival’s drop: ${label(m)}`)}" aria-hidden="true"></i>`;
+    const inner = `<span class="who">${esc(name)}</span><i class="dot" aria-hidden="true"></i><b class="score" data-score="${s}">${pts}</b>${coinHTML(view, s, { label, initShown })}${mark}${marksHTML(view, s)}`;
+    return s === own
+      ? `<div class="${cls} me" data-seat="${s}" role="group" aria-label="${esc(said)}">${inner}</div>`
+      : `<button class="${cls}" data-action="tag" data-seat="${s}" aria-label="${esc(`${said}. Open their file`)}">${inner}</button>`;
+  });
+  return `<div class="tags" style="--n:${n}">${tags.join('')}</div>`;
+}
+
+/**
+ * The city dossier (three seats and more): the city's plate (skyline, name, rule, fine print, the
+ * canister if it carries the film), then every seat's agents there in full, in table order from
+ * `me`: a colour dot, the name, the total (what this view knows, "+?" for each face-down agent it
+ * can't see) and the chips. It closes like any sheet (an outside tap, Escape, Close).
+ */
+export function citySheetHTML(view, ci, me, { label = (s) => nameOf(view, s) } = {}) {
+  const city = view.round.cities[ci];
+  const def = CITY[city.id];
+  const film = view.round.film === ci;
+  const rome = city.id === 'rome';
+  const rows = fromSeat(seatCount(view), me).map((s) => {
+    const side = city.sides[s];
+    const hidden = city.hiddenCount[s];
+    const total = city.id === 'reykjavik' ? `${side.length}<small> agent${side.length === 1 ? '' : 's'}</small>` : `${city.known[s]}${'<small>+?</small>'.repeat(hidden)}`;
+    const x2 = rome ? strongest(side) : null;
+    const chips = side.length ? side.map((cv) => chipHTML(cv, { x2: cv.uid === x2 })).join('') : '<p class="none">No agents here.</p>';
+    const holds = city.leader === s ? '<i class="holds">Holds it</i>' : '';
+    return `<div class="seat-row own-${s}${view.round.folded?.[s] ? ' out' : ''}"><p class="seat-head"><i class="dot" aria-hidden="true"></i><span class="who">${esc(label(s))}</span>${holds}<b class="sum">${total}</b></p><div class="chips">${chips}</div></div>`;
+  });
+  return `<div class="sheet city-sheet" role="dialog" aria-label="${esc(`${def.name}: every agent here`)}" data-stop>
+    <div class="sheet-plate"><div class="sky" aria-hidden="true">${citySVG(city.id)}</div>${film ? canisterHTML() : ''}<h2>${esc(def.name)}</h2><p class="rule">${esc(def.rule)}</p>${def.note ? `<p class="note">${esc(def.note)}</p>` : ''}</div>
+    <div class="seat-rows">${rows.join('')}</div>
+    <div class="btns"><button class="slip quiet" data-action="close-modal">Close<kbd>Esc</kbd></button></div>
+  </div>`;
+}
+
+/**
+ * A rival's file (three seats and more, from its tag): the name in its colour, the score, the tokens
+ * and strips, the seat whose drop is its "rival's drop" this round, `intel` (the unseen list with its
+ * hand and deck counts, as the two-seat unseen strip has it) and, online (`online`), how its line stands.
+ */
+export function tagSheetHTML(view, seat, { label = (s) => nameOf(view, s), intel = '', colours = [], online = false } = {}) {
+  const n = seatCount(view);
+  const m = n > 2 ? markOf(n, seat, view.roundNo) : null;
+  const name = label(seat);
+  const left = view.tokens[seat];
+  const got = view.strips[seat];
+  const facts = [`${capital(counted(left, 'escalation token'))} left`];
+  if (view.reel > 0) facts.push(`${got} of ${view.reel} strips of film`);
+  if (view.round.folded?.[seat]) facts.push('out of this round');
+  const line = lineOf(view, seat);
+  return `<div class="sheet tag-sheet own-${seat}" role="dialog" aria-label="${esc(`${name}’s file`)}" data-stop>
+    <div class="tag-head"><h2>${esc(name)}</h2>${colours[seat] && colours[seat] !== name.toLowerCase() ? `<span class="colour">${esc(capital(colours[seat]))}</span>` : ''}</div>
+    <div class="tag-score"><b class="score">${view.scores[seat]}</b><span>of ${view.target} to win</span>${marksHTML(view, seat)}</div>
+    <p class="facts">${esc(facts.join(' · '))}.</p>
+    ${m === null ? '' : `<p class="mark-line"><i class="mark own-${m}" aria-hidden="true"></i><span>Their rival’s drop this round: <b>${esc(label(m))}</b></span></p>`}
+    ${intel ? `<div class="intel-block">${intel}</div>` : ''}
+    ${online ? `<p class="line-state ${line}"><i class="dot" aria-hidden="true"></i>${LINE_WORDS[line]}</p>` : ''}
+    <div class="btns"><button class="slip quiet" data-action="close-modal">Close<kbd>Esc</kbd></button></div>
+  </div>`;
 }
 
 // ── reveal animation ────────────────────────────────────────────────────────
@@ -178,15 +397,20 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
 export const REVEAL_GUARD_MS = 400;
 /** The first tap after the guard plays the reveal this many times faster. */
 export const FAST = 3;
+/**
+ * A reveal's own pace by table size: with more seats there are more drops to flip each turn, so it
+ * plays a little quicker. A tap speeds it up FAST times from there (FAST × the base).
+ */
+export const REVEAL_SPEED = Object.freeze({ 2: 1, 3: 1.25, 4: 1.5 });
 
 /**
  * What a tap (or Space, Enter, Escape) does to a reveal that started at `at` and is playing at
  * `speed`, at time `now` (all from performance.now()): 'ignore' inside the guard, then 'fast',
- * then 'skip' once it is already fast.
+ * then 'skip' once it is already fast (FAST × `base`, the table's REVEAL_SPEED).
  */
-export function revealTap({ at, speed }, now) {
+export function revealTap({ at, speed, base = 1 }, now) {
   if (now - at < REVEAL_GUARD_MS) return 'ignore';
-  return speed >= FAST ? 'skip' : 'fast';
+  return speed >= FAST * base ? 'skip' : 'fast';
 }
 
 const NAME = (kind) => (kind ? AGENT[kind].name : 'a face-down agent');
@@ -199,9 +423,11 @@ const NUMBER = ['no', 'one', 'two', 'three', 'four', 'five', 'six'];
  * clock, which follows speed-ups and skips), dur(ms) (a WAAPI duration at the pace of the moment
  * it starts), cancelled(), say(text), sound(what, arg) (an effect of js/audio.js, or 'chord': the
  * spy chord on the final flip), shake(n), stake(n) (the Blackmailer raised the stake to n: show it
- * on the slip), reduced (prefers-reduced-motion: things move to their new places without gliding),
- * moment(kind) (a trick of that kind has just played, its agent still lit) and finale(result) for
- * the end of a round.
+ * on the slip), escalated (the round had escalated before this turn: a Blackmailer's flip then does
+ * nothing), reduced (prefers-reduced-motion: things move to their new places without gliding),
+ * moment(kind) (a trick of that kind has just played, its agent still lit), finale(result) for
+ * the end of a round, and initiative and folded (the turn's first seat and the round's folds, from
+ * the view before the turn: Havana passes each side on round the table from there).
  */
 export async function playEvents(events, ctx) {
   const { root, wait, say, sound } = ctx;
@@ -213,6 +439,8 @@ export async function playEvents(events, ctx) {
   const kindOn = (el) => [...el.classList].find((c) => c.startsWith('k-'))?.slice(2) ?? null;
   const you = (s) => s === ctx.me && ctx.names[s] === 'You';
   const whose = (s) => (you(s) ? 'Your' : `${ctx.names[s]}’s`);
+  // A Blackmailer escalated earlier in this turn's events (a second one flipped after it does nothing).
+  let blackmailed = false;
   const faceFor = (uid, kind, owner, faceDown) => {
     const next = ctx.cardOf(uid);
     const power = next && next.kind === kind && next.power !== null ? next.power : AGENT[kind].power;
@@ -424,13 +652,21 @@ export async function playEvents(events, ctx) {
             if (moved && row) await glide(moved, row, 480);
           } else say('Courier has nobody to bring.');
         }
+        // What it does follows RULES.blackmailer: it raises the stake on the spot ('free', or 'token' with a
+        // token to spend), or opens a call the others answer next turn ('answer', the flash then says so).
         if (e.kind === 'blackmailer') {
           if (e.stake !== null && e.stake !== undefined) {
+            blackmailed = true;
             await wait(220);
-            say(`${whose(owner)} Blackmailer: the stake doubles to ${e.stake}.`);
+            say(RULES.blackmailer === 'token' ? `${whose(owner)} Blackmailer spends a token: the stake doubles to ${e.stake}.` : `${whose(owner)} Blackmailer: the stake doubles to ${e.stake}.`);
             sound('escalate');
             ctx.stake?.(e.stake);
-          } else say('Blackmailer: the stake has already gone up this round.');
+          } else if (e.call) {
+            blackmailed = true;
+            say(`${whose(owner)} Blackmailer escalates: the call is open.`);
+          } else if (ctx.escalated || blackmailed || RULES.blackmailer === 'free') say('Blackmailer: the stake has already gone up this round.');
+          else if (RULES.blackmailer === 'token') say(`${whose(owner)} Blackmailer has no token to spend.`);
+          else say('Blackmailer: on the final turn there is nobody left to answer.');
         }
         if (e.kind === 'wiretap') {
           if (e.turn === null || e.turn === undefined) say(`${whose(owner)} Wiretap is in, but there is no next turn to listen to.`);
@@ -457,12 +693,16 @@ export async function playEvents(events, ctx) {
       case 'havana': {
         say('Havana: everyone there switches sides!');
         sound('swap');
-        const top = rowEl(e.city, rivalsOf(ctx.names.length, ctx.me)[0]); // two-player: Phase 3 makes this a lane per rival
-        const bottom = rowEl(e.city, ctx.me);
-        if (top && bottom && !ctx.reduced) {
-          const [a, b] = [top.getBoundingClientRect(), bottom.getBoundingClientRect()];
-          lift(top, top.animate([{ transform: 'none' }, { transform: `translateY(${b.top - a.top}px)` }], { duration: ctx.dur(600), easing: 'ease-in-out' }));
-          lift(bottom, bottom.animate([{ transform: 'none' }, { transform: `translateY(${a.top - b.top}px)` }], { duration: ctx.dur(600), easing: 'ease-in-out' }));
+        // Each side still in passes to the next seat still in round the table from the turn's first
+        // seat, so each row glides to that seat's row (two seats: the rows swap).
+        const order = turnOrder(ctx.names.length, ctx.initiative ?? 0).filter((s) => !ctx.folded?.[s]);
+        const rows = order.map((s) => rowEl(e.city, s));
+        if (rows.length > 1 && rows.every(Boolean) && !ctx.reduced) {
+          const boxes = rows.map((r) => r.getBoundingClientRect());
+          rows.forEach((row, i) => {
+            const to = boxes[(i + 1) % rows.length];
+            lift(row, row.animate([{ transform: 'none' }, { transform: `translateY(${to.top - boxes[i].top}px)` }], { duration: ctx.dur(600), easing: 'ease-in-out' }));
+          });
         }
         await wait(650);
         break;

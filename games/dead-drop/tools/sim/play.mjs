@@ -21,7 +21,12 @@ function waitsOnMark(R, seat) {
   return false;
 }
 
-/** Plays one round between the bots (one per seat) from the state's current round. */
+/**
+ * Plays one round between the bots (one per seat) from the state's current round. `escalations` records every
+ * escalation: a token escalation as { seat, turn, value, answers }, a Blackmailer's as { seat, turn, value: null,
+ * answers, free: true }. Under RULES.blackmailer 'free' or 'token' it has no answers and `turn` is its flip's;
+ * under 'answer' its call is answered at the top of the next turn, and `turn` is that turn.
+ */
 function playRound(state, bots, rng) {
   const n = E.seatCount(state);
   const seats = Array.from({ length: n }, (_, i) => i);
@@ -32,6 +37,19 @@ function playRound(state, bots, rng) {
   const thinkFor = (seat) => think(E.viewFor(state, seat), { samples: bots[seat].samples, noise: bots[seat].noise, rng });
   while (state.phase === 'plan') {
     const R = state.round;
+    // A Blackmailer's call (RULES.blackmailer 'answer') opened as the last turn resolved: every seat it asks
+    // answers before anyone thinks for a drop, each from what it sees now (as attachBot's answer does), in table order.
+    if (R.pending) {
+      const P = R.pending;
+      const record = { seat: P.by, turn: R.turn, value: null, answers: [], free: true };
+      for (const other of P.from) {
+        const accept = stakeCall(E.viewFor(state, other), thinkFor(other).value, bots[other], rng) === 'accept';
+        record.answers.push({ seat: other, call: accept ? 'accept' : 'fold' });
+        E.respond(state, other, accept);
+      }
+      escalations.push(record);
+      if (state.phase !== 'plan') break;
+    }
     const thoughts = seats.map(() => null);
     // Seats think, call and lock in groups: with no wiretaps, one group (every seat), as before. A seat waiting
     // on its mark goes in a later group and thinks with a fresh view; seats that all wait on each other go
@@ -77,7 +95,10 @@ function playRound(state, bots, rng) {
       }
     }
     if (state.phase !== 'plan') break;
-    E.resolveTurn(state);
+    const turn = R.turn;
+    const events = E.resolveTurn(state);
+    // A Blackmailer that raised the stake on the spot ('free' or 'token'): a free escalation nobody answered.
+    for (const e of events ?? []) if (e.t === 'trick' && e.kind === 'blackmailer' && e.stake !== null) escalations.push({ seat: state.round.called.by, turn, value: null, answers: [], free: true });
   }
   const result = JSON.parse(JSON.stringify(state.round.result));
   const cw = result.cityWinners;

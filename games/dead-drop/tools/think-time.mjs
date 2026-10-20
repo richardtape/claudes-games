@@ -10,7 +10,7 @@
 import { performance } from 'node:perf_hooks';
 import * as E from '../js/engine.js';
 import { think } from '../js/bot.js';
-import { AGENTS, CITIES, RIVALS } from '../js/data.js';
+import { AGENTS, CITIES, RIVALS, samplesFor } from '../js/data.js';
 import { drawRoster } from '../js/roster.js';
 import { createRng } from '../../../shared/rng.js';
 
@@ -21,6 +21,7 @@ const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const key = argv[i].slice(2);
   if (key === 'json') o.json = true;
+  else if (key === 'cap') o.cap = true;
   else if (key in o) o[key] = argv[++i];
   else throw new Error(`unknown option: ${argv[i]}`);
 }
@@ -49,13 +50,14 @@ for (const seats of seatCounts) {
   const views = Array.from({ length: positions }, (_, k) => position(seats, k)).filter(Boolean);
   for (const rival of rivals) {
     const rng = createRng(`think-time:${seats}:${rival.id}`);
+    const used = o.cap ? samplesFor(rival, seats) : rival.samples;
     const ms = views.map((view) => {
       const t0 = performance.now();
-      think(view, { samples: rival.samples, noise: rival.noise, rng });
+      think(view, { samples: used, noise: rival.noise, rng });
       return performance.now() - t0;
     }).sort((a, b) => a - b);
     const r = (x) => Math.round(x * 100) / 100;
-    rows.push({ roster: o.roster, seats, rival: rival.id, samples: rival.samples, positions: ms.length,
+    rows.push({ roster: o.roster, seats, rival: rival.id, samples: used, positions: ms.length,
       mean: r(ms.reduce((t, x) => t + x, 0) / ms.length), p95: r(ms[Math.min(ms.length - 1, Math.floor(ms.length * 0.95))]), max: r(ms[ms.length - 1]) });
   }
 }

@@ -6,11 +6,30 @@ export const START_HAND = 4;
 export const MAX_HAND = 7;
 export const CAPACITY = 3;
 export const TARGET = 10;
+/**
+ * Points to win a match by seat count. Two stay at TARGET. Three and four were tuned in tools/SIMLOG.md B37–B45
+ * (Classic, expected-points bots): 8 and 7 gave 3.7 and 3.4 rounds a match (B37–B38). Four seats: 9 meets every
+ * band (4.5–6 rounds, fair seats, half-time leader <= 60%, reel wins <= 30%) at 8 samples and at the bots' own
+ * (B40, B42: 5.1 rounds). Three seats: 10, with roundPoints3 1 (B39, B41, B45). No setting with a reel of 2 held
+ * every band at the bots' own samples: the reel follows the match length, so reel wins <= 30% needs about 5.15
+ * rounds or fewer and the length band starts at 5 (B45). 10 runs 5.4 rounds with escalation a choice (51% of
+ * rounds), and the reel wins 33% of matches, 3.4 over its bar: an accepted miss (B41). The alternative, 12 with
+ * roundPoints3 2, kept the reel in band but ran 4.9 rounds and made escalation automatic (99% of rounds, B43);
+ * a pace of 1.5 escalated in 81% at 11 or let the reel win 38% at 12 (B45). A reel of 3 at three seats met every
+ * band at 10 (5.8 rounds, B45) but would need a reel by seat count and lets the film decide only 6% of matches:
+ * a one-knob follow-up if wanted.
+ */
+export const TARGETS = { 2: TARGET, 3: 10, 4: 9 };
+export const targetFor = (n) => TARGETS[n];
+/** The assumed length of a round in minutes by seat count, for the sim's minutes-per-match estimate. */
+export const ROUND_MINUTES = { 2: 2.0, 3: 2.75, 4: 3.5 };
 
 /** A table seats 2 to 4 players. Seats are lettered a–d in card uids; these are their default names. */
 export const MIN_SEATS = 2;
 export const MAX_SEATS = 4;
 export const SEAT_NAMES = ['Red', 'Teal', 'Cobalt', 'Plum'];
+/** Seat colours by place at the table: yours first (red), then each rival's in table order after you (style.css: --red, --teal, --cobalt, --plum). Pass and play and spectators use them in seat order. */
+export const SEAT_COLOURS = ['red', 'teal', 'cobalt', 'plum'];
 
 /**
  * Tunable rule switches (the simulator can patch these as `rules.<field>`).
@@ -26,8 +45,24 @@ export const SEAT_NAMES = ['Red', 'Teal', 'Cobalt', 'Plum'];
  * Tuned in tools/SIMLOG.md: tokens 3, the spec's default, meet every stake band once the rivals pace
  * them (B16–B22); reel 2, since under the comeback film a reel of 3 decided 3% of matches and a reel of
  * 2 decides about 21%, nearly all of them from behind on points (B20, Decision 12).
+ * blackmailer: what the Blackmailer's flip does when nobody has escalated this round. 'free' (2b-ii's rule):
+ * the stake doubles, no token is spent and nobody may fold in answer. 'token': the same, but it spends one of
+ * its player's tokens, and does nothing without one. 'answer': no token is spent, but it opens a call like an
+ * escalation's, which the others answer at the start of the next turn (fold or play on); on the final turn
+ * there is nobody left to answer, so it does nothing. Copy for each rule: BLACKMAILER_COPY. 'answer' is the
+ * rule (tools/SIMLOG.md B35–B36): 'free' ran Mixed's stakes hot (won at stake 2 or more 46.5%, matches holding a
+ * Blackmailer 4.65 rounds); 'answer' brings them to 43.5% and 4.95 rounds, and a token cost barely bit (B35).
+ * Its two misses are accepted: stake 2 or more 43.5 (bar 40), and folds in answer 21.2 (bar 25), since the
+ * bots fold to only 13.7% of its calls and to 23.6% of token escalations under any Blackmailer rule.
  */
-export const RULES = { lisbonTiebreak: 'out', tokens: 3, reel: 2, film: 'comeback', rollover: 1 };
+export const RULES = { lisbonTiebreak: 'out', tokens: 3, reel: 2, film: 'comeback', rollover: 1, blackmailer: 'answer' };
+
+/** The Blackmailer's card text and Help note under each RULES.blackmailer rule (its AGENTS entry reads them). */
+export const BLACKMAILER_COPY = {
+  free: { text: 'Flip: escalates for free if nobody has yet. No folding in answer.', note: 'No token is spent, and it uses up the round’s one escalation.' },
+  token: { text: 'Flip: spends one of your tokens to escalate, if nobody has yet.', note: 'Nothing happens if you have no tokens. Nobody may fold in answer.' },
+  answer: { text: 'Flip: a free escalation, no token; rivals may still fold.', note: 'Only if nobody has escalated this round. Rivals answer at the start of the next turn: play on or fold. On the final turn nobody is left to answer, so it does nothing.' },
+};
 
 /**
  * How the computer rivals bet (the simulator can set these as stakes.<field>). value ≈ P(win) − P(lose)
@@ -52,7 +87,13 @@ export const RULES = { lisbonTiebreak: 'out', tokens: 3, reel: 2, film: 'comebac
  * - bluffTurn 2 (B18, B21): bluffs from turn 2 lower the escalator's win rate. Not 1: value
  *   escalations start on turn 2, so a rival's escalation on turn 1 would always be a bluff.
  */
-export const STAKES = { escalate: 0.1, scarce: 1, roundPoints: 1, answer: -0.29, bluffTurn: 2, lateFold: -0.9, lateFoldChance: 0.45, filmWeight: 0.4, filmDecisive: 1.5 };
+export const STAKES = { escalate: 0.1, scarce: 1, roundPoints: 1, answer: -0.29, bluffTurn: 2, lateFold: -0.9, lateFoldChance: 0.45, filmWeight: 0.4, filmDecisive: 1.5,
+  // The pace at three and four seats (two seats read roundPoints). Four: 1, as at two seats (SIMLOG B40, B42); 2
+  // makes escalation automatic (99.8% of rounds) and matches too short at target 10. Three: 1 with TARGETS[3] 10
+  // (B41, B45): rivals escalate in 51% of rounds; at 2 (target 12) in 99% (B43), at 1.5 in 63–81% (B45).
+  roundPoints3: 1, roundPoints4: 1 };
+/** Points a round is assumed to move the leader, by seat count: the bot's stake pace reads it. */
+export const roundPointsFor = (n) => (n === 3 ? STAKES.roundPoints3 : n === 4 ? STAKES.roundPoints4 : STAKES.roundPoints);
 
 /**
  * Every agent in the game: the Classic 12 first (in DECK's order), then the eight Phase 2b-ii agents.
@@ -80,7 +121,8 @@ export const AGENTS = [
   { id: 'accomplice', name: 'Accomplice', power: 1, partner: true, text: 'Drop a partner with it: a second card from your hand, face down.', note: 'You can also drop it alone. The partner has no tricks, except a Tripwire or a Decoy.' },
   { id: 'turncoat', name: 'Turncoat', power: 0, flip: true, text: 'Flip: swaps sides with the weakest face-up rival agent here.', note: 'Ties go to the latest arrival. Nothing happens in Moscow. An agent turned before its own flip loses it.' },
   { id: 'courier', name: 'Courier', power: 2, flip: true, text: 'Flip: your strongest face-up agent in another city moves here.', note: 'The move counts as an arrival (Tokyo, Prague and Tripwires). Never out of Moscow.' },
-  { id: 'blackmailer', name: 'Blackmailer', power: 2, flip: true, text: 'Flip: escalates for free if nobody has yet. No folding in answer.', note: 'No token is spent, and it uses up the round’s one escalation.' },
+  // Its text and note follow RULES.blackmailer.
+  { id: 'blackmailer', name: 'Blackmailer', power: 2, flip: true, get text() { return BLACKMAILER_COPY[RULES.blackmailer].text; }, get note() { return BLACKMAILER_COPY[RULES.blackmailer].note; } },
   { id: 'decoy', name: 'Decoy', power: 0, faceDown: true, text: 'Drops face down. Takes the hit for your next agent here to be taken out or turned.', note: 'Only while face down, and only once. It covers what a Bodyguard does: Assassins, Tripwires, Turncoats and Tangier (where it stays face down until Tangier strikes). It covers your Bodyguard too, and an agent a Bodyguard already guards never uses it up. Not against Havana or Glienicke Bridge.' },
 ];
 export const AGENT = Object.fromEntries(AGENTS.map((a) => [a.id, a]));
@@ -133,6 +175,10 @@ export const CLASSIC_CITIES = ['lisbon', 'vienna', 'istanbul', 'berlin', 'havana
  * `nerve` shifts its fold/escalate thresholds (positive = braver). `pack` is the new content the
  * rival brings to the ladder (and adds to your network when beaten); it is not a bot setting.
  */
+/** Most Monte Carlo samples a bot thinks with at each table size (a phone gets about 150 ms a move). */
+export const SAMPLE_CAP = { 2: Infinity, 3: 24, 4: 12 };
+export const samplesFor = (rival, n) => Math.min(rival.samples, SAMPLE_CAP[n]);
+
 export const RIVALS = [
   { id: 'wren', name: 'Agent Wren', blurb: 'Fresh from training. Plays it by the book.', samples: 6, noise: 0.35, bluff: 0, nerve: -0.1, pack: { agents: [], cities: [] } },
   { id: 'magpie', name: 'The Magpie', blurb: 'Grabs whatever glitters. Escalates on a whim.', samples: 12, noise: 0.25, bluff: 0.25, nerve: 0.15, pack: { agents: ['courier', 'blackmailer'], cities: ['tokyo', 'macau'] } },
@@ -160,3 +206,12 @@ export const CODENAMES = [
   'Agent Stoat', 'Agent Badger', 'Agent Ibis', 'Agent Hare', 'Agent Pike', 'Agent Swift', 'Agent Gecko',
   'Agent Marten', 'Agent Owl', 'Agent Crane', 'Agent Jackal', 'Agent Puma', 'Agent Kite',
 ];
+
+/** Quick table talk: a fixed list, so no free text goes over the wire. */
+export const EMOTES = ['Bluffing?', 'Touché', 'Well played', 'Not a chance', 'Bon voyage', 'Hmm.'];
+
+/** Turn timer choices in ms: Off, 30 s, Blitz. */
+export const TIMERS = [0, 30000, 10000];
+
+/** The ladder rival who plays a seat whose human has gone quiet (a RIVALS id). */
+export const STAND_IN = 'heron';

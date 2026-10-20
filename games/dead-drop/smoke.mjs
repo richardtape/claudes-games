@@ -30,8 +30,12 @@ import { deckList } from './js/engine.js';
 // on the round card; the unseen strip (U, its counts, an outside tap); the twist chip; and the
 // epilogue after a ladder win over Control, before the dossier. A match may open on intro cards
 // (a first meeting's dossier, a roster that isn't Classic) before its round card: clearCard skips them.
+// Phase 3: the table at four seats (tableSeats), the flows at three (tableFlows, pass and play for three
+// from the title's sheet), and lobbySteps: the rivals screen's Table tab (and Continue for it), then the
+// host's lobby on a ?net=local page (Seats, Timer, Fill, Start) with a spectator in a second tab.
 // duo(): two pages in one browser joined over the BroadcastChannel transport (?net=local) —
-// host lobby (it switches the roster to Mixed, and the guest's first view has that roster), guest joins, the host locks in while the guest's round card is still up, a turn
+// host lobby (it switches the roster to Mixed, and the guest's first view has that roster), guest joins
+// (the host sees them in its seat list, the guest waits read-only, then the host presses Start), the host locks in while the guest's round card is still up, a turn
 // each, an escalation answered across the wire (Space over the host's flash doesn't answer it;
 // both screens agree on the tokens, the escalator's side one chit down),
 // match over and a rematch, a guest reload during the rematch's first turn (it must not count the
@@ -39,6 +43,13 @@ import { deckList } from './js/engine.js';
 // the turn-1 board), and the guest leaving. It plays a Mixed roster, so its rounds vary between runs.
 // scripts/verify-live.mjs runs duo() again on the live site with { live: true }, joining
 // through the real public relays.
+// table(): three players and a watcher at one online table, four pages in one browser on ?net=local,
+// each a player of its own (token= and name= in its URL) — the lobby, Start and a turn of face-down
+// Sleepers no guest or spectator view names, a spectator, an escalation with two answers (the answers
+// card on every page, then the abort's exit), emotes, a line going dead (the stand-in sits and locks; the
+// player comes back to its lock), a guest's reload and the host's (route() reopens the table and lobby),
+// a player leaving (the stand-in at once) and a rematch at three seats. verify-live runs it with three
+// browsers through the relays (no watcher, no stand-in clock, no host reload).
 // Waits on game state, never on fixed sleeps.
 let T = 15000;
 
@@ -97,21 +108,25 @@ async function checkToken(page, when) {
 
 /**
  * Where the play screen's parts end up (px from the top of the viewport): the scorebar's top (and
- * its height), the board's bottom, the lowest card in the hand, Lock in's bottom, and the window's
- * height. On a phone everything must fit between 0 and innerHeight, with no scrolling.
+ * its height; at three seats and more, the tag bar's), the board's bottom, the lowest card in the
+ * hand, Lock in's bottom, and the window's height. With tags on screen, also the tags' right edge
+ * and bottom, and the window's width. On a phone everything must fit between 0 and innerHeight (and
+ * innerWidth), with no scrolling.
  */
 const phoneFits = (page) =>
   page.evaluate(() => {
     const box = (sel) => document.querySelector(sel)?.getBoundingClientRect() ?? null;
     const px = (n) => (Number.isFinite(n) ? Math.round(n) : null);
     const cards = [...document.querySelectorAll('#hand .card')].map((c) => c.getBoundingClientRect().bottom);
+    const tags = box('.tags');
     return {
-      scorebarTop: px(box('.scorebar')?.top),
-      scorebarHeight: px(box('.scorebar')?.height),
+      scorebarTop: px(box('.scorebar, .tagbar')?.top),
+      scorebarHeight: px(box('.scorebar, .tagbar')?.height),
       boardBottom: px(box('#board')?.bottom),
       handBottom: px(cards.length ? Math.max(...cards) : NaN),
       lockBottom: px(box('[data-action=lock]')?.bottom),
       innerHeight,
+      ...(tags ? { tagsRight: px(tags.right), tagsBottom: px(tags.bottom), innerWidth } : {}),
     };
   });
 
@@ -438,7 +453,7 @@ async function foldExit(page, { log, fail }) {
   }
 }
 
-export default async function smoke(page, { log, shot, audit, phone = false }) {
+export default async function smoke(page, { log, shot, audit, phone = false, url }) {
   const fail = (m) => {
     throw new Error(m);
   };
@@ -527,6 +542,9 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   await until(page, () => window.__game.ui.screen === 'play' && document.querySelector('.hand .card'), null, 'the table');
   await snap(page, shot, 'play');
   await audit('play');
+  // Two seats keep their screen: the scorebar and the rival's full row, no tags and no lanes.
+  const two = await page.evaluate(() => ({ scorebar: !!document.querySelector('.scorebar'), tags: !!document.querySelector('.tags'), lanes: document.querySelectorAll('.lane').length, rows: document.querySelectorAll('#board .row[data-row]').length }));
+  if (!two.scorebar || two.tags || two.lanes || two.rows !== 6) fail(`a two-seat table should show the scorebar and two full rows per city, no tags or lanes: ${JSON.stringify(two)}`);
   if (phone) {
     const fit = await phoneFits(page);
     log(`phone fit: ${JSON.stringify(fit)}`);
@@ -1138,6 +1156,687 @@ export default async function smoke(page, { log, shot, audit, phone = false }) {
   await newContent(page, { log, shot, audit, phone });
   await menus(page, { log, shot, audit, phone });
   await matchFrame(page, { log, shot, audit, phone });
+  await tableSeats(page, { log, shot, audit, phone });
+  await tableFlows(page, { log, shot, audit, phone });
+  await lobbySteps(page, { log, shot, audit, phone, url });
+}
+
+/** Take down any toast still up (the ladder's six-second recruits toast, say), so it isn't in the next shots. */
+const clearToasts = (page) => page.evaluate(() => document.querySelectorAll('.cg-toast').forEach((t) => t.remove()));
+
+/**
+ * The table at four seats (Phase 3), from __game.startTable with the rivals held so nothing races
+ * the checks: four tags in table order from you (each with its name, score, tokens and reel, and one
+ * First flip coin among them), three lanes above each plate and your full row below, the seat colours
+ * on <body>, then the city dossier (a plate's tap; Escape closes it) and a rival's file (its tag; an
+ * outside tap closes it). On a phone the tags, the cities, the hand and Lock in fit 390px without
+ * scrolling, and an open sheet doesn't make the page grow.
+ */
+export async function tableSeats(page, { log, shot, audit, phone }) {
+  const fail = (m) => {
+    throw new Error(m);
+  };
+  await page.evaluate(() => {
+    window.__game.holdRival(true);
+    window.__game.startTable({ seats: 4 });
+  });
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, 'the four-seat table');
+  await clearToasts(page);
+  // Two turns at random, straight through the table, so the lanes have agents in them.
+  await page.evaluate(() => {
+    let s = 11;
+    window.__game.quickTurns(2, () => ((s = (s * 16807) % 2147483647) / 2147483647));
+  });
+  await until(page, () => window.__game.view?.round.turn === 3 && document.querySelector('.tags'), null, 'turn 3 at the four-seat table');
+  const t = await page.evaluate(() => {
+    const v = window.__game.view;
+    const tags = [...document.querySelectorAll('.tags .tag')];
+    const cities = [...document.querySelectorAll('#board .city')].map((c) => {
+      const plate = c.querySelector('.plate');
+      const lanes = [...c.querySelectorAll('.row.lane')];
+      const mine = c.querySelector(`.row[data-row="${c.dataset.city}-0"]:not(.lane)`);
+      const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return {
+        lanes: lanes.map((l) => l.dataset.row.split('-')[1]).join(''),
+        minis: lanes.map((l) => l.querySelectorAll('.chip').length).join(''),
+        sides: [1, 2, 3].map((s) => v.round.cities[Number(c.dataset.city)].sides[s].length).join(''),
+        order: lanes.every((l) => before(l, plate)) && !!mine && before(plate, mine),
+        badges: plate.querySelectorAll('.total.badge').length,
+      };
+    });
+    return {
+      order: tags.map((x) => x.dataset.seat).join(''),
+      parts: tags.every((x) => ['.who', '.score', '.tokens', '.reel'].every((sel) => x.querySelector(sel))),
+      mine: tags[0]?.tagName,
+      buttons: tags.filter((x) => x.tagName === 'BUTTON').length,
+      marks: document.querySelectorAll('.tags .mark').length,
+      cities,
+      scorebar: !!document.querySelector('.scorebar'),
+    };
+  });
+  if (t.order !== '0123' || !t.parts || t.mine !== 'DIV' || t.buttons !== 3 || t.marks !== 4) fail(`four tags in table order from you (yours not a button), each with its name, score, tokens, reel and mark: ${JSON.stringify(t)}`);
+  if (t.scorebar || t.cities.some((c) => c.lanes !== '123' || !c.order || c.badges !== 3 || c.minis !== c.sides)) fail(`each city should have three lanes (seats 1, 2, 3, each chip a mini) above its plate, three badges, and your row below: ${JSON.stringify(t.cities)}`);
+  log(`four seats: tags ${t.order}; lanes ${t.cities.map((c) => c.minis).join(' / ')} agents; ${await checkToken(page, 'four seats')}`);
+  await snap(page, shot, 'table4');
+  await audit('table4');
+  if (phone) {
+    const fit = await phoneFits(page);
+    log(`phone fit at four seats: ${JSON.stringify(fit)}`);
+    const missing = Object.keys(fit).filter((k) => fit[k] === null);
+    if (missing.length || !('tagsRight' in fit)) fail(`the four-seat phone screen is missing ${missing.join(', ') || 'the tags'}: ${JSON.stringify(fit)}`);
+    const over = ['boardBottom', 'handBottom', 'lockBottom', 'tagsBottom'].filter((k) => !(fit[k] <= fit.innerHeight));
+    if (!(fit.scorebarTop >= 0) || !(fit.tagsRight <= fit.innerWidth) || over.length) fail(`the four-seat phone screen should show the tags, the cities, the hand and Lock in without scrolling: ${JSON.stringify(fit)}`);
+    // Every name fits its tag (no ellipsis cutting a short name).
+    const cut = await page.evaluate(() => [...document.querySelectorAll('.tags .who')].filter((w) => w.scrollWidth > w.clientWidth + 1).map((w) => w.textContent));
+    if (cut.length) fail(`names cut short in the tags: ${cut.join(', ')}`);
+  }
+
+  // The seat colours: you red, then teal, cobalt and plum round the table, on <body>.
+  const colours = await page.evaluate(() => ({ body: document.body.className, own: getComputedStyle(document.querySelector('.tag.s-2')).getPropertyValue('--own').trim().toLowerCase() }));
+  if (!['c0-red', 'c1-teal', 'c2-cobalt', 'c3-plum'].every((c) => colours.body.split(' ').includes(c)) || colours.own !== '#2c4f9e') fail(`the seats' colours should be on <body>, seat 2 cobalt: ${JSON.stringify(colours)}`);
+
+  // The city dossier: a tap on a plate (no card picked, so it isn't a drop target) lists every seat's agents there.
+  const ci = await page.evaluate(() => window.__game.view.round.cities.reduce((best, c, i, all) => (c.sides.flat().length > all[best].sides.flat().length ? i : best), 0));
+  const height = await page.evaluate(() => document.scrollingElement.scrollHeight);
+  await page.click(`#board .city[data-city="${ci}"] .plate[data-action=city-sheet]`);
+  await until(page, () => document.querySelector('.city-sheet') && window.__game.ui.modal === 'city', null, 'the city dossier');
+  const sheet = await page.evaluate((c) => {
+    const v = window.__game.view;
+    const rows = [...document.querySelectorAll('.city-sheet .seat-row')];
+    return { rows: rows.length, chips: rows.map((r) => r.querySelectorAll('.chip').length).join(''), want: [0, 1, 2, 3].map((s) => v.round.cities[c].sides[s].length).join(''), name: document.querySelector('.city-sheet h2')?.textContent };
+  }, ci);
+  if (sheet.rows !== 4 || sheet.chips !== sheet.want) fail(`the city dossier should list every seat's agents there: ${JSON.stringify(sheet)}`);
+  await snap(page, shot, 'city-sheet');
+  await audit('city-sheet');
+  if (phone) {
+    const fit = await phoneFits(page);
+    const grown = await page.evaluate((h) => ({ now: document.scrollingElement.scrollHeight, h, wide: document.scrollingElement.scrollWidth > innerWidth }), height);
+    log(`phone fit with the city dossier open: ${JSON.stringify({ ...fit, scrollHeight: grown.now })}`);
+    if (grown.now > grown.h || grown.wide) fail(`the city dossier should overlay the table without making the page grow: ${JSON.stringify(grown)}`);
+  }
+  await page.keyboard.press('Escape');
+  await until(page, () => !document.querySelector('.city-sheet') && window.__game.ui.modal === null, null, 'Escape to close the city dossier');
+  log(`city dossier (${sheet.name}): agents by seat ${sheet.chips}; Escape closed it`);
+
+  // A rival's file, from its tag: name, score, its mark, and the agents not seen this round.
+  await page.click('.tags button.tag[data-seat="2"]');
+  await until(page, () => document.querySelector('.tag-sheet') && window.__game.ui.modal === 'tag', null, 'the rival’s file');
+  const file = await page.evaluate(() => {
+    const v = window.__game.view;
+    const el = document.querySelector('.tag-sheet');
+    return {
+      name: el.querySelector('h2')?.textContent,
+      want: v.names[2],
+      score: el.querySelector('.tag-score .score')?.textContent,
+      wantScore: String(v.scores[2]),
+      mark: !!el.querySelector('.mark-line .mark'),
+      unseen: !!el.querySelector('.unseen-head') && !!el.querySelector('.unseen-list, .unseen-none'),
+    };
+  });
+  if (file.name !== file.want || file.score !== file.wantScore || !file.mark || !file.unseen) fail(`a rival's file should show its name, score, mark and unseen agents: ${JSON.stringify(file)}`);
+  await snap(page, shot, 'tag-sheet');
+  await audit('tag-sheet');
+  // An outside tap (the veil, clear of the sheet) closes it.
+  await page.mouse.click(4, 4);
+  await until(page, () => !document.querySelector('.tag-sheet') && window.__game.ui.modal === null, null, 'an outside tap to close the rival’s file');
+  // Your own tag opens nothing.
+  await page.click('.tags .tag[data-seat="0"]');
+  if (await page.evaluate(() => window.__game.ui.modal !== null || !!document.querySelector('.sheet'))) fail('tapping your own tag should open nothing');
+  log(`a rival's file (${file.name}): score, mark and unseen list; an outside tap closed it`);
+
+  await page.evaluate(() => {
+    window.__game.leave();
+    window.__game.holdRival(false);
+  });
+  await until(page, () => document.querySelector('.title-screen'), null, 'the title after the four-seat table');
+}
+
+/**
+ * A three-seat Table with the rivals held (they move only when a step asks), its round card skipped
+ * and (with `turns`) that many turns played straight through the table from a fixed draw, then no
+ * toast left up. `seed` and `cities` deal a chosen match.
+ */
+async function table3(page, { turns = 0, seed = null, cities = null, what = 'a three-seat table' } = {}) {
+  await page.evaluate(
+    (o) => {
+      window.__game.holdRival(true);
+      window.__game.startTable({ seats: 3, ...(o.seed ? { seed: o.seed } : {}), ...(o.cities ? { cities: o.cities } : {}) });
+    },
+    { seed, cities },
+  );
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, what);
+  if (turns) {
+    await page.evaluate((n) => {
+      let s = 7;
+      window.__game.quickTurns(n, () => ((s = (s * 16807) % 2147483647) / 2147483647));
+    }, turns);
+    await until(page, (t) => window.__game.view?.round.turn === t + 1 && !window.__game.ui.updating, turns, `turn ${turns + 1} of ${what}`);
+  }
+  await clearToasts(page);
+}
+
+/** The board on screen and the table's state for the flows below: a seat's chips, its tag, the stake and pot, the ticker. */
+const tableNow = (page, seat) =>
+  page.evaluate((s) => {
+    const g = window.__game;
+    const tag = document.querySelector(`.tags .tag.s-${s}`);
+    return {
+      phase: g.state.phase,
+      turn: g.state.round.turn,
+      folded: g.state.round.folded.slice(),
+      stake: g.view.round.stake,
+      pot: g.view.round.pot,
+      chips: document.querySelectorAll(`#board .row[data-row$="-${s}"] .chip`).length,
+      lanesOut: document.querySelectorAll(`#board .row.lane.out[data-row$="-${s}"]`).length,
+      tagOut: !!tag?.classList.contains('out') && getComputedStyle(tag, '::after').content === '"Out"',
+      ticker: document.querySelector('#ticker')?.textContent.trim() ?? null,
+      stakeShown: document.querySelector('.mid .stake b')?.textContent ?? null,
+      lock: !!document.querySelector('[data-action=lock]'),
+      names: g.table.names.slice(),
+    };
+  }, seat);
+
+/**
+ * Phase 3's flows at three seats, each on a Table with the rivals held (__game.startTable) and moves
+ * made through the table or the real UI: a call's answers revealed together on the answers card, then
+ * the aborting seat pulling out; a rival's fold that leaves the round going; my own fold with two
+ * others in (the fold sheet's copy, the folded view, a reveal still playing); the escalation prompt
+ * only for a seat it asks, and the status after answering; pass and play for three (a cover per seat,
+ * each naming the others, and an escalation's covers for its answers); Havana's rotation; and the
+ * reveal's pace (1.25 at three seats, 3.75 sped up, then skipped).
+ */
+export async function tableFlows(page, { log, shot, audit, phone }) {
+  const fail = (m) => {
+    throw new Error(m);
+  };
+
+  // 1. Answers. I escalate; seat 1 plays on and seat 2 aborts, through the table. The answers card
+  // shows both, in table order after me; then seat 2's agents leave the board and its tag reads Out.
+  // The stake doubles (someone played on) and the pot holds seat 2's stake.
+  await table3(page, { turns: 2, seed: 'flows-answers', what: 'a three-seat table to escalate on' });
+  const had = (await tableNow(page, 2)).chips;
+  if (!had) fail('seat 2 should have agents on the board to pull out');
+  await page.click('[data-action=escalate]');
+  await until(page, () => window.__game.state.round.pending && (window.__game.ui.card || !window.__game.ui.updating), null, 'my escalation (its flash, if it shows)');
+  if (await page.evaluate(() => !!window.__game.ui.card)) await page.keyboard.press('Enter');
+  await until(page, () => !window.__game.ui.card && !window.__game.ui.updating, null, 'my escalation’s flash to go');
+  const asking = await page.evaluate(() => ({ status: document.querySelector('.controls .status')?.textContent, prompt: !!document.querySelector('.modal.hot'), names: window.__game.table.names }));
+  if (asking.prompt || asking.status !== `Waiting for ${asking.names[1]} and ${asking.names[2]} to answer your escalation…`) fail(`the escalator gets no prompt, and the status names who is to answer: ${JSON.stringify(asking)}`);
+  const card = await page.evaluate(async () => {
+    const g = window.__game;
+    g.table.act(1, { a: 'respond', accept: true });
+    g.table.act(2, { a: 'respond', accept: false });
+    for (let i = 0; i < 50 && !g.ui.card; i++) await Promise.resolve();
+    g.holdCard();
+    const el = g.ui.card?.el;
+    return {
+      cls: el?.className ?? null,
+      lines: [...(el?.querySelectorAll('.ans') ?? [])].map((li) => li.textContent.replace(/\s+/g, ' ').trim()),
+      label: el?.getAttribute('aria-label') ?? null,
+      held: g.ui.holdBoard,
+      under: document.querySelectorAll('#board .row[data-row$="-2"] .chip').length,
+    };
+  });
+  const [, wren, magpie] = asking.names;
+  const want = [`${wren} plays on.`, `${magpie} aborts.`];
+  if (!/\banswers-card\b/.test(card.cls) || !/\bown-0\b/.test(card.cls) || card.lines.join('|') !== want.join('|') || card.label !== want.join(' ')) fail(`the answers card should show every answer in table order, in my colour: ${JSON.stringify(card)}`);
+  if (!card.held || card.under !== had) fail(`the board should stand as it was under the answers card: ${JSON.stringify({ ...card, had })}`);
+  await snap(page, shot, 'answers');
+  await audit('answers');
+  await page.keyboard.press('Enter');
+  await until(page, () => !window.__game.ui.card && !window.__game.ui.holdBoard && !window.__game.ui.updating, null, 'the answers card and the exit after it');
+  const answered = await tableNow(page, 2);
+  if (answered.phase !== 'plan' || !answered.folded[2] || answered.chips || answered.lanesOut !== 3 || !answered.tagOut) fail(`after the answers, the aborting seat should be out: no agents, its lanes back, its tag Out: ${JSON.stringify(answered)}`);
+  if (answered.stake !== 2 || answered.pot !== 1 || answered.stakeShown !== '2' || answered.ticker !== `${magpie} pulls out of the round.`) fail(`the stake doubles, the pot takes the folded stake, and the ticker says who pulled out: ${JSON.stringify(answered)}`);
+  log(`answers: "${want.join(' ')}"; ${magpie}'s ${had} agent${had === 1 ? '' : 's'} pulled out; stake ${answered.stake}, pot ${answered.pot}`);
+
+  // 2. A rival folds mid-round (not answering anything): its flash, its agents pulling out, and the
+  // round goes on for the two of us.
+  await table3(page, { turns: 2, seed: 'flows-fold', what: 'a three-seat table for a rival to fold on' });
+  const folding = await page.evaluate(async () => {
+    const g = window.__game;
+    const before = document.querySelectorAll('#board .row[data-row$="-2"] .chip').length;
+    const ok = g.rivalFolds(2);
+    for (let i = 0; i < 50 && !g.ui.card; i++) await Promise.resolve();
+    g.holdCard();
+    return { ok, before, small: document.querySelector('.cine.flash.fold .small')?.textContent ?? null, name: g.table.names[2] };
+  });
+  if (!folding.ok || !folding.before || folding.small !== `${folding.name} aborts to save the network`) fail(`a rival's fold mid-round should flash: ${JSON.stringify(folding)}`);
+  await page.keyboard.press('Enter');
+  await until(page, () => !window.__game.ui.card && !window.__game.ui.holdBoard && !window.__game.ui.updating, null, 'the fold’s exit');
+  const goesOn = await tableNow(page, 2);
+  if (goesOn.phase !== 'plan' || !goesOn.folded[2] || goesOn.chips || !goesOn.tagOut || !goesOn.lock || goesOn.ticker !== `${folding.name} pulls out of the round.`) fail(`after a rival's fold the round goes on without its agents: ${JSON.stringify(goesOn)}`);
+  await snap(page, shot, 'fold-midround');
+  await audit('fold-midround');
+  log(`a rival's fold mid-round: the flash, ${folding.before} agent${folding.before === 1 ? '' : 's'} out, and play goes on (pot ${goesOn.pot})`);
+
+  // 3. My fold with two others in: the fold sheet says the others play on; once folded, my hand sits
+  // out, the controls only say so, F and E do nothing, and the next reveal still plays.
+  await table3(page, { turns: 2, seed: 'flows-mine', what: 'a three-seat table to fold on' });
+  await page.click('[data-action=fold]');
+  const foldSheet = await page.evaluate(() => document.querySelector('.modal .sheet')?.textContent.replace(/\s+/g, ' ') ?? '');
+  if (!/You leave the round\. Your agents pull out, the stake \(1\) goes into the pot, and the others play on for it\./.test(foldSheet)) fail(`the fold sheet with two others in: ${foldSheet}`);
+  await page.click('.modal [data-action=confirm-fold]');
+  await until(page, () => window.__game.state.round.folded[0] && !window.__game.ui.card && !window.__game.ui.holdBoard && !window.__game.ui.updating, null, 'my fold’s flash and exit');
+  const out = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('#hand .card')];
+    return { hand: !!document.querySelector('#hand.hand.out'), cards: cards.length, disabled: cards.every((c) => c.disabled), status: document.querySelector('.controls .status')?.textContent, buttons: document.querySelectorAll('.controls button').length };
+  });
+  const me0 = await tableNow(page, 0);
+  if (!out.hand || !out.cards || !out.disabled || out.buttons || out.status !== 'You’re out of this round: the others play on for the pot (1).' || me0.chips || !me0.tagOut) fail(`my folded view: a dimmed, disabled hand, only the status, my tag Out: ${JSON.stringify({ out, me0 })}`);
+  await page.keyboard.press('f');
+  await page.keyboard.press('e');
+  const keys = await page.evaluate(() => ({ modal: window.__game.ui.modal, pending: !!window.__game.state.round.pending }));
+  if (keys.modal || keys.pending) fail(`F and E should do nothing once I'm out: ${JSON.stringify(keys)}`);
+  await snap(page, shot, 'folded-view');
+  await audit('folded-view');
+  // Two rivals lock in: the second move lands while the first's update is finishing, and the reveal
+  // follows on the next pass (microtasks, no timers), as it would in play.
+  const reveal = await page.evaluate(async () => {
+    const g = window.__game;
+    const turn = g.state.round.turn;
+    const locked = g.rivalLocks();
+    for (let i = 0; i < 50 && !g.ui.animating; i++) await Promise.resolve();
+    return { turn, locked, animating: g.ui.animating };
+  });
+  if (!reveal.locked || !reveal.animating) fail(`with me out, the rivals' drops should still reveal: ${JSON.stringify(reveal)}`);
+  await until(page, (t) => window.__game.state.round.turn === t + 1 && !window.__game.ui.animating && !window.__game.ui.updating, reveal.turn, 'the reveal with me out');
+  if (!(await page.evaluate(() => !!document.querySelector('#hand.hand.out') && !document.querySelector('[data-action=lock]')))) fail('I should stay out for the rest of the round');
+  log('my fold with two others in: the sheet, the folded view, F and E ignored, the reveal played on');
+
+  // 4. The escalation prompt only for a seat it asks: seat 1 escalates and asks seat 2 and me. Once I
+  // answer, no prompt (my answer is in) while seat 2 hasn't, and the status names seat 2.
+  await table3(page, { turns: 1, seed: 'flows-prompt', what: 'a three-seat table for a rival to escalate on' });
+  const called = await page.evaluate(async () => {
+    const g = window.__game;
+    const ok = g.rivalEscalates(1);
+    for (let i = 0; i < 50 && !g.ui.card; i++) await Promise.resolve();
+    // Held, so the Enter below certainly finds the flash up (it would end by itself after 1.3 s).
+    g.holdCard();
+    return { ok, flash: !!g.ui.card };
+  });
+  if (!called.ok) fail('seat 1 could not escalate');
+  if (called.flash) await page.keyboard.press('Enter');
+  await until(page, () => document.querySelector('.modal.hot') && !window.__game.ui.card && !window.__game.ui.updating, null, 'the escalation prompt');
+  const prompt = await page.evaluate(() => ({ head: document.querySelector('.modal.hot h2')?.textContent.replace(/\s+/g, ' ').trim(), text: document.querySelector('.modal.hot p')?.textContent.replace(/\s+/g, ' ').trim(), names: window.__game.table.names }));
+  if (prompt.head !== `${prompt.names[1]} escalates` || !prompt.text.startsWith('Play on and this round is worth 2, or 4 at the final flip. Fold and you’re out of this round: the stake (1) goes into the pot for whoever wins it.')) fail(`the prompt at three seats: ${JSON.stringify(prompt)}`);
+  await snap(page, shot, 'prompt-three');
+  await audit('prompt-three');
+  await page.click('.modal.hot [data-action=respond][data-accept="1"]');
+  await until(page, () => window.__game.view.round.pending?.mine === 'on' && !document.querySelector('.modal.hot'), null, 'my answer in, and the prompt gone');
+  const waiting = await page.evaluate(() => ({ status: document.querySelector('.controls .status')?.textContent ?? '', answered: window.__game.view.round.pending.answered.slice() }));
+  if (!waiting.status.startsWith(`Waiting for ${prompt.names[2]} to answer ${prompt.names[1]}’s escalation…`) || waiting.answered[2]) fail(`after my answer, the status should name the seat still to answer: ${JSON.stringify(waiting)}`);
+  log(`the prompt asked me, then went; "${waiting.status}"`);
+
+  // 5. Pass and play for three, from the title's sheet (Players 3, Classic): a cover per seat, each
+  // naming the other two; then Red escalates and locks in, and the device goes to Teal, then Cobalt, for
+  // their answers. Every animation is skipped.
+  await page.evaluate(() => {
+    window.__game.holdRival(false);
+    window.__game.skipAnimations(true);
+    window.__game.leave();
+  });
+  await until(page, () => document.querySelector('.title-screen [data-action=pass]'), null, 'the title for pass and play');
+  await page.click('[data-action=pass]');
+  await until(page, () => document.querySelector('.pass-sheet [data-action=pass-seats][data-choice="2"][aria-pressed=true]'), null, 'the pass and play sheet, two players first');
+  await page.click('.pass-sheet [data-action=pass-seats][data-choice="3"]');
+  await until(page, () => document.querySelector('.pass-sheet [data-action=pass-seats][data-choice="3"][aria-pressed=true]') && /^Three spymasters/.test(document.querySelector('.pass-sheet > p')?.textContent || ''), null, 'Players 3 pressed');
+  await snap(page, shot, 'pass-sheet');
+  await audit('pass-sheet');
+  await page.click('.pass-sheet [data-action=pass-start][data-choice=classic]');
+  await until(page, () => window.__game.ui.mode === 'pass' && window.__game.state?.scores.length === 3, null, 'a three-player pass and play table');
+  const coverAt = async (seat, why) => {
+    await until(page, (o) => document.querySelector('.cover') && window.__game.ui.cover?.seat === o.seat && window.__game.ui.cover.why === o.why && !window.__game.ui.updating, { seat, why }, `the cover for seat ${seat} (${why})`);
+    const c = await page.evaluate(() => ({ text: document.querySelector('.cover').textContent.replace(/\s+/g, ' '), names: window.__game.table.names }));
+    // "Teal, Cobalt, no peeking.": exactly the two others.
+    const named = (c.text.match(/([^.]+), no peeking\./)?.[1] ?? '').trim().split(', ').sort();
+    const others = c.names.filter((_, s) => s !== seat).sort();
+    if (!c.text.includes(`Pass the device to ${c.names[seat]}`) || named.join('|') !== others.join('|')) fail(`the cover for ${c.names[seat]} should name the two others: ${c.text}`);
+    return c;
+  };
+  for (const seat of [0, 1, 2]) {
+    await coverAt(seat, 'turn');
+    await page.click('[data-action=uncover]');
+    await dropFirst(page);
+  }
+  await coverAt(0, 'turn');
+  await page.click('[data-action=uncover]');
+  await until(page, () => document.querySelector('[data-action=escalate]:not([disabled])'), null, 'Red’s Escalate');
+  await page.click('[data-action=escalate]');
+  await until(page, () => window.__game.state.round.pending && !window.__game.ui.updating && document.querySelector('.hand .card:not([disabled])'), null, 'Red, still uncovered after escalating');
+  await dropFirst(page);
+  const teal = await coverAt(1, 'escalated');
+  await page.click('[data-action=uncover]');
+  await until(page, () => document.querySelector('.modal.hot'), null, 'the prompt for Teal');
+  await page.click('.modal.hot [data-action=respond][data-accept="1"]');
+  await coverAt(2, 'escalated');
+  await page.click('[data-action=uncover]');
+  await until(page, () => document.querySelector('.modal.hot'), null, 'the prompt for Cobalt');
+  await page.click('.modal.hot [data-action=respond][data-accept="1"]');
+  await coverAt(1, 'turn');
+  const settled = await page.evaluate(() => ({ stake: window.__game.state.round.stake, pending: window.__game.state.round.pending }));
+  if (settled.stake !== 2 || settled.pending) fail(`both played on: the call settles and the stake doubles: ${JSON.stringify(settled)}`);
+  await page.evaluate(() => window.__game.skipAnimations(false));
+  log(`pass and play for three: covers in turn, each naming the others; "${teal.text.trim()}"`);
+
+  // 6. Havana at three seats: three turns into Havana from every seat (a fixed deal), then a turn
+  // elsewhere; after turn 4 each agent there belongs to the next seat round the table, and every
+  // seat's row glided to the next seat's.
+  await page.evaluate(() => window.__game.skipAnimations(true));
+  await table3(page, { seed: 'havana-3', cities: ['havana', 'lisbon', 'istanbul'], what: 'a three-seat table with Havana' });
+  const staged = await page.evaluate(() => {
+    const g = window.__game;
+    for (let t = 0; t < 3; t++) {
+      for (const s of [0, 1, 2]) {
+        const legal = g.table.view(s).round.legal;
+        const d = legal.find((x) => x.city === 0 && !x.partner) ?? legal[0];
+        if (d) g.table.act(s, { a: 'lock', uid: d.uid, city: d.city });
+      }
+    }
+    return { turn: g.state.round.turn, havana: g.state.round.cities[0].sides.map((side) => side.length) };
+  });
+  await until(page, () => window.__game.state.round.turn === 4 && window.__game.view.round.turn === 4 && !window.__game.ui.animating && !window.__game.ui.updating, null, 'turn 4 at the Havana table');
+  await page.evaluate(() => window.__game.skipAnimations(false));
+  const swap = await page.evaluate(async () => {
+    const g = window.__game;
+    window.__glided = new Set();
+    window.__glideWatch?.disconnect();
+    window.__glideWatch = new MutationObserver((ms) => {
+      for (const m of ms) if (m.target.classList?.contains('row') && m.target.classList.contains('gliding')) window.__glided.add(m.target.dataset.row);
+    });
+    window.__glideWatch.observe(document.querySelector('#app'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+    const before = g.state.round.cities[0].sides.map((side) => side.slice());
+    for (const s of [1, 2, 0]) {
+      const legal = g.table.view(s).round.legal;
+      const d = legal.find((x) => x.city !== 0 && !x.partner) ?? legal[0];
+      if (d) g.table.act(s, { a: 'lock', uid: d.uid, city: d.city });
+    }
+    for (let i = 0; i < 50 && !g.ui.animating; i++) await Promise.resolve();
+    return { before, speed: g.ui.speed, animating: g.ui.animating };
+  });
+  await until(page, () => window.__game.state.round.turn === 5 && !window.__game.ui.animating && !window.__game.ui.updating, null, 'turn 4’s reveal at the Havana table');
+  const rotated = await page.evaluate((before) => {
+    const g = window.__game;
+    window.__glideWatch.disconnect();
+    const after = g.state.round.cities[0].sides;
+    const moves = [];
+    before.forEach((side, s) =>
+      side.forEach((uid) => {
+        const now = after.findIndex((x) => x.includes(uid));
+        if (now >= 0) moves.push({ uid, from: s, to: now, row: !!document.querySelector(`#board .row[data-row="0-${now}"] .chip[data-uid="${uid}"]`) });
+      }),
+    );
+    return { moves, glided: [...window.__glided].sort(), events: g.view.round.events.some((e) => e.t === 'havana') };
+  }, swap.before);
+  const wrong = rotated.moves.filter((m) => m.to !== (m.from + 1) % 3 || !m.row);
+  const from = new Set(rotated.moves.map((m) => m.from));
+  if (!swap.animating || swap.speed !== 1.25 || rotated.moves.length < 3 || from.size < 2 || wrong.length || !rotated.events) fail(`Havana at three seats: every agent there passes to the next seat round the table: ${JSON.stringify({ staged, swap: { speed: swap.speed, animating: swap.animating }, rotated, wrong })}`);
+  if (['0-0', '0-1', '0-2'].some((r) => !rotated.glided.includes(r))) fail(`each of Havana's rows should glide to the next seat's: ${JSON.stringify(rotated.glided)}`);
+  log(`Havana at three seats: ${rotated.moves.length} agents from ${from.size} seats passed one seat on; rows ${rotated.glided.join(', ')} glided`);
+
+  // 7. The reveal's pace at three seats: 1.25 (and --pace 0.8) from the start, 3.75 after a tap,
+  // then a second tap skips it.
+  const paced = await page.evaluate(async () => {
+    const g = window.__game;
+    g.rivalLocks();
+    const d = g.view.round.legal[0];
+    g.table.act(0, { a: 'lock', uid: d.uid, city: d.city });
+    for (let i = 0; i < 50 && !g.ui.animating; i++) await Promise.resolve();
+    const play = document.querySelector('#screen .play');
+    return { animating: g.ui.animating, speed: g.ui.speed, pace: play?.style.getPropertyValue('--pace'), label: document.querySelector('[data-action=reveal-tap]')?.textContent };
+  });
+  if (!paced.animating || paced.speed !== 1.25 || paced.pace !== '0.8' || !/^Speed up/.test(paced.label)) fail(`a three-seat reveal should start at 1.25: ${JSON.stringify(paced)}`);
+  await until(page, () => window.__game.ui.animating && performance.now() - window.__game.ui.revealAt > 450 && window.__game.holdReveal(), null, 'the three-seat reveal to pass its guard');
+  await page.keyboard.press('Space');
+  const fast = await page.evaluate(() => ({ speed: window.__game.ui.speed, skip: window.__game.ui.skip, pace: document.querySelector('#screen .play')?.style.getPropertyValue('--pace'), label: document.querySelector('[data-action=reveal-tap]')?.textContent }));
+  if (fast.speed !== 3.75 || fast.skip || Math.abs(Number(fast.pace) - 1 / 3.75) > 1e-9 || !/^Skip/.test(fast.label)) fail(`a tap should take a three-seat reveal to 3.75: ${JSON.stringify(fast)}`);
+  await page.click('[data-action=reveal-tap]');
+  const skipped = await page.evaluate(() => window.__game.ui.skip || !window.__game.ui.animating);
+  if (!skipped) fail('a second tap should skip the three-seat reveal');
+  await idle(page);
+  log(`three-seat reveal pace: ${paced.speed}, then ${fast.speed}, then skipped`);
+
+  await page.evaluate(() => {
+    window.__game.leave();
+    window.__game.holdRival(false);
+  });
+  await until(page, () => document.querySelector('.title-screen'), null, 'the title after the three-seat flows');
+}
+
+/**
+ * Phase 3's screens (Task 10). The rivals screen's Table tab: four seats default to the open rungs (Agent
+ * Wren, the Magpie, Mr Heron; never Control), a rung picked twice is "Agent Wren II", Mixed draws from your
+ * network, Start deals a four-seat table with those names, and the title's Continue resumes it; with
+ * nobody beaten it offers only Agent Wren (three times over) and says why Mixed waits. Then the host's
+ * lobby on its own page (?net=local, no guest): Seats 3, Timer 30 s, Fill (two computer rivals) and
+ * Start with one human, while a second tab, which arrived once the table was full, watches: from the
+ * lobby to the table with no hand and no controls, every tag a button, the help sheet, a round's result
+ * with no Next round, and a dossier with no rematch and no win or loss. That tab isn't the check's page,
+ * so its screenshots are saved straight into the check's folder (`<slug>-[phone-]tab-<name>.png`).
+ */
+export async function lobbySteps(page, { log, shot, audit, phone, url }) {
+  const fail = (m) => {
+    throw new Error(m);
+  };
+  // 1. The Table screen.
+  await page.evaluate(() => {
+    window.__game.leave();
+    window.__game.beat(['wren', 'magpie']);
+  });
+  await until(page, () => document.querySelector('.title-screen [data-action=rivals]'), null, 'the title for the Table');
+  await page.click('[data-action=rivals]');
+  await page.click('[data-action=rivals-tab][data-choice=table]');
+  await until(page, () => document.querySelector('.table-pick') && document.querySelector('[data-action=rivals-tab][data-choice=table][aria-pressed=true]'), null, 'the Table tab');
+  await page.click('[data-action=table-seats][data-choice="4"]');
+  await until(page, () => document.querySelectorAll('.table-seat').length === 4, null, 'four seats at the Table');
+  /** The Table's rival seats as drawn: names, the pressed slip in each, the rungs offered, Mixed, the roster note. */
+  const pickNow = () =>
+    page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.table-seat')].slice(1);
+      const mixed = document.querySelector('[data-action=table-roster][data-choice=mixed]');
+      return {
+        names: rows.map((r) => r.querySelector('.nm').textContent),
+        pressed: rows.map((r) => [...r.querySelectorAll('[data-action=table-rival][aria-pressed=true]')].map((b) => b.dataset.id).join('+')),
+        offered: [...new Set(rows.map((r) => [...r.querySelectorAll('[data-action=table-rival]')].map((b) => b.dataset.id).join()))],
+        mixed: mixed ? !mixed.disabled : null,
+        note: document.querySelector('.table-pick .pick-row .seg-note')?.textContent ?? '',
+      };
+    });
+  const four = await pickNow();
+  if (four.names.join('|') !== 'Agent Wren|The Magpie|Mr Heron' || four.pressed.join() !== 'wren,magpie,heron' || four.offered.join('/') !== 'wren,magpie,heron' || four.mixed !== true) {
+    fail(`with Wren and the Magpie beaten, four seats should default to Wren, the Magpie and Mr Heron, offer those three (no Control) and allow Mixed: ${JSON.stringify(four)}`);
+  }
+  await page.click('[data-action=table-rival][data-seat="3"][data-id=wren]');
+  await until(page, () => document.querySelectorAll('.table-seat .nm')[3]?.textContent === 'Agent Wren II', null, 'seat 4’s rival changed to Agent Wren II');
+  const changed = await pickNow();
+  if (changed.names.join('|') !== 'Agent Wren|The Magpie|Agent Wren II' || changed.pressed.join() !== 'wren,magpie,wren') fail(`a rung picked twice is "Agent Wren II": ${JSON.stringify(changed)}`);
+  await snap(page, shot, 'table-screen');
+  await audit('table-screen');
+  // Mixed from the network, then Start: the rivals are held, and a drop saves the Table.
+  await page.click('[data-action=table-roster][data-choice=mixed]');
+  await until(page, () => document.querySelector('[data-action=table-roster][data-choice=mixed][aria-pressed=true]'), null, 'the Table’s Mixed roster');
+  await page.evaluate(() => window.__game.holdRival(true));
+  await page.click('[data-action=table-start]');
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && window.__game.view?.names.length === 4 && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, 'the four-seat Table');
+  const started = await page.evaluate(() => {
+    const g = window.__game;
+    return { names: g.view.names.slice(1), mixed: g.table.setup.mixed, twist: g.state.twist, rivals: g.ui.tableRivals, roster: g.state.roster };
+  });
+  const net14 = [...DECK, 'courier', 'blackmailer'];
+  if (started.names.join('|') !== 'Agent Wren|The Magpie|Agent Wren II' || !started.mixed || started.twist !== null || started.rivals?.join() !== 'wren,magpie,wren' || !started.roster.every((id) => net14.includes(id))) {
+    fail(`Start should deal a four-seat Mixed table from the network, no twist, with the names chosen: ${JSON.stringify(started)}`);
+  }
+  await dropFirst(page);
+  await until(page, () => window.__game.view.round.plan && JSON.parse(localStorage.getItem('cg:dead-drop:match') || 'null')?.rivals, null, 'the Table saved');
+  await toTitle(page);
+  const cont = await page.evaluate(() => document.querySelector('[data-action=continue]')?.textContent.trim());
+  if (cont !== 'Continue the table against Agent Wren, The Magpie and Agent Wren II') fail(`the title should offer to continue the Table: "${cont}"`);
+  await page.click('[data-action=continue]');
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && window.__game.view?.names.length === 4 && !window.__game.ui.updating && document.querySelector('.tags'), null, 'the Table resumed');
+  const resumed = await page.evaluate(() => ({ seats: window.__game.view.scores.length, names: window.__game.view.names.slice(1), plan: !!window.__game.view.round.plan, rivals: window.__game.ui.tableRivals }));
+  if (resumed.seats !== 4 || resumed.names.join('|') !== 'Agent Wren|The Magpie|Agent Wren II' || !resumed.plan || resumed.rivals?.join() !== 'wren,magpie,wren') fail(`Continue should resume the four-seat Table with my drop locked: ${JSON.stringify(resumed)}`);
+  await toTitle(page);
+  log(`the Table: Wren, the Magpie and Mr Heron by default; "${changed.names[2]}"; Mixed dealt ${started.roster.length} from the network; "${cont}" resumed it`);
+  // Nobody beaten: Agent Wren is the only rung, three times over, and Mixed waits for the network.
+  await page.evaluate(() => {
+    window.__game.holdRival(false);
+    window.__game.beat([]);
+    localStorage.removeItem('cg:dead-drop:match');
+  });
+  await page.click('[data-action=rivals]');
+  await page.click('[data-action=rivals-tab][data-choice=table]');
+  await until(page, () => document.querySelectorAll('.table-seat').length === 4, null, 'the Table with nobody beaten');
+  const wrens = await pickNow();
+  if (wrens.names.join('|') !== 'Agent Wren|Agent Wren II|Agent Wren III' || wrens.offered.join('/') !== 'wren' || wrens.mixed !== false || !wrens.note.includes('Mixed opens once you beat The Magpie')) {
+    fail(`with nobody beaten the Table offers only Agent Wren, three times, and says why Mixed waits: ${JSON.stringify(wrens)}`);
+  }
+  await page.click('.rivals-screen [data-action=title]');
+  await until(page, () => document.querySelector('.title-screen'), null, 'the title after the Table');
+  log(`nobody beaten: ${wrens.names.join(', ')}; "${wrens.note}"`);
+
+  // 2. The host's lobby, on a page of its own that talks over BroadcastChannel (?net=local).
+  const hostUrl = `${url}${url.includes('?') ? '&' : '?'}net=local`;
+  await page.goto(hostUrl);
+  await until(page, () => window.__game && document.querySelector('.title-screen'), null, 'the title on a local-network page');
+  await page.evaluate(() => window.__game.startHost('SMOKE9'));
+  await until(page, () => window.__game.ui.net?.session && window.__game.ui.net.status === 'waiting' && document.querySelector('.lobby .seats'), null, 'the host’s lobby');
+  const lobbyNow = () =>
+    page.evaluate(() => ({
+      seats: [...document.querySelectorAll('.lobby .seat')].map((x) => x.className.split(' ')[1]).join(),
+      names: [...document.querySelectorAll('.lobby .seat .nm')].map((x) => x.textContent),
+      pressed: ['lobby-size', 'lobby-timer', 'host-roster'].map((a) => document.querySelector(`[data-action=${a}][aria-pressed=true]`)?.dataset.choice).join(),
+      small: [...document.querySelectorAll('[data-action=lobby-size]:disabled')].map((b) => b.dataset.choice).join(),
+      start: document.querySelector('[data-action=lobby-start]')?.textContent.trim(),
+      startOff: document.querySelector('[data-action=lobby-start]')?.disabled,
+      fill: document.querySelector('[data-action=lobby-fill]')?.textContent.trim(),
+      token: document.body.innerHTML.includes(window.__game.meta.token) || JSON.stringify(window.__game.ui.lobby).includes(window.__game.meta.token),
+    }));
+  const opened = await lobbyNow();
+  if (opened.seats !== 'host,empty,empty,empty' || opened.pressed !== '4,0,classic' || opened.start !== 'Start' || !opened.startOff || opened.fill !== 'Fill empty seats with computer rivals' || opened.token) {
+    fail(`the lobby opens with four seats (yours and three open), no timer, Classic, Start disabled and no token anywhere: ${JSON.stringify(opened)}`);
+  }
+  await page.click('[data-action=lobby-size][data-choice="3"]');
+  await page.click('[data-action=lobby-timer][data-choice="30000"]');
+  await until(
+    page,
+    () => window.__game.ui.lobby?.size === 3 && window.__game.ui.lobby.timer === 30000 && document.querySelector('[data-action=lobby-size][data-choice="3"][aria-pressed=true]') && document.querySelector('[data-action=lobby-timer][data-choice="30000"][aria-pressed=true]'),
+    null,
+    'Seats 3 and Timer 30 s pressed',
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await snap(page, shot, 'lobby-host');
+  await audit('lobby-host');
+  if (phone) {
+    // The seat list and Start, on screen without scrolling (measured from the top of the page).
+    const fit = await page.evaluate(() => {
+      const bottom = (sel) => Math.round((document.querySelector(sel)?.getBoundingClientRect().bottom ?? NaN) + scrollY);
+      return { seats: bottom('.lobby .seats'), start: bottom('[data-action=lobby-start]'), innerHeight };
+    });
+    log(`phone fit in the lobby: ${JSON.stringify(fit)}`);
+    if (!(fit.seats <= fit.innerHeight) || !(fit.start <= fit.innerHeight)) fail(`the phone's lobby should show the seat list and Start without scrolling: ${JSON.stringify(fit)}`);
+  }
+  await page.click('[data-action=lobby-fill]');
+  await until(page, () => document.querySelectorAll('.lobby .seat.bot').length === 2, null, 'two computer rivals in the seat list');
+  const filled = await lobbyNow();
+  if (filled.seats !== 'host,bot,bot' || !filled.names.slice(1).every((n) => n.endsWith(' (computer)')) || filled.fill !== 'Clear computer rivals' || filled.start !== 'Start' || filled.startOff || filled.small !== '2') {
+    fail(`Fill seats two computer rivals; Start is open, and two seats (fewer than the three taken) can't be chosen: ${JSON.stringify(filled)}`);
+  }
+  log(`lobby: Seats 3 and Timer 30 s pressed; Fill seated ${filled.names.slice(1).join(' and ')}`);
+
+  // A second tab arrives while the table is full: it watches.
+  const sp = await page.context().newPage();
+  const spErrors = [];
+  sp.on('pageerror', (e) => spErrors.push(e.message));
+  sp.on('console', (m) => m.type() === 'error' && spErrors.push(m.text()));
+  // The tab's screenshots and DOM audit go through the check's own (shot and audit take a page).
+  const spShot = (name) => snap(sp, shot, `tab-${name}`);
+  const spAudit = (label) => audit(`spectator tab ${label}`, sp);
+  try {
+    await sp.goto(`${hostUrl}#join=SMOKE9`);
+    await until(sp, () => window.__game?.ui.seat === -1 && document.querySelector('.lobby.guest .seats'), null, 'the spectator’s lobby');
+    const watchLobby = await sp.evaluate(() => ({ wait: document.querySelector('.lobby .wait')?.textContent.trim(), seats: [...document.querySelectorAll('.lobby .seat')].map((x) => x.className.split(' ')[1]).join() }));
+    if (watchLobby.wait !== 'The table is full: you’ll watch the match.' || watchLobby.seats !== 'host,bot,bot') fail(`a tab that arrives at a full table should be told it will watch: ${JSON.stringify(watchLobby)}`);
+    await spShot('watch-lobby');
+    await spAudit('lobby');
+
+    // Start with one human and two computer rivals (held, so nothing moves under the checks).
+    await page.evaluate(() => window.__game.holdRival(true));
+    await page.click('[data-action=lobby-start]');
+    await until(page, () => window.__game.ui.screen === 'play' && window.__game.view?.names.length === 3, null, 'the host’s three-seat table');
+    const dealt = await page.evaluate(() => ({ names: window.__game.view.names, timer: window.__game.view.timer, save: JSON.parse(localStorage.getItem('cg:dead-drop:host-SMOKE9') || 'null') }));
+    if (dealt.names[1] !== 'Agent Wren' || dealt.names[2] !== 'The Magpie' || dealt.timer !== 30000) fail(`Start should deal a three-seat table with the computer rivals and the 30 s timer: ${JSON.stringify({ names: dealt.names, timer: dealt.timer })}`);
+    if (!dealt.save?.lobby?.started || dealt.save.lobby.seats.length !== 3 || dealt.save.table?.state?.scores.length !== 3) fail(`the host's save should hold the started lobby and the table: ${JSON.stringify(dealt.save?.lobby ?? null)}`);
+    await clearCard(page);
+
+    // The spectator goes from the lobby to the table as seat -1: no hand, no controls, every tag a button.
+    await until(sp, () => window.__game.ui.screen === 'play' && window.__game.ui.seat === -1 && window.__game.view?.names.length === 3, null, 'the spectator’s table');
+    await clearCard(sp);
+    await until(sp, () => !window.__game.ui.updating && document.querySelector('.tags'), null, 'the spectator’s table, settled');
+    const watch = await sp.evaluate(() => ({
+      hand: document.querySelectorAll('#hand .card').length,
+      controls: [...document.querySelectorAll('.controls button')].map((b) => b.dataset.action),
+      status: document.querySelector('.controls .status')?.textContent ?? '',
+      tags: [...document.querySelectorAll('.tags .tag')].map((t) => t.tagName).join(),
+      leave: !!document.querySelector('.top [data-action=quit]'),
+      names: window.__game.view.names,
+    }));
+    const wantStatus = `Watching ${watch.names[0]}, ${watch.names[1]} and ${watch.names[2]}’s table.`;
+    if (watch.hand || watch.controls.length || !watch.status.startsWith(wantStatus) || watch.tags !== 'BUTTON,BUTTON,BUTTON' || !watch.leave) {
+      fail(`a spectator sees the table with no hand or controls, "${wantStatus}", every tag a button and Leave: ${JSON.stringify(watch)}`);
+    }
+    // Seat 0's file opens from its tag (every tag is a rival's to a spectator), and the help sheet works.
+    await sp.click('.tags button.tag[data-seat="0"]');
+    await until(sp, () => document.querySelector('.tag-sheet') && window.__game.ui.modal === 'tag', null, 'seat 0’s file for the spectator');
+    await sp.keyboard.press('Escape');
+    await until(sp, () => !document.querySelector('.tag-sheet') && window.__game.ui.modal === null, null, 'the file closed');
+    await sp.click('[data-action=help]');
+    await until(sp, () => document.querySelector('.sheet.help'), null, 'the help sheet for the spectator');
+    await sp.keyboard.press('Escape');
+    await until(sp, () => !document.querySelector('.sheet.help'), null, 'the help sheet closed');
+    // F (fold) and E (escalate) do nothing for a spectator.
+    await sp.keyboard.press('f');
+    await sp.keyboard.press('e');
+    if (await sp.evaluate(() => window.__game.ui.modal !== null || !!document.querySelector('.modal'))) fail('F or E opened something for a spectator');
+    await spShot('spectator');
+    await spAudit('table');
+
+    // A round ends: the spectator's result has no Next round, only who it waits for.
+    await page.evaluate(() => window.__game.finishRound());
+    await until(sp, `(window.__game.ui.animating && (window.__game.ui.skip = true), window.__game.view?.phase === 'round-over' && !window.__game.ui.updating && document.querySelector('.result'))`, null, 'the round’s result for the spectator');
+    const result = await sp.evaluate(() => ({ next: !!document.querySelector('[data-action=next]'), wait: document.querySelector('.result .wait')?.textContent.trim() ?? null }));
+    if (result.next || !/^Waiting for .+…$/.test(result.wait || '')) fail(`a spectator's round result has no Next round: ${JSON.stringify(result)}`);
+    await spShot('spectator-result');
+    // The match ends: the dossier names the winner, with no rematch, and neither won nor lost.
+    await page.evaluate(() => {
+      const g = window.__game;
+      for (const s of [0, 1, 2]) g.table.act(s, { a: 'next' });
+      g.state.scores = [30, 0, 0];
+      g.state.target = 1;
+      g.finishRound();
+    });
+    await until(sp, `(window.__game.ui.animating && (window.__game.ui.skip = true), window.__game.ui.card?.skip(), document.querySelector('[data-action=final]'))`, null, 'the final report button for the spectator');
+    await sp.click('[data-action=final]');
+    await until(sp, () => document.querySelector('.over'), null, 'the spectator’s dossier');
+    const over = await sp.evaluate(() => ({ cls: document.querySelector('.over').className, rematch: !!document.querySelector('[data-action=rematch]'), title: !!document.querySelector('.over [data-action=title]'), head: document.querySelector('.over h2')?.textContent.replace(/\s+/g, ' ').trim() }));
+    if (over.cls !== 'over' || over.rematch || !over.title) fail(`a spectator's dossier has no rematch and no won or lost: ${JSON.stringify(over)}`);
+    await spShot('spectator-over');
+    await spAudit('dossier');
+    if (spErrors.length) fail(`the spectator's tab logged errors: ${spErrors.join(' | ')}`);
+    log(`a spectator: "${watch.status}"; no Next round ("${result.wait}"), no rematch on "${over.head}"`);
+  } finally {
+    await sp.close();
+  }
+  await page.evaluate(() => {
+    window.__game.holdRival(false);
+    window.__game.leave();
+    localStorage.removeItem('cg:dead-drop:host-SMOKE9');
+  });
+  await page.goto(url);
+  await until(page, () => window.__game && document.querySelector('.title-screen'), null, 'the title again');
 }
 
 /** On a phone, the plan screen must still show the scorebar, the cities, the hand and Lock in without scrolling. */
@@ -1773,8 +2472,9 @@ export async function matchFrame(page, { log, shot, audit, phone }) {
 
     // 3. The unseen strip, on a staged Magpie table (her 13 agents): she drops a Heavy face up and I drop
     // through the UI. U opens the strip over the board, without moving it: her deck list minus what this
-    // round has shown, and her hand and deck counts. An outside tap closes it; so does Escape.
-    await staged(page, { rival: 'magpie', rivalHand: ['heavy'], cities: ['lisbon', 'monaco', 'moscow'] }, 'a Magpie table for the unseen strip');
+    // round has shown, and her hand and deck counts. An outside tap closes it; so does Escape. Her
+    // turn-2 drop is a Veteran: a Blackmailer there would open a call whose prompt covers the twist chip.
+    await staged(page, { rival: 'magpie', rivalHand: ['heavy', 'veteran'], cities: ['lisbon', 'monaco', 'moscow'] }, 'a Magpie table for the unseen strip');
     if (!(await page.evaluate(() => window.__game.rivalLocks()))) fail('the Magpie could not lock in on the staged table');
     await page.evaluate(() => window.__game.skipAnimations(true));
     await dropFirst(page);
@@ -1897,15 +2597,30 @@ export async function duo([host, guest], { url, log, shot, audit, live = false, 
   if ((await host.evaluate(() => window.__game.audio.sceneName)) !== 'lobby') throw new Error('the lobby should play the lobby music');
   await shot('lobby', host);
   await audit('lobby', host);
-  // The host's roster: Classic by default. Mixed deals the table again before anyone joins.
+  // The host's roster: Classic by default. Mixed is the lobby's setup, which the match deals from at Start.
   const classicFirst = await host.evaluate(() => document.querySelector('[data-action=host-roster][data-choice=classic]')?.getAttribute('aria-pressed'));
   if (classicFirst !== 'true') throw new Error(`the lobby's roster should start on Classic: ${classicFirst}`);
   await host.click('[data-action=host-roster][data-choice=mixed]');
-  await until(host, () => window.__game.table.setup.mixed && document.querySelector('[data-action=host-roster][data-choice=mixed][aria-pressed=true]'), null, 'the host’s Mixed roster');
+  await until(host, () => window.__game.ui.lobby?.roster === 'mixed' && document.querySelector('[data-action=host-roster][data-choice=mixed][aria-pressed=true]'), null, 'the host’s Mixed roster');
   await shot('lobby-mixed', host);
 
+  // The guest sits down: the host sees them in the seat list and nothing starts until the host says so.
   await guest.goto(local(url, `#join=${code}`));
-  await until(host, () => window.__game.ui.screen === 'play', null, 'the host to see the guest');
+  await until(host, () => document.querySelector('.lobby .seat.guest') && document.querySelector('[data-action=lobby-start]:not([disabled])'), null, 'the guest in the host’s seat list');
+  await until(guest, () => document.querySelector('.lobby.guest .seats') && window.__game.ui.lobby?.seats.length === 4, null, 'the guest’s lobby');
+  const lobbies = {
+    host: await host.evaluate(() => ({ screen: window.__game.ui.screen, start: document.querySelector('[data-action=lobby-start]').textContent.trim(), seats: [...document.querySelectorAll('.lobby .seat')].map((x) => x.className.split(' ')[1]).join() })),
+    guest: await guest.evaluate((token) => ({ screen: window.__game.ui.screen, wait: document.querySelector('.lobby .wait')?.textContent.trim(), seats: [...document.querySelectorAll('.lobby .seat')].map((x) => x.className.split(' ')[1]).join(), buttons: document.querySelectorAll('.lobby .seats button, [data-action^=lobby-], [data-action=host-roster]').length, token: JSON.stringify(window.__game.ui.lobby).includes(token) || document.body.innerHTML.includes(token) }), await guest.evaluate(() => window.__game.meta.token)),
+  };
+  if (lobbies.host.screen !== 'lobby' || lobbies.host.start !== 'Start with 2' || lobbies.host.seats !== 'host,guest,empty,empty') throw new Error(`the host's lobby should list the guest and offer "Start with 2": ${JSON.stringify(lobbies.host)}`);
+  if (lobbies.guest.screen !== 'lobby' || !/^Waiting for .+ to start…$/.test(lobbies.guest.wait || '') || lobbies.guest.seats !== 'host,guest,empty,empty' || lobbies.guest.buttons || lobbies.guest.token) throw new Error(`the guest's lobby should wait for the host, read-only, with no token: ${JSON.stringify(lobbies.guest)}`);
+  await snap(host, shot, 'lobby-seats');
+  await audit('lobby-seats', host);
+  await snap(guest, shot, 'lobby-guest');
+  await audit('lobby-guest', guest);
+  log(`the guest sat down; the host's lobby offers "${lobbies.host.start}", the guest's says "${lobbies.guest.wait}"`);
+  await host.click('[data-action=lobby-start]');
+  await until(host, () => window.__game.ui.screen === 'play', null, 'the host’s table after Start');
   await until(guest, () => window.__game.ui.screen === 'play' && document.querySelector('.hand .card'), null, 'the guest table');
   // The guest's first view deals the host's Mixed roster, and the host's roster switch has gone.
   const rosters = await Promise.all([host, guest].map((p) => p.evaluate(() => window.__game.view.roster)));
@@ -2061,4 +2776,379 @@ export async function duo([host, guest], { url, log, shot, audit, live = false, 
   await until(host, () => document.querySelector('.over .wait')?.textContent.includes('left the table') && !document.querySelector('[data-action=rematch]'), null, 'the dossier to say the guest left');
   await snap(host, shot, 'duo-left-over-host');
   log('leaving said goodbye');
+}
+
+// ── table(): three players and a watcher, online ───────────────────────────────────────────────
+
+/** Pages for the table pass: four in one browser for `npm run check` (host, two guests, a watcher); three separate browsers live. */
+export const tablePages = { local: 4, live: 3 };
+
+/**
+ * The table's players, one per page. Pages of one browser share its storage, so on ?net=local each
+ * URL carries a token and codename of its own (main.js's tabAs) and the host tells them apart.
+ */
+const TABLE_PLAYERS = [
+  { token: 'd0d0d0d0d0d0d000', name: 'Agent Fox' },
+  { token: 'd0d0d0d0d0d0d001', name: 'Agent Owl' },
+  { token: 'd0d0d0d0d0d0d002', name: 'Agent Pike' },
+  { token: 'd0d0d0d0d0d0d003', name: 'Agent Lynx' },
+];
+
+/** As until(), skipping any reveal in progress on the way (a tap would), so a slow page never holds up the step. */
+const untilSkipping = (page, fn, arg, what) => until(page, `(window.__game.ui.animating && (window.__game.ui.skip = true), (${fn})(${JSON.stringify(arg ?? null)}))`, null, what);
+
+/** Pick the card of `kind` in my hand, the first city it can go to, and lock in, through the real UI. */
+async function dropKind(page, kind) {
+  const sel = `#hand .card.k-${kind}:not([disabled])`;
+  await until(page, (s) => document.querySelector(s), sel, `a ${kind} to drop`);
+  await page.click(sel);
+  if (!(await page.$('.city.target'))) throw new Error(`picking the ${kind} did not highlight any city`);
+  await page.click('.city.target .plate');
+  await page.click('[data-action=lock]');
+}
+
+/**
+ * What a guest's (or a spectator's) latest view, as it came over the wire, gives away: its seat, the owners
+ * of the cards in its hand, how many of the others' face-down agents are on the board, how many of those
+ * (or their drop events) carry a kind, a power or a deck id, and on screen the face-down chips drawn as
+ * backs and the others' face-down chips drawn with their face.
+ */
+const secrets = (page) =>
+  page.evaluate(() => {
+    const v = window.__game.ui.remote;
+    const me = v.seat;
+    const theirs = [...v.round.cities.flatMap((c) => c.sides.flat()), ...v.round.gone.flat()].filter((cv) => cv.faceDown && cv.owner !== me);
+    const drops = v.round.events.filter((e) => e.t === 'drop' && e.faceDown && e.seat !== me);
+    const chips = [...document.querySelectorAll('#board .chip')];
+    return {
+      seat: me,
+      owners: v.round.hand.map((c) => c.owner),
+      hidden: theirs.length,
+      told: theirs.filter((cv) => cv.kind !== null || cv.power !== null || cv.id0 !== null).length + drops.filter((e) => e.kind !== null && e.kind !== undefined).length,
+      backs: chips.filter((c) => c.classList.contains('back')).length,
+      faces: chips.filter((c) => c.classList.contains('fd') && !c.classList.contains(`own-${me}`)).length,
+    };
+  });
+
+/** Record every toast the page shows from now on in window.__toasts (each is up for about two seconds). */
+const watchToasts = (page) =>
+  page.evaluate(() => {
+    window.__toasts = [];
+    window.__toastWatch?.disconnect();
+    window.__toastWatch = new MutationObserver((ms) => {
+      for (const m of ms) for (const n of m.addedNodes) if (n.classList?.contains('cg-toast')) window.__toasts.push(n.textContent);
+    });
+    window.__toastWatch.observe(document.body, { childList: true });
+  });
+
+/** Record, in window.__exits, the board row of every chip that starts a fold's exit (it lifts off: class exfil) from now on. */
+const watchExits = (page) =>
+  page.evaluate(() => {
+    window.__exits = [];
+    window.__exitWatch?.disconnect();
+    window.__exitWatch = new MutationObserver((ms) => {
+      for (const m of ms) if (m.target.classList?.contains('exfil')) window.__exits.push(m.target.closest('.row')?.dataset.row ?? null);
+    });
+    window.__exitWatch.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  });
+
+/**
+ * Three players at one online table, in ten steps, each waiting on state: the host's three-seat lobby,
+ * two guests, Start and a turn of face-down Sleepers that no guest's view names; a spectator (seat -1, no
+ * hand or controls, every face-down agent hidden); an escalation with two answers, one on and one abort
+ * (the answers card on every page, held for the checks, then the abort's exit on every page); emotes
+ * (relayed, and a second within 3 s dropped); a player whose line goes dead (the stand-in sits, says so
+ * and locks; the player comes back to its lock); a guest's reload and then the host's (route() reopens
+ * the table and its lobby, and every guest gets its seat back by token); a player leaving through the
+ * menu (the stand-in at once, and the match goes on); a rematch at three seats, which the stand-in
+ * accepts by itself. Locally the pages are tabs of one browser on ?net=local, each a player of its own
+ * (token= and name=); live (scripts/verify-live.mjs) they are three browsers on the public relays, with
+ * no watcher, no stand-in clock and no host reload.
+ */
+export async function table(pages, { url, log, shot, audit, live = false, code = 'TABLE7' }) {
+  T = live ? 45000 : 15000;
+  const fail = (m) => {
+    throw new Error(m);
+  };
+  const P = TABLE_PLAYERS;
+  const sep = url.includes('?') ? '&' : '?';
+  // Guests ping every 500 ms here, so the host's 2 s stand-in wait (step 7) covers only a line that has gone.
+  const at = (i, hash = '') => (live ? `${url}${hash}` : `${url}${sep}net=local&token=${P[i].token}&name=${encodeURIComponent(P[i].name)}&ping=500${hash}`);
+  let [host, a, b] = pages;
+  const watcher = live ? null : pages[3];
+  const everyone = () => [host, a, b, watcher].filter(Boolean);
+
+  // 1. The host opens a lobby of three seats on Classic. (Locally, first: the tab knobs need ?net=local.)
+  if (!live) {
+    await host.goto(`${url}${sep}token=${P[0].token}&name=${encodeURIComponent(P[0].name)}`);
+    await until(host, () => window.__game && document.querySelector('.title-screen'), null, 'a page without ?net=local');
+    const plain = await host.evaluate(() => ({ token: window.__game.meta.token, codename: window.__game.meta.codename }));
+    if (plain.token === P[0].token) fail('token= changed the token of a page without ?net=local');
+    await host.goto(at(0));
+    await until(host, () => window.__game && document.querySelector('.title-screen'), null, 'the host page');
+    const tab = await host.evaluate(() => ({ token: window.__game.meta.token, codename: window.__game.meta.codename, saved: JSON.parse(localStorage.getItem('cg:dead-drop:meta') || 'null') }));
+    if (tab.token !== P[0].token || tab.codename !== P[0].name || tab.saved?.token !== plain.token || tab.saved?.codename !== plain.codename) {
+      fail(`a ?net=local page plays as its token= and name= in memory, and the save keeps the browser's own: ${JSON.stringify({ tab: [tab.token, tab.codename], saved: [tab.saved?.token, tab.saved?.codename], own: plain })}`);
+    }
+  } else {
+    await host.goto(at(0));
+    await until(host, () => window.__game && document.querySelector('.title-screen'), null, 'the host page');
+  }
+  await host.evaluate((c) => window.__game.startHost(c), code);
+  await until(host, () => window.__game.ui.net?.session && window.__game.ui.net.status === 'waiting' && document.querySelector('.lobby .seats'), null, 'the host’s lobby');
+  if (!live) await host.evaluate(() => window.__game.standInMs(2000));
+  await host.click('[data-action=lobby-size][data-choice="3"]');
+  await until(host, () => window.__game.ui.lobby?.size === 3 && window.__game.ui.lobby.roster === 'classic' && document.querySelector('[data-action=lobby-size][data-choice="3"][aria-pressed=true]'), null, 'a three-seat lobby on Classic');
+  const hostNet = await host.evaluate(() => window.__game.net);
+  if (hostNet?.role !== 'host' || hostNet.code !== code || hostNet.seat !== 0) fail(`__game.net should say the host's role, code and seat: ${JSON.stringify(hostNet)}`);
+  await snap(host, shot, 'lobby-host');
+  await audit('lobby-host', host);
+  log(`1. the host's lobby: three seats, Classic${live ? '' : ', stand-in after 2 s'}`);
+
+  // 2. Two guests sit down, one after the other (so they take seats 1 and 2 in that order, even through
+  // the relays); the host sees both, here.
+  await a.goto(at(1, `#join=${code}`));
+  await until(host, () => window.__game.ui.lobby?.seats[1]?.kind === 'guest', null, 'the first guest at seat 1');
+  await b.goto(at(2, `#join=${code}`));
+  await until(host, () => window.__game.ui.lobby?.seats.filter((s) => s.kind === 'guest' && s.here).length === 2 && document.querySelector('[data-action=lobby-start]:not([disabled])'), null, 'both guests in the host’s seat list');
+  for (const [p, seat] of [
+    [a, 1],
+    [b, 2],
+  ]) {
+    await until(p, (s) => window.__game.ui.lobby?.seats.length === 3 && window.__game.net?.seat === s && document.querySelector('.lobby.guest .seat.you'), seat, `the lobby of the guest at seat ${seat}`);
+  }
+  const tokens = await Promise.all([host, a, b].map((p) => p.evaluate(() => window.__game.meta.token)));
+  const leaked = await Promise.all([a, b].map((p) => p.evaluate((ts) => ts.some((t) => document.body.innerHTML.includes(t) || JSON.stringify(window.__game.ui.lobby).includes(t)), tokens)));
+  if (leaked.some(Boolean)) fail('a guest’s lobby shows a token');
+  await snap(host, shot, 'lobby-full');
+  await audit('lobby-full', host);
+  await snap(a, shot, 'lobby-guest');
+  await audit('lobby-guest', a);
+  log('2. two guests sat down at seats 1 and 2');
+
+  // 3. Start. Everyone holds a Sleeper (moved into each hand on the host's table, as a deal could have),
+  // so face-down agents are on the board for the checks below; each drops it, and turn 1 resolves.
+  await host.click('[data-action=lobby-start]');
+  for (const p of [host, a, b]) await until(p, () => window.__game.ui.screen === 'play' && window.__game.view?.scores.length === 3, null, 'the three-seat table');
+  const planted = await host.evaluate(() => {
+    const g = window.__game;
+    const R = g.state.round;
+    for (let seat = 0; seat < R.hands.length; seat++) {
+      const uid = Object.keys(R.cards).find((u) => R.cards[u].origin === seat && R.cards[u].kind === 'sleeper');
+      if (R.hands[seat].includes(uid)) continue;
+      const i = R.decks[seat].indexOf(uid);
+      if (i < 0) return `no Sleeper in seat ${seat}'s hand or deck`;
+      R.decks[seat][i] = R.hands[seat].pop();
+      R.hands[seat].push(uid);
+    }
+    g.table.touch();
+    return null;
+  });
+  if (planted) fail(planted);
+  for (const p of [a, b]) await until(p, () => window.__game.ui.remote?.round.hand.some((c) => c.kind === 'sleeper'), null, 'a Sleeper in the guest’s hand');
+  for (const p of [host, a, b]) await clearCard(p);
+  for (const p of [host, a, b]) await dropKind(p, 'sleeper');
+  for (const p of [host, a, b]) await until(p, () => window.__game.view?.round.turn === 2 && !window.__game.ui.animating && !window.__game.ui.updating && window.__game.ui.shownSeq === window.__game.view.turnSeq, null, 'turn 2, revealed');
+  await snap(host, shot, 'table-host');
+  await audit('table-host', host);
+  await snap(a, shot, 'table-guest');
+  await audit('table-guest', a);
+  for (const [p, seat] of [
+    [a, 1],
+    [b, 2],
+  ]) {
+    const s = await secrets(p);
+    if (s.seat !== seat || !s.owners.length || s.owners.some((o) => o !== seat)) fail(`the guest at seat ${seat} should hold only its own cards: ${JSON.stringify(s)}`);
+    if (s.hidden !== 2 || s.told || s.backs !== 2 || s.faces) fail(`the guest at seat ${seat} should see the other two Sleepers face down, with nothing about them: ${JSON.stringify(s)}`);
+  }
+  log('3. Start dealt three seats; three Sleepers went down and no guest’s view names one');
+
+  // 4. A spectator arrives mid-match: seat -1, no hand, no controls, every face-down agent hidden.
+  if (watcher) {
+    await watcher.goto(at(3, `#join=${code}`));
+    await until(watcher, () => window.__game?.ui.seat === -1 && window.__game.ui.screen === 'play' && window.__game.ui.remote?.round.turn === 2 && !window.__game.ui.updating && document.querySelector('.tags'), null, 'the spectator’s table');
+    const seen = await watcher.evaluate(() => ({ net: window.__game.net, hand: document.querySelectorAll('#hand .card').length, controls: document.querySelectorAll('.controls button').length }));
+    const s = await secrets(watcher);
+    if (seen.net?.role !== 'guest' || seen.net.seat !== -1 || seen.hand || seen.controls) fail(`a spectator has seat -1, no hand and no controls: ${JSON.stringify(seen)}`);
+    if (s.hidden !== 3 || s.told || s.backs !== 3 || s.faces) fail(`a spectator should see all three Sleepers face down, with nothing about them: ${JSON.stringify(s)}`);
+    await snap(watcher, shot, 'spectator');
+    await audit('spectator', watcher);
+    log('4. a spectator watches as seat -1: no hand, no controls, three face-down agents and nothing about them');
+  }
+
+  // 5. An escalation with two answers: the guest at seat 1 escalates, the host plays on, seat 2 aborts.
+  // The answers card comes up on every page and is held there until each has been checked.
+  for (const p of everyone()) await watchExits(p);
+  await a.click('[data-action=escalate]');
+  for (const p of [host, b]) await until(p, () => document.querySelector('.modal.hot [data-action=respond]'), null, 'the escalation prompt');
+  const answered = Promise.all(
+    everyone().map((p) =>
+      until(
+        p,
+        () => {
+          const up = !!document.querySelector('.cine.answers-card');
+          if (up) window.__game.holdCard();
+          return up;
+        },
+        null,
+        'the answers card',
+      ),
+    ),
+  );
+  answered.catch(() => {}); // awaited below, once the answers are in
+  await host.click('.modal.hot [data-action=respond][data-accept="1"]');
+  await until(host, () => window.__game.state.round.pending?.calls[0] === 'on', null, 'the host’s answer');
+  await b.click('.modal.hot [data-action=respond][data-accept="0"]');
+  await answered;
+  const slips = await host.evaluate(() => ({ slips: [...document.querySelectorAll('.cine.answers-card .ans')].map((li) => li.textContent.trim()), aborts: [...document.querySelectorAll('.cine.answers-card .ans.abort')].map((li) => li.textContent.trim()) }));
+  // In table order after the escalator: seat 2, then the host.
+  if (slips.slips.length !== 2 || slips.slips[1] !== 'You play on.' || slips.aborts.length !== 1 || slips.aborts[0] !== slips.slips[0] || !slips.aborts[0].endsWith(' aborts.')) {
+    fail(`the host's answers card should say seat 2 aborts and the host plays on: ${JSON.stringify(slips)}`);
+  }
+  await snap(host, shot, 'answers');
+  await audit('answers', host);
+  // The host and seat 1 go on: their cards go, seat 2's agents pull out of their boards, and they lock
+  // in, so the turn resolves behind the cards still held on seat 2's page (and the watcher's). Once
+  // those go, the abort's exit must still play there, over the board on screen, before the turn's reveal.
+  const ahead = [host, a];
+  const behind = [b, watcher].filter(Boolean);
+  for (const p of ahead) await p.keyboard.press('Escape');
+  for (const p of ahead) await until(p, () => window.__exits.some((r) => r?.endsWith('-2')) && !window.__game.ui.holdBoard && !window.__game.ui.updating, null, 'seat 2’s agents to pull out');
+  const called = await host.evaluate(() => window.__game.table.turnSeq);
+  for (const p of ahead) await dropFirst(p);
+  await until(host, (s) => window.__game.table.turnSeq > s, called, 'the turn to resolve');
+  for (const p of behind) await until(p, (s) => window.__game.ui.remote.turnSeq > s && document.querySelector('.cine.answers-card'), called, 'the turn resolved behind the held answers card');
+  for (const p of behind) await p.keyboard.press('Escape');
+  for (const p of behind) {
+    await until(p, () => window.__exits.some((r) => r?.endsWith('-2')) && window.__game.view.round.turn === 3 && !window.__game.ui.animating && !window.__game.ui.updating, null, 'seat 2’s exit, then the reveal of the turn that resolved behind the card');
+  }
+  const out = {
+    folded: await b.evaluate(() => window.__game.ui.remote.round.folded[2]),
+    tag: await host.evaluate(() => {
+      const t = document.querySelector('.tags .tag.s-2');
+      return t ? { out: t.classList.contains('out'), stamp: getComputedStyle(t, '::after').content } : null;
+    }),
+    status: await b.evaluate(() => document.querySelector('.controls.out .status')?.textContent ?? ''),
+    stakes: await Promise.all(everyone().map((p) => p.evaluate(() => window.__game.view.round.stake))),
+  };
+  if (!out.folded || !out.tag?.out || out.tag.stamp !== '"Out"' || !out.status.startsWith('You’re out of this round') || out.stakes.some((s) => s !== 2)) {
+    fail(`after the answers seat 2 is out (its tag stamped Out on the host, the out status on its screen) and the stake is 2 everywhere: ${JSON.stringify(out)}`);
+  }
+  log(`5. an escalation with two answers: "${slips.slips.join(' ')}" on every page, then seat 2's exit, also where the turn resolved behind the card; stake ${out.stakes.join('/')}`);
+
+  // 6. Emotes: the host relays one to everyone; a second from the same seat within 3 s is dropped. A
+  // later emote from seat 2 marks the point by which the host has heard (and dropped) the second.
+  const sent = await a.evaluate(() => [window.__game.emote(2), window.__game.emote(3)]);
+  if (!sent.every(Boolean)) fail(`the guest's emotes should go out: ${sent}`);
+  await until(host, () => window.__game.ui.emotes[1]?.i === 2, null, 'the emote on the host');
+  const first = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
+  for (const p of [b, watcher].filter(Boolean)) await until(p, () => window.__game.ui.emotes[1]?.i === 2, null, 'the emote relayed to the others');
+  await b.evaluate(() => window.__game.emote(4));
+  await until(host, () => window.__game.ui.emotes[2]?.i === 4, null, 'seat 2’s emote on the host');
+  const second = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
+  if (first.seat !== 1 || second.i !== first.i || second.at !== first.at) fail(`a second emote within 3 s should be dropped: ${JSON.stringify({ first, second })}`);
+  log(`6. emote ${first.i} from seat 1 reached everyone; its second within 3 s was dropped`);
+
+  // 7. A line goes dead: the stand-in sits after the 2 s wait and locks in; the player comes back to its lock.
+  if (!live) {
+    await watchToasts(host);
+    await a.close();
+    await until(host, () => window.__game.view?.here[1] === false, null, 'the host to see seat 1’s line drop');
+    // Seat 1's second emote went out before its goodbye, on the same line: still dropped.
+    const third = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
+    if (third.at !== first.at) fail(`a second emote within 3 s should be dropped: ${JSON.stringify(third)}`);
+    const dead = `${P[1].name}’s line went dead`;
+    await until(host, (t) => window.__game.view.standIn[1] && window.__toasts.some((x) => x.includes(t)), dead, 'the stand-in at seat 1, and the toast');
+    await until(host, () => window.__game.table.view(0).round.locked[1], null, 'the stand-in to lock in');
+    // Nobody else's line went quiet meanwhile: the others ping more often than the wait.
+    const others = await host.evaluate(() => ({ standIn: window.__game.view.standIn, toasts: window.__toasts }));
+    if (others.standIn[2] || others.toasts.some((x) => x.includes('line went dead') && !x.includes(dead))) fail(`only seat 1's line went dead: ${JSON.stringify(others)}`);
+    const said = await host.evaluate((t) => window.__toasts.find((x) => x.includes(t)), dead);
+    a = await host.context().newPage();
+    await a.goto(at(1, `#join=${code}`));
+    await until(host, (t) => !window.__game.view.standIn[1] && window.__game.view.here[1] && window.__toasts.some((x) => x.includes(t)), `${P[1].name} is back`, 'seat 1 back on the host');
+    await until(a, () => window.__game?.view?.seat === 1 && window.__game.view.round.plan && !window.__game.ui.updating && document.querySelector('[data-action=unlock]'), null, 'seat 1 back at its seat, its lock standing');
+    await snap(a, shot, 'standin-back');
+    await audit('standin-back', a);
+    await host.evaluate(() => window.__game.standInMs(30000));
+    log(`7. seat 1's line went dead: "${said}"; the stand-in locked in, and the player came back to its lock`);
+  }
+
+  // 8. Reloads: the guest at seat 2 gets its seat back by token (still out of the round). Locally the host
+  // reloads too: route() reopens the saved table and lobby, and each guest's hello finds its seat.
+  await b.reload();
+  await until(b, () => window.__game?.view?.seat === 2 && window.__game.view.round.folded[2] && !window.__game.ui.updating && document.querySelector('.controls.out'), null, 'seat 2 back at its seat, still out');
+  if (!live) {
+    const before = await host.evaluate(() => ({ turnSeq: window.__game.table.turnSeq, matchId: window.__game.table.matchId }));
+    // Each guest says so when it is welcomed back ("Back in …’s game", or "You’re watching …").
+    for (const p of [a, b, watcher]) await watchToasts(p);
+    await host.reload();
+    await until(host, () => window.__game?.ui.screen === 'play' && window.__game.net?.role === 'host' && window.__game.ui.net.session && window.__game.view, null, 'the host’s table, reopened');
+    const reopened = await host.evaluate(() => {
+      const g = window.__game;
+      return { turnSeq: g.table.turnSeq, matchId: g.table.matchId, started: g.ui.net.lobby.started, tokens: g.ui.net.lobby.seats.map((s) => s.token ?? null) };
+    });
+    if (reopened.turnSeq !== before.turnSeq || reopened.matchId !== before.matchId || !reopened.started || reopened.tokens.join() !== [P[0].token, P[1].token, P[2].token].join()) {
+      fail(`the host's reload should reopen the saved table and its lobby: ${JSON.stringify({ before, reopened })}`);
+    }
+    // The reopened table starts every guest seat quiet (not here) until its player's hello.
+    await until(host, () => window.__game.view.here.every(Boolean) && !window.__game.view.standIn.some(Boolean), null, 'both guests back at their seats on the host');
+    for (const [p, said] of [
+      [a, `Back in ${P[0].name}’s game.`],
+      [b, `Back in ${P[0].name}’s game.`],
+      [watcher, `You’re watching ${P[0].name}’s table.`],
+    ]) {
+      await until(p, (t) => window.__toasts.includes(t), said, `"${said}" after the host's reload`);
+    }
+    for (const [p, seat] of [
+      [a, 1],
+      [b, 2],
+      [watcher, -1],
+    ]) {
+      await until(p, ([s, seq]) => window.__game.ui.seat === s && window.__game.view?.seat === s && window.__game.view.turnSeq === seq && window.__game.ui.shownSeq === seq && !window.__game.ui.updating, [seat, before.turnSeq], `seat ${seat} on the reopened table at turnSeq ${before.turnSeq}`);
+    }
+    log(`8. seat 2 reloaded into its seat; the host reloaded and reopened the table (turnSeq ${before.turnSeq} on every page)`);
+  } else log('8. seat 2 reloaded into its seat');
+
+  // 9. A player leaves through the menu: the stand-in sits at once (no wait), and the match goes on.
+  await watchToasts(host);
+  const leaver = await a.evaluate(() => window.__game.meta.codename);
+  const left = Date.now();
+  await a.click('[data-action=quit]');
+  await a.click('.modal [data-action=title]');
+  // One toast for both: the stand-in sat down straight after the goodbye. (A quiet seat would wait 30 s
+  // from the goodbye, which the bound below tells apart however slow the line.)
+  await until(host, (t) => window.__game.view?.standIn[1] && window.__toasts.includes(t), `${leaver} left the table. The station is covering.`, 'the host to hear seat 1 leave and the stand-in to sit');
+  const waited = Date.now() - left;
+  if (waited >= 25000) fail(`a goodbye brings the stand-in at once, not after the 30 s wait: ${waited} ms`);
+  const seq = await host.evaluate(() => window.__game.table.turnSeq);
+  await dropFirst(host);
+  await untilSkipping(host, (s) => window.__game.table.turnSeq > s && window.__game.view.turnSeq > s && !window.__game.ui.animating && !window.__game.ui.updating, seq, 'the turn to resolve with the stand-in');
+  await until(host, () => window.__game.table.view(0).round.locked[1], null, 'the stand-in to lock in the next turn');
+  log(`9. seat 1 left: the stand-in sat in ${waited} ms, and the turn resolved`);
+
+  // 10. A rematch at three seats: the host offers, seat 2 accepts, the stand-in accepts by itself.
+  const oldMatch = await host.evaluate(() => window.__game.table.matchId);
+  await host.evaluate(() => {
+    const g = window.__game;
+    g.state.scores = [30, 0, 0];
+    g.state.target = 1;
+    g.finishRound();
+  });
+  const players = [host, b, watcher].filter(Boolean);
+  for (const p of players) {
+    await untilSkipping(p, () => document.querySelector('[data-action=final]') && !window.__game.ui.card, null, 'the final report button');
+    await p.click('[data-action=final]');
+    await until(p, () => document.querySelector('.over'), null, 'the dossier');
+  }
+  await host.click('[data-action=rematch]');
+  await until(b, () => document.querySelector('[data-action=rematch]')?.textContent.includes('Accept rematch'), null, 'the rematch offer on seat 2');
+  await b.click('[data-action=rematch]');
+  for (const p of players) await until(p, (old) => window.__game.ui.screen === 'play' && window.__game.view?.matchId !== old && window.__game.view.scores.join() === '0,0,0' && !document.querySelector('.over'), oldMatch, 'the rematch table');
+  for (const p of players) await clearCard(p);
+  const covered = await host.evaluate(() => window.__game.view.standIn);
+  if (!covered[1]) fail(`the stand-in should still cover seat 1 in the rematch: ${covered}`);
+  await snap(host, shot, 'table-rematch');
+  await audit('table-rematch', host);
+  log('10. a rematch at three seats: seat 2 accepted, the stand-in accepted by itself');
 }

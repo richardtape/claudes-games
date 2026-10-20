@@ -1,6 +1,6 @@
 /* Dead Drop: the opening titles of a 1960s spy film. Flat cut paper on a mustard table, ink
    panels for cities, paper cards, hand-cut type. Red is always you (or Red in pass and play),
-   teal your rival; colour means ownership everywhere. */
+   teal your rival (then cobalt and plum at a bigger table); colour means ownership everywhere. */
 
 :root {
   --mustard: #e0a030;
@@ -11,11 +11,28 @@
   --paper-2: #cdb98f;
   --red: #c8321f;
   --teal: #1e6a6e;
+  --cobalt: #2c4f9e;
+  --plum: #6b2a5a;
   --oxblood: #5c1814;
   --night: #170f0d;
   --manila: #e9d39c; /* the dossier's folder */
+  /* Each seat's colour (--cN) and pattern (--pat-N), by seat: main.js puts c<seat>-<colour> classes on
+     <body> (seatColours), and the rules below point them at that colour. Off the table: seat order. */
   --c0: var(--red);
   --c1: var(--teal);
+  --c2: var(--cobalt);
+  --c3: var(--plum);
+  /* A pattern per colour, so ownership never rests on colour alone: printed in paper ink over the
+     colour as background layers (background: var(--own-pat), var(--own)). Red is solid, teal a 45°
+     hatch, cobalt dots, plum a cross-hatch. */
+  --pat-red: none;
+  --pat-teal: repeating-linear-gradient(45deg, rgb(240 226 196 / 0.5) 0 1.5px, transparent 1.5px 5px);
+  --pat-cobalt: radial-gradient(circle, rgb(240 226 196 / 0.62) 0 1.1px, transparent 1.6px) 0 0 / 5px 5px;
+  --pat-plum: repeating-linear-gradient(45deg, rgb(240 226 196 / 0.45) 0 1.2px, transparent 1.2px 5px), repeating-linear-gradient(-45deg, rgb(240 226 196 / 0.45) 0 1.2px, transparent 1.2px 5px);
+  --pat-0: var(--pat-red);
+  --pat-1: var(--pat-teal);
+  --pat-2: var(--pat-cobalt);
+  --pat-3: var(--pat-plum);
   --display: 'League Gothic', 'Oswald', Impact, 'Arial Narrow', sans-serif;
   --type: 'Courier Prime', 'Courier New', ui-monospace, monospace;
   --cut: polygon(0.6% 3%, 99.2% 0%, 100% 94%, 1.5% 100%);
@@ -35,9 +52,71 @@
   --line: var(--ink);
   color-scheme: light;
 }
-body[data-flip='1'] {
+/* Seat N plays colour X (seatColours in main.js): you are red, rivals teal, cobalt and plum in table
+   order after you; pass and play and spectators keep seat order. */
+body.c0-red {
+  --c0: var(--red);
+  --pat-0: var(--pat-red);
+}
+body.c0-teal {
   --c0: var(--teal);
+  --pat-0: var(--pat-teal);
+}
+body.c0-cobalt {
+  --c0: var(--cobalt);
+  --pat-0: var(--pat-cobalt);
+}
+body.c0-plum {
+  --c0: var(--plum);
+  --pat-0: var(--pat-plum);
+}
+body.c1-red {
   --c1: var(--red);
+  --pat-1: var(--pat-red);
+}
+body.c1-teal {
+  --c1: var(--teal);
+  --pat-1: var(--pat-teal);
+}
+body.c1-cobalt {
+  --c1: var(--cobalt);
+  --pat-1: var(--pat-cobalt);
+}
+body.c1-plum {
+  --c1: var(--plum);
+  --pat-1: var(--pat-plum);
+}
+body.c2-red {
+  --c2: var(--red);
+  --pat-2: var(--pat-red);
+}
+body.c2-teal {
+  --c2: var(--teal);
+  --pat-2: var(--pat-teal);
+}
+body.c2-cobalt {
+  --c2: var(--cobalt);
+  --pat-2: var(--pat-cobalt);
+}
+body.c2-plum {
+  --c2: var(--plum);
+  --pat-2: var(--pat-plum);
+}
+body.c3-red {
+  --c3: var(--red);
+  --pat-3: var(--pat-red);
+}
+body.c3-teal {
+  --c3: var(--teal);
+  --pat-3: var(--pat-teal);
+}
+body.c3-cobalt {
+  --c3: var(--cobalt);
+  --pat-3: var(--pat-cobalt);
+}
+body.c3-plum {
+  --c3: var(--plum);
+  --pat-3: var(--pat-plum);
 }
 
 *,
@@ -561,14 +640,15 @@ body[data-screen='title'] .mark {
   gap: 6px;
   justify-items: start;
 }
-/* The host's lobby: "Roster" and the switch on one line, what the choice deals under them. */
-.roster-pick {
+/* A labelled switch (the lobby's Seats, Timer and Roster; the Table's; pass and play's Players): the
+   label and the switch on one line, what the choice means under them. */
+.pick-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
 }
-.roster-pick .seg-note {
+.pick-row .seg-note {
   flex-basis: 100%;
 }
 .seg-switch {
@@ -610,9 +690,24 @@ body[data-screen='title'] .mark {
   max-width: 56ch;
   font-size: 13px;
 }
-.roster-pick .lbl {
+.pick-row .lbl {
+  min-width: 3.6em;
   font: 22px/1 var(--display);
   letter-spacing: 0.03em;
+}
+.pick-row .seg {
+  padding: 9px 14px 5px;
+  font-size: 22px;
+}
+/* On a paper sheet the switch's strip is a shade darker, so it reads as a control. */
+.sheet .seg-switch {
+  background: var(--paper-2);
+}
+.sheet .seg:hover:not(:disabled):not([aria-pressed='true']) {
+  background: #e3d2ab;
+}
+.pass-sheet .pick-row {
+  margin-top: 14px;
 }
 .rival .state {
   font: 20px var(--display);
@@ -685,6 +780,260 @@ body[data-screen='title'] .mark {
   margin: 0;
   max-width: 60ch;
 }
+
+/* ── the lobby's seats, the Table's seats ───────────────────────────────── */
+/* A seat's colour, as the table will draw it (you red, then teal, cobalt and plum round the table). */
+.col-red {
+  --col: var(--red);
+  --col-pat: var(--pat-red);
+}
+.col-teal {
+  --col: var(--teal);
+  --col-pat: var(--pat-teal);
+}
+.col-cobalt {
+  --col: var(--cobalt);
+  --col-pat: var(--pat-cobalt);
+}
+.col-plum {
+  --col: var(--plum);
+  --col-pat: var(--pat-plum);
+}
+.col-none {
+  --col: var(--ink);
+  --col-pat: none;
+}
+/* The host's lobby: the invite across the top, then the seats (with Fill and Start) beside the
+   settings; on a phone, one column with the seats and Start first. */
+.lobby.host {
+  max-width: 940px;
+}
+.lobby-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 16px 36px;
+  align-items: start;
+}
+.seat-col,
+.setup-col {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.setup-col {
+  padding-top: 2px;
+}
+/* The seating plan: a paper slip per seat, its colour band down the left edge. */
+.seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.seats > .seat {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding-right: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  clip-path: var(--cut-2);
+}
+.seats > .seat:nth-child(2n) {
+  clip-path: var(--cut);
+}
+.seats > .seat .band {
+  align-self: stretch;
+  background: var(--col-pat), var(--col);
+}
+.seats > .seat .nm {
+  overflow: hidden;
+  padding-top: 3px;
+  font: 26px/1 var(--display);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.seats > .seat .role {
+  font: 700 11px/1 var(--type);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+/* A player's line: an inked dot while they're here, an empty ring once they've gone. */
+.seats > .seat .line {
+  grid-column: 4;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.seats > .seat .line.away {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.seats > .seat.you .nm {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--col);
+}
+/* An open seat: the slip not yet cut, a faint outline on the table. */
+.seats > .seat.empty {
+  background: rgb(240 226 196 / 0.32);
+}
+.seats > .seat.empty .band {
+  opacity: 0.18;
+}
+.seats > .seat.empty .nm {
+  font: italic 16px/1 var(--type);
+  letter-spacing: 0;
+}
+.lobby-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.lobby-btns .slip {
+  flex: 1 1 auto;
+}
+.lobby-btns [data-action='lobby-start'] {
+  flex: 1 1 140px;
+}
+/* Beside the settings, the QR code is a size smaller. */
+.setup-col .qr-wrap {
+  flex-wrap: nowrap;
+  gap: 16px;
+  margin-top: 4px;
+}
+.setup-col .qr {
+  width: 140px;
+  height: 140px;
+}
+.setup-col .code b {
+  font-size: 38px;
+}
+.seat-col .wait {
+  margin: 0;
+}
+.lobby-terms {
+  margin: 0;
+  font: 24px/1 var(--display);
+  letter-spacing: 0.03em;
+}
+/* The Table tab: your seat and a slip per rival seat, each rival chosen from the open rungs. */
+.table-pick {
+  display: grid;
+  gap: 14px;
+}
+.table-seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.table-seat {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px 14px;
+  padding: 10px 16px 12px 0;
+  background: var(--ink);
+  color: var(--paper);
+  clip-path: var(--cut-px);
+}
+.table-seat:nth-child(2n) {
+  clip-path: var(--cut-2-px);
+}
+.table-seat .band {
+  grid-row: span 2;
+  align-self: stretch;
+  background: var(--col-pat), var(--col);
+}
+.table-seat.you .band {
+  grid-row: auto;
+}
+.table-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding-top: 2px;
+}
+.table-who .nm {
+  font: 28px/1 var(--display);
+  letter-spacing: 0.02em;
+}
+.table-who small {
+  font: 700 11px/1 var(--type);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper-2);
+}
+.rungs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rung {
+  min-height: 40px;
+  padding: 9px 12px 5px;
+  border: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 20px/1 var(--display);
+  letter-spacing: 0.02em;
+  clip-path: var(--cut-2);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.rung:nth-child(2n) {
+  clip-path: var(--cut);
+}
+.rung:hover:not([aria-pressed='true']) {
+  background: #fff3da;
+}
+/* The rival chosen for the seat takes the seat's colour. */
+.rung[aria-pressed='true'] {
+  background: var(--col);
+  color: var(--paper);
+  cursor: default;
+}
+.rung:focus-visible {
+  clip-path: none;
+  outline: 3px solid var(--mustard);
+  outline-offset: 2px;
+}
+.table-pick > .slip.primary {
+  justify-self: start;
+  min-width: 220px;
+}
+@media (max-width: 760px) {
+  .lobby-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .table-pick > .slip.primary {
+    justify-self: stretch;
+  }
+}
+@media (max-width: 600px) {
+  .lobby-btns .slip {
+    flex-basis: 100%;
+  }
+  .setup-col .qr-wrap {
+    flex-wrap: wrap;
+  }
+  .seats > .seat .nm {
+    font-size: 24px;
+  }
+  .rung {
+    font-size: 19px;
+    padding: 9px 10px 5px;
+  }
+}
 .dots {
   display: inline-block;
   width: 26px;
@@ -731,9 +1080,19 @@ body[data-screen='title'] .mark {
 }
 .own-0 {
   --own: var(--c0);
+  --own-pat: var(--pat-0);
 }
 .own-1 {
   --own: var(--c1);
+  --own-pat: var(--pat-1);
+}
+.own-2 {
+  --own: var(--c2);
+  --own-pat: var(--pat-2);
+}
+.own-3 {
+  --own: var(--c3);
+  --own-pat: var(--pat-3);
 }
 
 /* ── play ───────────────────────────────────────────────────────────────── */
@@ -754,6 +1113,15 @@ body[data-screen='title'] .mark {
 }
 .play[data-bottom='1'] {
   --me-col: var(--c1);
+  --them-col: var(--c0);
+}
+/* At three seats and more "them" is a particular rival: a city names it (data-them, below). */
+.play[data-bottom='2'] {
+  --me-col: var(--c2);
+  --them-col: var(--c0);
+}
+.play[data-bottom='3'] {
+  --me-col: var(--c3);
   --them-col: var(--c0);
 }
 .banner {
@@ -844,6 +1212,12 @@ body[data-screen='title'] .mark {
 }
 .s-1 .score {
   background: var(--c1);
+}
+.s-2 .score {
+  background: var(--c2);
+}
+.s-3 .score {
+  background: var(--c3);
 }
 .scorebar .mid {
   display: grid;
@@ -962,6 +1336,12 @@ body[data-screen='title'] .mark {
 }
 .scorebar .s-1 {
   --own: var(--c1);
+}
+.scorebar .s-2 {
+  --own: var(--c2);
+}
+.scorebar .s-3 {
+  --own: var(--c3);
 }
 .marks {
   flex: none;
@@ -1236,6 +1616,12 @@ body[data-screen='title'] .mark {
 }
 .total.t-1 {
   background: var(--c1);
+}
+.total.t-2 {
+  background: var(--c2);
+}
+.total.t-3 {
+  background: var(--c3);
 }
 /* Reykjavik is held on heads: the total counts agents, and a small cut-out figure says so. */
 .total.count::after {
@@ -3282,6 +3668,780 @@ body:has(.modal.hot) .unseen-panel {
   letter-spacing: 0.03em;
 }
 
+/* ── the table at three and four seats ─────────────────────────────────── */
+/* At three seats and more (.play.many) the scorebar becomes the tag bar, each rival gets a thin lane
+   of mini chips above the plate (your full row stays below it), rival totals are badges along the
+   plate's top edge, and each seat's pattern rides with its colour: on chip bands, tags, lanes, dots. */
+
+/* Every chip's top band carries its owner's pattern (red's is plain). */
+:is(.many, .city-sheet) .chip:not(.back)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 6px;
+  border-radius: 3px 3px 0 0;
+  background: var(--own-pat);
+  pointer-events: none;
+}
+/* A colour dot (with its pattern), wherever a seat is named in a list. */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--own-pat), var(--own);
+}
+
+/* The tag bar: a slip of paper per seat (a chip's cousin: the owner's band along the top), then the
+   stake's line under them. */
+.tagbar {
+  display: grid;
+  gap: 6px;
+}
+.tags {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr));
+  gap: 4px;
+}
+.tags .tag {
+  position: relative;
+  display: grid;
+  /* The score stands at the left; the name runs beside it, the marks, coin and mark swatch under the
+     name (a phone stacks them: see the phone rules). */
+  grid-template-columns: auto auto auto auto minmax(0, 1fr);
+  grid-template-areas:
+    'score who who who who'
+    'score marks ff mark .';
+  align-items: center;
+  justify-items: start;
+  gap: 2px 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 9px 10px 6px 8px;
+  border: 0;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut);
+  --line: var(--ink); /* paper: focus rings stay ink, by day or night */
+}
+/* The owner's band, with its pattern. */
+.tags .tag::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 5px;
+  background: var(--own-pat), var(--own);
+}
+.tags .tag:nth-child(2n) {
+  clip-path: var(--cut-2);
+}
+.tags button.tag {
+  cursor: pointer;
+}
+.tags button.tag:hover {
+  background: #f7ecd6;
+}
+.tags button.tag:focus-visible {
+  outline: 3px solid var(--line);
+  outline-offset: -5px;
+}
+.tags .tag .who {
+  grid-area: who;
+  max-width: 100%;
+  padding-right: 10px;
+  font: 700 12px/1.2 var(--type);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tags .tag .score {
+  grid-area: score;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  padding: 3px 7px 0;
+  color: var(--paper);
+  background: var(--own);
+  font: 28px/0.9 var(--display);
+  font-weight: 400;
+  text-align: center;
+  clip-path: var(--cut);
+}
+.tags .tag .first-flip,
+.tags .tag .ff-slot {
+  grid-area: ff;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+/* Whose drop is this seat's "rival's drop" this round: a swatch of that seat's colour. The header's
+   .mark (the game's name) shares the class name, so every property it sets is reset here. */
+.tags .tag .mark,
+.tag-sheet .mark {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  font: inherit;
+  letter-spacing: 0;
+  visibility: visible;
+  background: var(--own-pat), var(--own);
+  box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 2.5px var(--ink);
+  rotate: 45deg;
+}
+.tags .tag .mark {
+  grid-area: mark;
+  margin-left: 2px;
+}
+.tags .tag .marks {
+  grid-area: marks;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.tags .tag .tokens {
+  padding: 0 2px 0 3px;
+}
+.tags .tag .tk {
+  width: 8px;
+  height: 13px;
+}
+.tags .tag .fr {
+  width: 13px;
+  height: 13px;
+}
+.tags .tag .fr::before {
+  inset: 3px 2px;
+}
+/* The line light: a seat whose player has gone shows a hollow ring, one the station covers a
+   mustard light. A seat that is simply here shows nothing. */
+.tags .tag .dot {
+  display: none;
+  position: absolute;
+  top: 10px;
+  right: 6px;
+  width: 9px;
+  height: 9px;
+}
+.tags .tag.away .dot,
+.tags .tag.covered .dot {
+  display: block;
+}
+.tags .tag.away .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.tags .tag.covered .dot {
+  background: var(--mustard);
+  box-shadow: 0 0 0 1.5px var(--ink);
+}
+/* A seat that folded this round sits out: faded, under a stamped "Out" (which stays sharp). */
+.tags .tag.out {
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+.tags .tag.out > *,
+.tags .tag.out::before {
+  opacity: 0.45;
+}
+.tags .tag.out::after {
+  content: 'Out';
+  position: absolute;
+  right: 8px;
+  bottom: 9px;
+  padding: 3px 6px 1px;
+  border: 2px solid var(--red);
+  color: var(--red);
+  background: var(--paper);
+  font: 18px/1 var(--display);
+  letter-spacing: 0.06em;
+  rotate: -10deg;
+  pointer-events: none;
+}
+/* Under the tags: the stake slip and the turn on one line. */
+.tagbar .mid {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* Lanes: a rival's agents in a city as mini chips (power, a small silhouette, its colour), behind a
+   bar of its colour and pattern. A chip a reveal drops or flips into a lane is drawn small too. */
+.city .row.lane {
+  position: relative;
+  min-height: 26px;
+  height: 26px;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 3px;
+  padding-left: 8px;
+}
+.row.lane::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  width: 3px;
+  background: var(--own-pat), var(--own);
+}
+/* The lanes sit close together above the plate. */
+.many .city {
+  grid-template-rows: auto;
+  gap: 2px;
+}
+.many .city > .plate {
+  margin-top: 4px;
+}
+.many .city > .row:not(.lane) {
+  margin-top: 6px;
+}
+.lane .slot,
+.lane .chip {
+  flex: none;
+  width: 22px;
+  height: 24px;
+}
+.lane .slot {
+  border-width: 1.5px;
+  border-radius: 2px;
+}
+.lane .chip {
+  display: block;
+  padding: 0;
+  border-top-width: 3px;
+  border-radius: 2px;
+  box-shadow: 0 1.5px 0 rgb(0 0 0 / 0.28);
+}
+.many .lane .chip:not(.back)::before {
+  height: 3px;
+  border-radius: 2px 2px 0 0;
+}
+.lane .chip > b,
+.lane .chip .pow {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  z-index: 1;
+  font: 12px/1 var(--display);
+  font-weight: 400;
+  text-shadow: 1px 0 0 var(--paper), -1px 0 0 var(--paper), 0 1px 0 var(--paper);
+}
+.lane .chip .pow.up::after,
+.lane .chip .pow.down::after {
+  display: none;
+}
+.lane .chip > svg,
+.lane .chip .art {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+}
+.lane .chip .ac {
+  fill: var(--own);
+}
+.lane .chip .nm,
+.lane .chip .fd-mark,
+.lane .chip .mk,
+.lane .chip .x2c {
+  display: none;
+}
+.lane .chip.back {
+  border-top-color: var(--ink);
+}
+.lane .chip.back > b,
+.lane .chip.back .q {
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--paper);
+  font-size: 15px;
+  text-shadow: none;
+}
+/* Rome's strongest: a mustard corner turned down. */
+.lane .chip.x2::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  background: var(--mustard);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+.lane .chip.acting {
+  transform: scale(1.3) rotate(-2deg);
+  box-shadow: 0 0 0 2px var(--mustard), 0 3px 0 rgb(0 0 0 / 0.3);
+}
+
+/* Rival totals: badges along the plate's top edge in lane order, left to right (main.js gives the
+   plate --slots and each badge its --slot), clear of the name. The canister and the wiretap slips
+   move to the plate's foot. */
+.many .plate {
+  padding-top: 30px;
+}
+.plate[data-action='city-sheet'] {
+  cursor: pointer;
+}
+/* (Not over a city just won: its plate keeps the winner's colour under the pointer.) */
+.city:not(.won-me, .won-them) .plate[data-action='city-sheet']:hover {
+  background: #2a2520;
+}
+.plate[data-action='city-sheet']:focus-visible {
+  outline: 3px solid var(--mustard);
+  outline-offset: -6px;
+}
+.total.badge {
+  position: absolute;
+  top: 5px;
+  left: calc(6px + (100% - 12px) * var(--slot) / max(1, var(--slots) - 1));
+  translate: calc(-100% * var(--slot) / max(1, var(--slots) - 1)) 0;
+  min-width: 28px;
+  padding: 2px 6px 0;
+  font-size: 19px;
+  text-align: center;
+}
+.total.badge small {
+  font-size: 11px;
+}
+/* Its seat's pattern runs down the badge's left edge, as down a lane's, clear of the number. */
+.total.badge {
+  padding-left: 10px;
+}
+.total.badge::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+}
+.total.badge.t-0::before {
+  background: var(--pat-0);
+}
+.total.badge.t-1::before {
+  background: var(--pat-1);
+}
+.total.badge.t-2::before {
+  background: var(--pat-2);
+}
+.total.badge.t-3::before {
+  background: var(--pat-3);
+}
+.many .city[data-them='0'] {
+  --them-col: var(--c0);
+}
+.many .city[data-them='1'] {
+  --them-col: var(--c1);
+}
+.many .city[data-them='2'] {
+  --them-col: var(--c2);
+}
+.many .city[data-them='3'] {
+  --them-col: var(--c3);
+}
+.many .plate .canister {
+  top: auto;
+  bottom: 8px;
+  left: 8px;
+}
+.many .plate .taps {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  pointer-events: none;
+}
+.many .plate .taps .tapped {
+  position: static;
+}
+
+/* The sheets: the city dossier and a rival's file, paper over the table. A sheet slides in as it
+   opens (main.js marks that render `enter`), not again when a rival's move redraws it. */
+.sheet-modal.enter .sheet {
+  animation: sheet-in 0.18s ease-out both;
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+}
+.sheet.city-sheet,
+.sheet.tag-sheet {
+  width: min(520px, 100%);
+}
+.sheet-plate,
+.tag-head {
+  position: relative;
+  margin: -22px -24px 0;
+  padding: 22px 24px 14px;
+  overflow: hidden;
+}
+.sheet-plate {
+  flex: none;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  background: var(--ink);
+  color: var(--paper);
+  text-align: center;
+}
+.sheet-plate .sky {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 80%;
+  color: rgb(240 226 196 / 0.17);
+  pointer-events: none;
+}
+.sheet-plate .sky svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sheet-plate .sky .ac {
+  fill: rgb(224 160 48 / 0.3);
+}
+.sheet-plate .canister {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+.sheet-plate .canister svg {
+  width: 26px;
+  height: 26px;
+}
+.sheet-plate .canister b {
+  font: 13px/1 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+.sheet-plate h2 {
+  position: relative;
+  margin: 0;
+  font: 44px/0.95 var(--display);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.sheet-plate .rule,
+.sheet-plate .note {
+  position: relative;
+  margin: 0;
+  max-width: 40ch;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--paper-2);
+}
+.sheet-plate .note {
+  font-size: 12px;
+  font-style: italic;
+}
+.seat-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px 2px 4px 0;
+}
+.seat-row {
+  padding-left: 10px;
+  border-left: 4px solid var(--own);
+}
+.seat-row.out {
+  opacity: 0.55;
+}
+.seat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+.seat-head .sum {
+  margin-left: auto;
+  font: 28px/0.9 var(--display);
+  font-weight: 400;
+}
+.seat-head .sum small {
+  margin-left: 2px;
+  font: 15px var(--display);
+  opacity: 0.75;
+}
+.holds {
+  padding: 3px 6px 1px;
+  background: var(--own);
+  color: var(--paper);
+  font: 15px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.04em;
+  clip-path: var(--cut-2);
+}
+.seat-row .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 0 4px;
+}
+.seat-row .none {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
+  opacity: 0.7;
+}
+.tag-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 26px;
+  background: var(--own-pat), var(--own);
+  color: var(--paper);
+}
+.tag-head h2 {
+  margin: 0;
+  font-size: 46px;
+}
+.tag-head .colour {
+  font: 700 13px var(--type);
+}
+.tag-score {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.tag-score .score {
+  padding: 4px 12px 0;
+  background: var(--own);
+  color: var(--paper);
+  font: 52px/0.9 var(--display);
+  font-weight: 400;
+  clip-path: var(--cut);
+}
+.tag-score > span {
+  font-weight: 700;
+}
+.tag-score .marks {
+  margin-left: auto;
+}
+.tag-sheet .facts,
+.tag-sheet .mark-line,
+.tag-sheet .line-state {
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+.tag-sheet .mark-line,
+.tag-sheet .line-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tag-sheet .line-state.away .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.tag-sheet .line-state.covered .dot {
+  background: var(--mustard);
+  box-shadow: 0 0 0 1.5px var(--ink);
+}
+.tag-sheet .line-state.here .dot {
+  background: var(--ink);
+}
+/* A quiet slip on the paper sheet: a darker paper, so Close still reads as a button. */
+:is(.city-sheet, .tag-sheet) .slip.quiet {
+  background: var(--paper-2);
+}
+.intel-block {
+  margin-top: 14px;
+}
+.intel-block .mini {
+  color: var(--ink);
+  font-weight: 700;
+}
+.intel-block .mini .ac {
+  fill: var(--own);
+}
+
+/* A round's result at three seats and more: every seat's total in each city, by its colour dot. */
+.city-line.by-seat {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.city-line .bys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  flex-basis: 100%;
+}
+.city-line .by {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.city-line .by .dot {
+  width: 8px;
+  height: 8px;
+}
+.city-line .by.count::after {
+  content: '';
+  width: 0.55em;
+  height: 0.7em;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Ccircle cx='5' cy='3' r='2.7'/%3E%3Cpath d='M0 12c0-3.7 2.2-5.8 5-5.8s5 2.1 5 5.8z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Ccircle cx='5' cy='3' r='2.7'/%3E%3Cpath d='M0 12c0-3.7 2.2-5.8 5-5.8s5 2.1 5 5.8z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.city-line.w-them:is(.own-0, .own-1, .own-2, .own-3) {
+  border-color: var(--own);
+}
+/* The dossier's final score at three seats and more: every seat's name over its score and strips. */
+.final.many {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  align-items: end;
+  gap: 10px;
+}
+.final.many .seat {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 4px solid var(--own);
+}
+/* The winner's: a thicker rule. (Not `.top`: that is the page header's grid.) */
+.final.many .seat.lead {
+  border-top-width: 8px;
+}
+.final.many .nm {
+  max-width: 100%;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.final.many b {
+  font-size: 56px;
+}
+.final.many .score-film {
+  justify-items: start;
+}
+
+/* ── flows at three and four seats ──────────────────────────────────────── */
+
+/* The answers card (main.js answersCard): every answer to a call, revealed together. The bars come
+   in in the escalator's colour, "Answers" slams down, and one paper slip per seat asked is dealt in,
+   all at once: a band in the seat's colour and pattern, its name, and "plays on." in ink or "aborts."
+   stamped in red. Under reduced motion it stands still (the global rule). */
+.answers-card {
+  gap: 12px;
+}
+.answers-card .big {
+  font-size: clamp(64px, min(19vw, 15vh), 140px);
+  animation: slam 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+.answers-card .small {
+  position: relative;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.answers-card .answers {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  width: min(30rem, calc(100vw - 48px));
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.answers-card .ans {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 11px 18px 7px 28px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut-px);
+  rotate: -0.8deg;
+  animation: answer-in 0.36s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  animation-delay: calc(0.22s + var(--i) * 0.06s);
+}
+.answers-card .ans:nth-child(even) {
+  clip-path: var(--cut-2-px);
+  rotate: 0.7deg;
+}
+.answers-card .ans::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  background: var(--own-pat), var(--own);
+}
+.answers-card .who {
+  font: 38px/1 var(--display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.answers-card .verb {
+  font: 700 20px/1.1 var(--type);
+}
+.answers-card .abort .verb {
+  padding: 4px 8px 1px;
+  border: 3px solid var(--red);
+  color: var(--red);
+  text-transform: uppercase;
+  rotate: -5deg;
+}
+@keyframes answer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-30px) rotate(-3deg);
+  }
+}
+
+/* Out of this round (main.js: a seat that folded while the others play on): the hand sits it out,
+   dimmed and still, and the controls only say so. A folded seat's lanes stand back too. */
+.hand.out .card:disabled {
+  opacity: 0.4;
+  filter: grayscale(0.75);
+}
+.controls.out .status {
+  flex-basis: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 700;
+}
+.city .row.lane.out {
+  opacity: 0.35;
+}
+
 /* ── night: a round's final turn ────────────────────────────────────────── */
 /* The same film after dark (main.js sets body[data-night] for the final turn's planning, its
    reveal and its result). The ground goes to ink, with an oxblood glow hanging under the
@@ -3358,6 +4518,10 @@ body[data-night='1'] .hand .card.sel {
 body[data-night='1'] .hand.asking .card.mate {
   box-shadow: 0 0 0 2px var(--red), 0 0 22px rgb(200 50 31 / 0.5), 0 10px 0 rgb(0 0 0 / 0.3);
 }
+/* A hand out of the round stays dark: the lamp doesn't pick it out. */
+body[data-night='1'] .hand.out .card {
+  box-shadow: 0 4px 0 rgb(0 0 0 / 0.3);
+}
 /* The new marks after dark. The partner and pin badges keep their paper ring against the ink table;
    Rome's corner and the wiretap slip catch the spotlight (a touch of paper in them); the choice
    slips stay paper, and a pressed Drop alone keeps its paper edge. */
@@ -3382,6 +4546,36 @@ body[data-night='1']:has(.play.revealing) #top {
   from {
     opacity: 1;
   }
+}
+
+/* The table at three and four seats after dark: the tags turn to ink (the paper slips would glare
+   in the dark), and the lanes stand a little back so the lit cities lead. */
+body[data-night='1'] .tags .tag {
+  background: var(--ink-2);
+  color: var(--paper);
+  --line: var(--paper);
+}
+body[data-night='1'] .tags button.tag:hover {
+  background: #3a332c;
+}
+body[data-night='1'] .tags .tag.out {
+  background: color-mix(in srgb, var(--ink-2) 55%, transparent);
+}
+body[data-night='1'] .tags .tag .mark {
+  box-shadow: 0 0 0 1.5px var(--ink-2), 0 0 0 2.5px var(--paper);
+}
+body[data-night='1'] .tags .tag.away .dot {
+  box-shadow: inset 0 0 0 2px var(--paper);
+}
+body[data-night='1'] .tags .tag.covered .dot {
+  box-shadow: 0 0 0 1.5px var(--paper);
+}
+body[data-night='1'] .lane .chip {
+  filter: brightness(0.82);
+}
+body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
+  opacity: 1;
+  transition: opacity 0.3s;
 }
 
 /* ── phones ─────────────────────────────────────────────────────────────── */
@@ -3947,6 +5141,196 @@ body[data-night='1']:has(.play.revealing) #top {
   }
   .telegram .eline.sig {
     font-size: 36px;
+  }
+}
+
+/* The table at three and four seats on a phone: four tags across 390px, lanes a size down. */
+@media (max-width: 600px) {
+  .tagbar {
+    gap: 4px;
+  }
+  .tags {
+    gap: 3px;
+  }
+  .tags .tag {
+    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'who who who who'
+      'score ff mark .'
+      'marks marks marks marks';
+    gap: 2px 3px;
+    padding: 8px 4px 4px 5px;
+  }
+  .tags .tag::before {
+    height: 4px;
+  }
+  .tags .tag .who {
+    padding-right: 8px;
+    font-size: 10px;
+  }
+  .tags .tag .score {
+    align-self: center;
+    min-width: 24px;
+    padding: 2px 4px 0;
+    font-size: 22px;
+  }
+  .tags .tag .first-flip,
+  .tags .tag .ff-slot {
+    width: 20px;
+    height: 20px;
+    padding-top: 1px;
+    font-size: 11px;
+  }
+  .tags .tag .mark {
+    width: 9px;
+    height: 9px;
+    margin-left: 1px;
+  }
+  .tags .tag .marks {
+    gap: 3px;
+  }
+  .tags .tag .tokens {
+    gap: 2px;
+    padding: 0 1px 0 2px;
+  }
+  .tags .tag .tk {
+    width: 6px;
+    height: 10px;
+  }
+  .tags .tag .fr {
+    width: 10px;
+    height: 11px;
+  }
+  .tags .tag .fr::before {
+    inset: 3px 1px;
+  }
+  .tags .tag .dot {
+    top: 8px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+  }
+  .tags .tag.out::after {
+    right: 4px;
+    bottom: 6px;
+    padding: 2px 4px 0;
+    font-size: 14px;
+  }
+  .tagbar .mid {
+    gap: 10px;
+  }
+  .many .chip:not(.back)::before {
+    height: 4px;
+  }
+  .city .row.lane {
+    min-height: 24px;
+    height: 24px;
+    gap: 2px;
+    padding-left: 6px;
+  }
+  .lane .slot,
+  .lane .chip {
+    width: 20px;
+    height: 22px;
+  }
+  .many .lane .chip:not(.back)::before {
+    height: 3px;
+  }
+  .lane .chip > b,
+  .lane .chip .pow {
+    left: 1px;
+    font-size: 11px;
+  }
+  .lane .chip > svg,
+  .lane .chip .art {
+    width: 14px;
+    height: 14px;
+  }
+  .lane .chip.back > b,
+  .lane .chip.back .q {
+    font-size: 14px;
+  }
+  .many .city > .plate {
+    margin-top: 3px;
+  }
+  .many .city > .row:not(.lane) {
+    margin-top: 4px;
+  }
+  .many .plate {
+    padding-top: 24px;
+  }
+  .total.badge {
+    top: 4px;
+    left: calc(3px + (100% - 6px) * var(--slot) / max(1, var(--slots) - 1));
+    min-width: 20px;
+    padding: 1px 3px 0;
+    font-size: 15px;
+  }
+  .total.badge small {
+    font-size: 9px;
+    margin-left: 1px;
+  }
+  .total.badge {
+    padding-left: 7px;
+  }
+  .total.badge::before {
+    width: 4px;
+  }
+  .many .plate .canister {
+    bottom: 5px;
+    left: 5px;
+  }
+  .many .plate .taps {
+    right: 5px;
+    bottom: 5px;
+  }
+  /* In the sheets the agents keep their names: a chip a size between the board's and the desktop's. */
+  .city-sheet .chip {
+    width: 52px;
+    height: 72px;
+    padding: 16px 2px 3px;
+    border-top-width: 5px;
+    align-items: end;
+  }
+  .city-sheet .chip:not(.back)::before {
+    height: 5px;
+  }
+  .city-sheet .chip .pow {
+    font-size: 22px;
+  }
+  .city-sheet .chip .art {
+    width: 30px;
+    height: 30px;
+    align-self: center;
+  }
+  .city-sheet .chip .nm {
+    display: block;
+    font-size: 11px;
+  }
+  .sheet-plate h2 {
+    font-size: 38px;
+  }
+  .tag-head h2 {
+    font-size: 40px;
+  }
+  .tag-score .score {
+    font-size: 44px;
+  }
+  .final.many b {
+    font-size: 44px;
+  }
+  /* The answers card's slips a size down, so a long codename and its answer share a line. */
+  .answers-card .ans {
+    padding: 9px 14px 6px 24px;
+  }
+  .answers-card .ans::before {
+    width: 11px;
+  }
+  .answers-card .who {
+    font-size: 31px;
+  }
+  .answers-card .verb {
+    font-size: 17px;
   }
 }
 

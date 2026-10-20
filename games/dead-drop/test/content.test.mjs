@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as E from '../js/engine.js';
 import { AGENTS, CITIES, CLASSIC_CITIES, DECK, RULES, TURNS } from '../js/data.js';
-import { ALL_AGENTS, ALL_CITIES, cardOf, give, isOut, mixed, pick, play, setHand, uidOf } from './helpers.mjs';
+import { ALL_AGENTS, ALL_CITIES, cardOf, give, isOut, mixed, pick, play, setHand, uidOf, withRules } from './helpers.mjs';
 import { canRestore, restoreTable } from '../js/session.js';
 
 const PLAIN = ['monaco', 'zurich', 'hongkong'];
@@ -439,38 +439,98 @@ test('Courier: never out of Moscow, never a face-down agent, not without room; t
   assert.deepEqual([cardOf(tie, 0, 'heavy').city, cardOf(tie, 0, 'veteran').city], [0, 1]);
 });
 
+// 2b-ii's rule ('free'), pinned: RULES.blackmailer chooses among 'free', 'token' and 'answer' (Phase 3, SIMLOG B35-B36).
 test('Blackmailer: with no escalation yet the stake doubles for free; nobody answers or spends a token', () => {
-  const s = mixed(PLAIN, { seats: 3 });
-  E.fold(s, 2);
-  const ev = play(s, ['blackmailer', 0], ['heavy', 1], null);
-  assert.deepEqual([s.round.stake, s.tokens, s.round.pending], [2, Array(3).fill(RULES.tokens), null]);
-  assert.deepEqual(s.round.called, { by: 0, answers: [null, 'on', null], free: true });
-  assert.equal(ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake, 2);
-  assert.equal(E.canEscalate(s, 1), false, 'the round’s one escalation is used');
+  withRules({ blackmailer: 'free' }, () => {
+    const s = mixed(PLAIN, { seats: 3 });
+    E.fold(s, 2);
+    const ev = play(s, ['blackmailer', 0], ['heavy', 1], null);
+    assert.deepEqual([s.round.stake, s.tokens, s.round.pending], [2, Array(3).fill(RULES.tokens), null]);
+    assert.deepEqual(s.round.called, { by: 0, answers: [null, 'on', null], free: true });
+    assert.equal(ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake, 2);
+    assert.equal(E.canEscalate(s, 1), false, 'the round’s one escalation is used');
+  });
 });
 
 test('Blackmailer: once someone has escalated it does nothing; face down it does nothing', () => {
-  const s = mixed(PLAIN);
-  E.escalate(s, 1);
-  E.respond(s, 0, true);
-  const ev = play(s, ['blackmailer', 0], null);
-  assert.deepEqual([s.round.stake, ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake], [2, null]);
-  const c = mixed(['casablanca', 'monaco', 'zurich']);
-  play(c, ['blackmailer', 0, { down: true }], null);
-  assert.equal(c.round.stake, 1);
+  withRules({ blackmailer: 'free' }, () => {
+    const s = mixed(PLAIN);
+    E.escalate(s, 1);
+    E.respond(s, 0, true);
+    const ev = play(s, ['blackmailer', 0], null);
+    assert.deepEqual([s.round.stake, ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake], [2, null]);
+    const c = mixed(['casablanca', 'monaco', 'zurich']);
+    play(c, ['blackmailer', 0, { down: true }], null);
+    assert.equal(c.round.stake, 1);
+  });
 });
 
 test('Blackmailer: once someone has escalated it does nothing, and the call stays theirs; views show a free call', () => {
-  const s = mixed(PLAIN);
-  E.escalate(s, 1);
-  E.respond(s, 0, true);
-  const called = structuredClone(s.round.called);
-  const ev = play(s, ['blackmailer', 0], null);
-  assert.deepEqual([s.round.stake, ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake, s.round.called], [2, null, called]);
-  assert.deepEqual(E.viewFor(s, 0).round.called, { by: 1, answers: ['on', null] }, 'no free key on a paid call');
-  const f = mixed(PLAIN);
-  play(f, ['blackmailer', 0], null);
-  assert.deepEqual(E.viewFor(f, 1).round.called, { by: 0, answers: [null, 'on'], free: true });
+  withRules({ blackmailer: 'free' }, () => {
+    const s = mixed(PLAIN);
+    E.escalate(s, 1);
+    E.respond(s, 0, true);
+    const called = structuredClone(s.round.called);
+    const ev = play(s, ['blackmailer', 0], null);
+    assert.deepEqual([s.round.stake, ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake, s.round.called], [2, null, called]);
+    assert.deepEqual(E.viewFor(s, 0).round.called, { by: 1, answers: ['on', null] }, 'no free key on a paid call');
+    const f = mixed(PLAIN);
+    play(f, ['blackmailer', 0], null);
+    assert.deepEqual(E.viewFor(f, 1).round.called, { by: 0, answers: [null, 'on'], free: true });
+  });
+});
+
+test('Blackmailer under token: spends a token, cannot be refused; with no tokens it does nothing', () => {
+  withRules({ blackmailer: 'token' }, () => {
+    const s = mixed(PLAIN, { seats: 3 });
+    const ev = play(s, ['blackmailer', 0], ['heavy', 1], null);
+    assert.deepEqual([s.round.stake, s.tokens, s.round.pending], [2, [RULES.tokens - 1, RULES.tokens, RULES.tokens], null]);
+    assert.deepEqual(s.round.called, { by: 0, answers: [null, 'on', 'on'], free: true });
+    assert.equal(ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake, 2);
+    const broke = mixed(PLAIN);
+    broke.tokens[0] = 0;
+    const ev2 = play(broke, ['blackmailer', 0], null);
+    assert.deepEqual([broke.round.stake, ev2.find((e) => e.t === 'trick' && e.kind === 'blackmailer').stake], [1, null]);
+  });
+});
+
+test('Blackmailer under answer: opens a call the others may fold to; the stake doubles when anyone plays on; on turn 6 it does nothing', () => {
+  withRules({ blackmailer: 'answer' }, () => {
+    const s = mixed(PLAIN, { seats: 3 });
+    play(s, ['blackmailer', 0], ['heavy', 1], ['heavy', 2]);
+    assert.deepEqual([s.round.stake, s.tokens[0], s.round.pending?.by, s.round.pending?.from, s.round.pending?.free], [1, RULES.tokens, 0, [1, 2], true]);
+    assert.equal(E.ready(s), false, 'the turn waits for the answers');
+    assert.ok(E.respond(s, 1, false));
+    assert.ok(E.respond(s, 2, true));
+    assert.deepEqual([s.round.stake, s.round.folded, s.round.pending], [2, [false, true, false], null]);
+    assert.equal(E.canEscalate(s, 2), false, 'the round’s one escalation is used');
+    const late = mixed(PLAIN);
+    for (let t = 1; t < TURNS; t++) play(late, null, null);
+    play(late, ['blackmailer', 0], null);
+    assert.deepEqual([late.phase, late.round.pending, late.round.result.stake], ['round-over', null, 1]);
+  });
+});
+
+test('Blackmailer under answer: the trick says a call is open, views mark the call free, and its answers go public as any call’s (no free key: answers were asked)', () => {
+  withRules({ blackmailer: 'answer' }, () => {
+    const s = mixed(PLAIN);
+    const ev = play(s, ['blackmailer', 0], null);
+    const trick = ev.find((e) => e.t === 'trick' && e.kind === 'blackmailer');
+    assert.deepEqual([trick.stake, trick.call], [null, true]);
+    assert.deepEqual(pick(E.viewFor(s, 1).round.pending, ['by', 'from', 'answered', 'mine', 'free']), { by: 0, from: [1], answered: [false, false], mine: null, free: true });
+    assert.ok(E.respond(s, 1, true));
+    // `called.free` means nobody was asked; this call asked, so it settles as a token escalation's does.
+    assert.deepEqual([s.round.stake, s.round.called, E.viewFor(s, 0).round.called], [2, { by: 0, answers: [null, 'on'] }, { by: 0, answers: [null, 'on'] }]);
+    // A paid call carries no free key, in the state or the view.
+    const t = mixed(PLAIN);
+    E.escalate(t, 1);
+    assert.ok(!('free' in t.round.pending) && !('free' in E.viewFor(t, 0).round.pending));
+    // Its last-turn flip opens nothing: no call, no escalation, nothing left pending in the result.
+    const late = mixed(PLAIN);
+    for (let n = 1; n < TURNS; n++) play(late, null, null);
+    const last = play(late, ['blackmailer', 0], null).find((e) => e.t === 'trick' && e.kind === 'blackmailer');
+    assert.deepEqual([last.stake, last.call, late.round.escalated], [null, undefined, [false, false]]);
+  });
 });
 
 test('Wiretap: next turn the wiretapper hears the city its mark locks, and nobody else does', () => {
@@ -799,4 +859,36 @@ test('twist placed: the card doesn’t arrive, and a seat without a card of the 
   const roster = DECK.filter((k) => k !== 'sleeper');
   const placed = E.newMatch({ seed: 4, roster, twist: { seat: 1, id: 'placed', kind: 'sleeper' } });
   assert.deepEqual({ ...placed, twist: null }, E.newMatch({ seed: 4, roster }));
+});
+
+test('taps at three seats: a Wiretap and a tap twist on one mark give two entries for one seat; nobody else hears', () => {
+  const s = E.newMatch({ seed: 5, seats: 3, roster: ALL_AGENTS, cities: ['monaco', 'zurich', 'hongkong'], twist: { seat: 0, id: 'tap', from: 2 } });
+  play(s, ['wiretap', 0], ['heavy', 1], ['heavy', 1]); // seat 0's mark in round 0 is seat 1
+  const tapped = E.viewFor(s, 0).round.tapped;
+  assert.deepEqual(tapped, [{ seat: 1, city: null }, { seat: 1, city: null }], 'two identical entries: the UI and the bot dedupe by seat');
+  assert.deepEqual(E.viewFor(s, 1).round.taps, [{ by: 0, on: 1 }, { by: 0, on: 1 }]);
+  assert.deepEqual([E.viewFor(s, 2).round.tapped, E.viewFor(s, -1).round.tapped], [[], []]);
+  E.lock(s, 1, { uid: give(s, 1, 'mole'), city: 2 });
+  assert.ok(E.viewFor(s, 0).round.tapped.every((t) => t.city === 2));
+});
+
+test('a tap cycle at three seats is visible to each seat as one tap in and one out', () => {
+  const s = E.newMatch({ seed: 6, seats: 3, roster: ALL_AGENTS, cities: ['monaco', 'zurich', 'hongkong'] });
+  s.round.taps.push({ by: 0, on: 1, turn: 1 }, { by: 1, on: 2, turn: 1 }, { by: 2, on: 0, turn: 1 });
+  for (const seat of [0, 1, 2]) {
+    const v = E.viewFor(s, seat);
+    assert.equal(v.round.tapped.length, 1);
+    assert.equal(v.round.taps.filter((t) => t.on === seat).length, 1);
+  }
+});
+
+test('exposed at four seats: the watcher and the owner see the card; the other seats and a spectator see nothing', () => {
+  const s = E.newMatch({ seed: 7, seats: 4, twist: { seat: 2, id: 'seen', count: 1 } });
+  const { uid } = s.round.exposed[0];
+  const owner = s.round.cards[uid].owner;
+  assert.equal(owner, E.markOf(4, 2, 0));
+  for (const seat of [0, 1, 2, 3, -1]) {
+    const seen = E.viewFor(s, seat).round.exposed.length;
+    assert.equal(seen, seat === 2 || seat === owner ? 1 : 0, `seat ${seat}`);
+  }
 });

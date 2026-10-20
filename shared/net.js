@@ -9,7 +9,7 @@
 //
 // Only call joinRoom when the player chooses to play online: the Trystero import and relay
 // connections are network traffic (and console noise when a relay is down).
-// createMemoryPair() gives two connected rooms for node:test.
+// createMemoryPair() gives two connected rooms for node:test, createMemoryHub(n) any number.
 
 export const TRYSTERO_URL = 'https://cdn.jsdelivr.net/npm/trystero@0.26.0/+esm';
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
@@ -116,4 +116,37 @@ export function createMemoryPair() {
   /** Call after both sides have set their handlers. */
   const connect = () => setTimeout(() => (a._join(b.selfId), b._join(a.selfId)), 0);
   return { a, b, connect };
+}
+
+/**
+ * `n` rooms (`peer-0` … `peer-${n-1}`) wired to each other, delivering asynchronously like
+ * createMemoryPair. `send(type, data, to)` reaches that peer only, or every other room without `to`;
+ * `leave()` tells every other room (onPeerLeave), and a room that has left sends and hears nothing.
+ * For tests of three or more players.
+ */
+export function createMemoryHub(n) {
+  const rooms = Array.from({ length: n }, (_, i) => makeRoom(`peer-${i}`));
+  const gone = new Set();
+  const later = (fn) => setTimeout(fn, 0);
+  for (const from of rooms) {
+    from.send = (type, data, to) => {
+      if (gone.has(from)) return;
+      const copy = JSON.stringify(data ?? null);
+      for (const room of rooms) {
+        if (room === from || (to && room.selfId !== to)) continue;
+        later(() => gone.has(room) || room._deliver(type, JSON.parse(copy), from.selfId));
+      }
+    };
+    from.leave = () => {
+      if (gone.has(from)) return;
+      gone.add(from);
+      later(() => rooms.forEach((room) => room !== from && !gone.has(room) && room._leave(from.selfId)));
+    };
+  }
+  /** Call after every room has set its handlers. */
+  const connect = () =>
+    later(() => {
+      for (const a of rooms) for (const b of rooms) if (a !== b && !gone.has(a) && !gone.has(b)) a._join(b.selfId);
+    });
+  return { rooms, connect };
 }

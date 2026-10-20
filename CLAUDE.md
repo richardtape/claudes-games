@@ -188,7 +188,8 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
   `send(type, data, peerId?)`, `on(type, cb)`, `onPeerJoin`, `onPeerLeave`, `onError`,
   `peers`, `leave()`. `transport: 'p2p'` (Trystero, lazy-imported) or `'local'`
   (BroadcastChannel between tabs of one browser: tests and `?net=local`). `roomCode()`,
-  `cleanCode()`, and `createMemoryPair()` for node:test.
+  `cleanCode()`, and for node:test `createMemoryPair()` (two rooms) and `createMemoryHub(n)`
+  (`{ rooms, connect }`: rooms `peer-0`…, a `send` with a peer id reaches only that room).
 
 When a game needs something generic (a helper you'd want again), add it to `shared/` and
 document it here rather than burying it in the game.
@@ -253,6 +254,16 @@ document it here rather than burying it in the game.
   check never depends on public relays; `npm run verify-live` runs it again on the live
   site in two separate browsers through the real relays. Assert the guest's view never holds
   the host's secrets.
+- **Multiplayer games may export `table(pages, ctx)` and `tablePages = { local, live }`** for
+  three players and more. `npm run check` opens `tablePages.local` pages (default 3) in one
+  context after the duo (`ctx.shot(name, page)`, `ctx.audit(label, page)`, shots
+  `<slug>-table-NN-*`); every page of that context is watched for errors, tabs the smoke opens
+  itself included. `npm run verify-live` runs it with `tablePages.live` separate browsers and
+  `{ live: true, code }`. Pages of one browser share storage, so on `?net=local` Dead Drop takes
+  `token=`, `name=` and `ping=` from the URL as that tab's own (in memory only, never saved;
+  ignored without `?net=local`), and `__game.standInMs(ms)` shortens the host's stand-in wait:
+  keep it above the guests' ping interval or present guests get covered between pings. The
+  default smoke's `shot` and `audit` take a page too, for a tab it opens itself.
 - **Debug helpers must not depend on where earlier steps left things.** Night Stitch's
   `loopAround` walked the needle to the circle first, and the thread laid on that walk cut
   across the circle and used up the 900-unit thread, so the smoke's boss loop failed only
@@ -384,6 +395,27 @@ document it here rather than burying it in the game.
   took 61.8% of the rounds but 73.1% of the points. The sim's escalation rate counts token
   escalations only, so Mixed's 49.7% isn't like for like with Classic's. Report points beside
   win rates; retuning the Mixed stakes is a Phase 3 item.
+- Confirm stake and reel picks at the bots' own samples. At three seats Dead Drop's 8-sample grid
+  put the Microfilm's reel 3–4 points low (target 10: 29.2% of matches at 8 samples, 33.4 at 24;
+  target 12 at pace 2: 20.8 against 23.7; B39, B41, B43): the 24-sample bots fold in answer about a
+  third less, so more rounds reach the flip and more strips change hands. The 24-sample grid (B45)
+  then showed the reel following match length whatever the target or pace, so with a reel of 2
+  the reel band (30% at most) and the length band (5 rounds or more) leave a window of about 0.15
+  rounds at three seats, little more than a confirm's margin. Two bands that both track one
+  quantity can leave no room: check the window before tuning toward it.
+- Expected-points scoring at 3–4 seats (Dead Drop Phase 3, B37–B38): a win/lose playout value
+  put an ordinary hand below the −0.29 answer threshold whenever two rivals could beat it, so
+  bots folded to 62–73% of escalations; scoring a rival's win as −1/(n−1) (plus Monaco at the
+  round's worth) brought folds in answer to 29% and 22% and rounds ending in a fold from about a
+  third to 6% and 1%. Re-baseline before tuning whenever the bot's value function changes.
+- Tune targets and pace on a grid of one variable at a time and confirm at the bots' own samples
+  (B39–B45): four seats landed at target 9, pace 1 (5.06 rounds, every band met); three seats
+  had no setting inside every band because with a reel of 2 the reel band (≤ 30%) and the length
+  band (≥ 5 rounds) leave a window of about 0.15 rounds, and the pace at 2 made escalation
+  automatic (99%); the fallback was target 10, pace 1 with the reel at 33% accepted. A per-seat
+  reel would meet every band but would make the film decide only 6% of matches.
+- A measured round at three seats with quick human-paced play and one stand-in took 158 s
+  (ROUND_MINUTES[3] assumes 165 s), so the minutes-a-match estimates in the SIMLOG hold.
 
 ## Deploying
 
@@ -597,6 +629,30 @@ and new files.
   came from a scratch script, so nobody could rerun it until it became
   `tools/points-by-roster.mjs`, with its definitions (what a round's points include, how the ±
   is taken) in its header and in the SIMLOG entry.
+- Dispatch on the shape of the RNG state to add entropy without moving a replay: Dead Drop's
+  `rnd(state)` keeps mulberry32 when `state.rng` is a number (every seeded match: sims, goldens,
+  the daily operation) and runs xoshiro128** when it is an array of four words from
+  `crypto.getRandomValues` (real tables, `seed: null`). The goldens stayed identical and the
+  save format did not change, because the array is plain JSON.
+- Keep a lobby as pure state (`games/dead-drop/js/lobby.js`: seats, size, timer, roster, fill,
+  start) and resolve a peer's seat from its token on every use. Dead Drop's session first cached
+  the seat index at hello; `start()` drops empty seats and renumbers, so one guest received
+  another's hand until the review planted a pre-start leave. Anything keyed by a seat that can
+  renumber (last-seen clocks, stand-ins) is keyed by the token instead.
+- A stable DOM convention lets new layouts reuse animation code unchanged: Dead Drop's
+  `playEvents` finds any seat's row by `data-row="<city>-<seat>"`, so the 3–4 seat lanes above
+  each plate took no change to the reveal, the exfiltration or Havana's glide.
+- A `return` inside `try` skips code placed after the `finally`. Dead Drop's bot re-ticked after
+  its try/finally, so a bot whose turn ended during a nap never heard the rematch and the table
+  hung; the re-tick now lives inside the `finally`.
+- Several tabs of one window are hidden all but one at a time, so a page that stops pinging when
+  `document.hidden` is covered by a stand-in after 30 s and taken back when it comes to the
+  front. That is the spec's intent on phones, but a three-tab test in one window sees stand-ins
+  constantly: use separate windows (or the `?net=local` `ping=` knob) when the test is about
+  something else.
+- Live `pgrep -f` matches its own wait loop when the pattern appears in the loop's command line
+  (`pgrep -f "tools/sim.mjs"` inside `while pgrep …; do sleep; done` never exits). Test with
+  `ps -eo args | grep "[n]ode games/dead-drop/tools/sim.mjs"` (the bracket excludes the grep).
 
 ## Games so far
 
@@ -604,5 +660,5 @@ and new files.
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
-| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

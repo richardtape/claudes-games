@@ -1,5 +1,5 @@
 // Simulation configuration: who plays, with which seed, under which data patches, dealing which agents and cities.
-import { AGENT, CITY, RIVALS, RULES, STAKES, TARGET, TWISTS } from '../../js/data.js';
+import { AGENT, BLACKMAILER_COPY, CITY, RIVALS, RULES, STAKES, TWISTS, samplesFor, targetFor } from '../../js/data.js';
 import { CLASSIC_SETUP, MIXED_ALL, ladderSetup } from '../../js/roster.js';
 import { hashString } from '../../../../shared/rng.js';
 
@@ -9,11 +9,11 @@ export const SIM_VERSION = 4;
 export const BATCH = 20;
 export const MAX_ROUNDS = 40;
 
-const rivalBot = (id, samples = null) => {
+const rivalBot = (id, samples = null, seats = 2) => {
   const r = RIVALS.find((x) => x.id === id);
   if (!r) throw new Error(`unknown rival: ${id}`);
   const { name, blurb, pack, ...bot } = r; // pack is ladder content, not a bot setting (and would move every configHash)
-  return { ...bot, samples: samples ?? r.samples };
+  return { ...bot, samples: samples ?? samplesFor(r, seats) };
 };
 
 const coerce = (v) => (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : v);
@@ -47,12 +47,12 @@ function checkTwist(twist) {
  * rival's ladder setup (its pool, featured cities and twist, held by bot B) instead of `roster`. `twist`: 'off'
  * plays a setup without its twist.
  */
-export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = TARGET, pin = [], set = {}, roster = 'classic', force = [], setup = null, twist = 'on' } = {}) {
+export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = null, pin = [], set = {}, roster = 'classic', force = [], setup = null, twist = 'on' } = {}) {
   if (!Number.isInteger(Number(seats)) || Number(seats) < 2 || Number(seats) > 4) throw new Error('seats must be 2 to 4');
   const s = samples === null ? null : Number(samples);
-  const bots = [a, b, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s));
+  const bots = [a, b, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s, Number(seats)));
   return {
-    name, seed: String(seed), samples: s, target: Number(target), pin: checkPin([...pin]), set: { ...set }, bots,
+    name, seed: String(seed), samples: s, target: Number(target ?? targetFor(Number(seats))), targetGiven: target !== null, pin: checkPin([...pin]), set: { ...set }, bots,
     roster: checkRoster(roster), force: checkForce([...force]), setup: checkSetup(setup ?? null), twist: checkTwist(twist),
   };
 }
@@ -76,30 +76,41 @@ export function setupOf(config) {
  */
 export function applyVariant(config, key, value) {
   const next = { ...config, pin: [...config.pin], set: { ...config.set }, bots: config.bots.map((x) => ({ ...x })), force: [...config.force] };
-  if (key === 'a') next.bots[0] = rivalBot(value, config.samples);
-  else if (key === 'b') next.bots[1] = rivalBot(value, config.samples);
+  if (key === 'a') next.bots[0] = rivalBot(value, config.samples, next.bots.length);
+  else if (key === 'b') next.bots[1] = rivalBot(value, config.samples, next.bots.length);
   else if (key === 'c' || key === 'd') {
     const i = key === 'c' ? 2 : 3;
     if (i >= next.bots.length) throw new Error(`--${key} needs at least ${i + 1} seats`);
-    next.bots[i] = rivalBot(value, config.samples);
+    next.bots[i] = rivalBot(value, config.samples, next.bots.length);
   } else if (key === 'seats') {
     const n = Number(value);
     if (!Number.isInteger(n) || n < 2 || n > 4) throw new Error('seats must be 2 to 4');
-    while (next.bots.length < n) next.bots.push(rivalBot('heron', config.samples));
+    while (next.bots.length < n) next.bots.push(rivalBot('heron', config.samples, n));
     next.bots.length = n;
+    if (config.samples === null) next.bots = next.bots.map((x) => rivalBot(x.id, null, n));
+    if (!next.targetGiven) next.target = targetFor(n);
   }
   else if (key === 'samples') {
     next.samples = Number(value);
     next.bots = next.bots.map((x) => ({ ...x, samples: next.samples }));
   }
-  else if (key === 'target') next.target = Number(value);
+  else if (key === 'target') { next.target = Number(value); next.targetGiven = true; }
   else if (key === 'pin') next.pin = checkPin([...next.pin, value]);
   else if (key === 'roster') next.roster = checkRoster(value);
   else if (key === 'with') next.force = checkForce([...next.force, value]);
   else if (key === 'setup') next.setup = checkSetup(value);
   else if (key === 'twist') next.twist = checkTwist(value);
-  else next.set[key] = coerce(value);
+  else next.set[key] = checkChoice(key, coerce(value));
   return next;
+}
+
+/** Settings that take one of a few words, and the words they take. */
+const CHOICES = { 'rules.blackmailer': () => Object.keys(BLACKMAILER_COPY) };
+/** `value` for settings path `path`, or an error if the path takes a word and this isn't one of them. */
+function checkChoice(path, value) {
+  const choices = CHOICES[path]?.();
+  if (choices && !choices.includes(value)) throw new Error(`${path} must be one of ${choices.join(', ')}, got ${value}`);
+  return value;
 }
 
 /**
@@ -130,6 +141,7 @@ export function withPatches(set, fn) {
       const field = path.slice(dot + 1);
       const entry = (Object.hasOwn(targets, prefix) ? targets[prefix] : null);
       if (!entry || !entry.family.some((o) => Object.hasOwn(o, field))) throw new Error(`unknown sim setting: ${path}`);
+      checkChoice(path, value);
       const { obj } = entry;
       undo.push([obj, field, Object.hasOwn(obj, field), obj[field]]);
       obj[field] = value;

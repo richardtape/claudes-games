@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
-import { DECK, MAX_HAND, RULES, START_HAND, TURNS } from '../js/data.js';
+import { DECK, MAX_HAND, RULES, START_HAND, TARGET, TARGETS, TURNS } from '../js/data.js';
 
 const uidOf = (s, seat, kind) => Object.values(s.round.cards).find((c) => c.origin === seat && c.id0 === kind).uid;
 /** Make sure `seat` holds `kind` (pulling it from the deck if needed) and return its uid. */
@@ -366,4 +366,10 @@ test('a Getaway in Havana can pull a defected rival agent into your hand (a turn
   const turned = s.round.hands[0].map((u) => s.round.cards[u]).find((c) => c.origin === 1);
   assert.ok(turned, 'a rival-origin agent is in seat 0’s hand');
   assert.equal(turned.owner, 0);
+});
+
+test('the default target follows the seat count; two players stay at 10', () => {
+  assert.deepEqual([E.newMatch({ seats: 2 }).target, E.newMatch({ seats: 3 }).target, E.newMatch({ seats: 4 }).target], [TARGET, TARGETS[3], TARGETS[4]]);
+  assert.equal(TARGETS[2], 10);
+  assert.equal(E.newMatch({ seats: 3, target: 5 }).target, 5);
 });

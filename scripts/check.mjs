@@ -13,7 +13,8 @@
 //   3. calls window.__game.prepareThumbnail() if present, audits the DOM (nested buttons,
 //      unlabeled buttons, overflow), then writes games/<slug>/thumb.jpg,
 //   4. runs games/<slug>/smoke.mjs if present: export default async (page, ctx) => {...}
-//      where ctx = { base, url, outDir, log(msg), shot(name), audit(label) },
+//      where ctx = { base, url, outDir, log(msg), shot(name, p = page), audit(label, p = page) }
+//      (pass `p` to shoot or audit a tab the smoke opened itself, in page.context()),
 //   5. reloads at phone size (390x844, touch) and warns on horizontal overflow,
 //      (on the start screen and again after prepareThumbnail()), saving
 //      .tmp/check/<slug>-desktop.png, -mobile-start.png and -mobile.png for visual review,
@@ -22,7 +23,14 @@
 //   7. for multiplayer games, runs smoke.mjs's `duo` export with two pages in one browser
 //      (export async function duo([pageA, pageB], ctx); ctx.shot(name, page), ctx.audit(label,
 //      page)). Pages in one context share BroadcastChannel, so games join with ?net=local and
-//      never touch the public relays (.tmp/check/<slug>-duo-NN-<name>.png).
+//      never touch the public relays (.tmp/check/<slug>-duo-NN-<name>.png),
+//   8. for games of three players and more, runs smoke.mjs's `table` export with
+//      `tablePages.local` pages (default 3) in one browser context, joined the same way:
+//      export const tablePages = { local, live } and export async function table(pages, ctx), with
+//      ctx = { base, url, outDir, log(msg), shot(name, p = pages[0]), audit(label, p = pages[0]) }
+//      (.tmp/check/<slug>-table-NN-<name>.png). Every page in that context is watched for errors,
+//      tabs the smoke opens itself included; a throw screenshots each open page
+//      (<slug>-table-fail-N.png). scripts/verify-live.mjs runs it again on the live site.
 // Then rebuilds games.js. Exits 1 if anything errored.
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
@@ -191,9 +199,10 @@ async function checkGame(game) {
         outDir,
         log: (m) => console.log(`    · ${m}`),
         // Save a screenshot of the current state for visual review: .tmp/check/<slug>-NN-<name>.png
-        shot: (name) => page.screenshot({ path: join(outDir, `${game.slug}-${String(++shots).padStart(2, '0')}-${name}.png`) }),
-        // Run the DOM audit on the current screen; findings are reported as warnings.
-        audit: async (label) => (await audit(page)).forEach((f) => report(game.slug, 'warn', `${label}: ${f}`)),
+        // (of `p`, another tab of this context, if given).
+        shot: (name, p = page) => p.screenshot({ path: join(outDir, `${game.slug}-${String(++shots).padStart(2, '0')}-${name}.png`) }),
+        // Run the DOM audit on the current screen (of `p`, if given); findings are reported as warnings.
+        audit: async (label, p = page) => (await audit(p)).forEach((f) => report(game.slug, 'warn', `${label}: ${f}`)),
       });
       report(game.slug, 'ok', 'smoke.mjs passed');
     } catch (e) {
@@ -238,8 +247,8 @@ async function checkGame(game) {
         outDir,
         phone: true,
         log: (m) => console.log(`    · phone: ${m}`),
-        shot: (name) => mpage.screenshot({ path: join(outDir, `${game.slug}-phone-${String(++shots).padStart(2, '0')}-${name}.png`) }),
-        audit: async (label) => (await audit(mpage)).forEach((f) => report(game.slug, 'warn', `phone ${label}: ${f}`)),
+        shot: (name, p = mpage) => p.screenshot({ path: join(outDir, `${game.slug}-phone-${String(++shots).padStart(2, '0')}-${name}.png`) }),
+        audit: async (label, p = mpage) => (await audit(p)).forEach((f) => report(game.slug, 'warn', `phone ${label}: ${f}`)),
       });
       report(game.slug, 'ok', 'smoke.mjs passed at phone size');
     } catch (e) {
@@ -277,7 +286,37 @@ async function checkGame(game) {
     }
   }
 
-  const all = [...new Set([...problems, ...mproblems, ...dproblems.flat()])];
+  // A table of three players or more, for games that seat them (smoke.mjs exports `table`).
+  const tproblems = [];
+  if (existsSync(smokePath)) {
+    const { table, tablePages } = await import(pathToFileURL(smokePath).href + `?t=${Date.now()}`);
+    if (typeof table === 'function') {
+      const tctx = await browser.newContext({ viewport: { width: 1100, height: 760 } });
+      await tctx.addInitScript(AUDIT_INIT);
+      // Every page of the context, the ones the smoke opens itself (a player coming back) included.
+      tctx.on('page', (p) => tproblems.push(watch(p, game.slug)));
+      const pages = [];
+      for (let i = 0; i < (tablePages?.local ?? 3); i++) pages.push(await tctx.newPage());
+      let shots = 0;
+      try {
+        await table(pages, {
+          base,
+          url,
+          outDir,
+          log: (m) => console.log(`    · table: ${m}`),
+          shot: (name, p = pages[0]) => p.screenshot({ path: join(outDir, `${game.slug}-table-${String(++shots).padStart(2, '0')}-${name}.png`) }),
+          audit: async (label, p = pages[0]) => (await audit(p)).forEach((f) => report(game.slug, 'warn', `table ${label}: ${f}`)),
+        });
+        report(game.slug, 'ok', `table pass (${pages.length} pages) passed`);
+      } catch (e) {
+        report(game.slug, 'error', `table failed: ${e.message.split('\n')[0]}`);
+        await Promise.all(tctx.pages().map((p, i) => p.screenshot({ path: join(outDir, `${game.slug}-table-fail-${i}.png`) }).catch(() => {})));
+      }
+      await tctx.close();
+    }
+  }
+
+  const all = [...new Set([...problems, ...mproblems, ...dproblems.flat(), ...tproblems.flat()])];
   if (all.length) all.forEach((p) => report(game.slug, 'error', p));
   else report(game.slug, 'ok', 'no console errors or failed requests');
 }
