@@ -57,3 +57,11 @@ test('cues: spy chord, short victory and defeat, bossa clave in the lobby', () =
   assert.deepEqual(rim, [0, 3, 6, 10, 13]);
   assert.ok([...Array(16).keys()].some((s) => titleNotes(0, s, () => 0.99).length));
 });
+
+test('flourishes for the nine new cities, ready before the cities exist', () => {
+  for (const id of ['reykjavik', 'casablanca', 'rome', 'tokyo', 'zurich', 'macau', 'glienicke', 'prague', 'geneva']) {
+    assert.ok(FLOURISH[id], id);
+    const notes = phraseNotes(FLOURISH[id]);
+    assert.ok(notes.length >= 3 && end(notes) <= 1.2, `${id}: ${end(notes)} s`);
+  }
+});

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createTable, attachBot, hostSession, guestSession, restoreTable, canRestore, PROTOCOL } from '../js/session.js';
 import { createMemoryPair } from '../../../shared/net.js';
-import { RIVALS } from '../js/data.js';
+import { RIVALS, DECK, TWISTS } from '../js/data.js';
+import { CLASSIC_SETUP, MIXED_ALL, ladderSetup } from '../js/roster.js';
 import { createRng } from '../../../shared/rng.js';
 import * as E from '../js/engine.js';
+import { give } from './helpers.mjs';
 
 const until = async (cond, ms = 4000) => {
   const t0 = Date.now();
@@ -14,6 +16,7 @@ const until = async (cond, ms = 4000) => {
     await new Promise((r) => setTimeout(r, 2));
   }
 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test('host and guest play a turn over the network; the guest sees only its own view', async () => {
   const { a, b, connect } = createMemoryPair();
@@ -142,9 +145,12 @@ test('bye settles within 400 ms even if the send never settles', async () => {
   const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send: () => new Promise(() => {}), leave() {} };
   const host = hostSession({ room, table });
   room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: 't' }, 'g');
-  const t0 = Date.now();
-  await host.bye();
-  assert.ok(Date.now() - t0 < 700);
+  // Raced against a 1000 ms timer rather than the wall clock: timers fire in the order they fall due,
+  // so a loaded machine delays both and bye's 400 ms timer still goes first.
+  let late;
+  const first = await Promise.race([host.bye().then(() => 'bye'), new Promise((r) => (late = setTimeout(r, 1000, 'late')))]);
+  clearTimeout(late);
+  assert.equal(first, 'bye');
 });
 
 test('bye resolves at once, sending nothing, when there is no peer left to tell', async () => {
@@ -248,13 +254,57 @@ test('an action from a seat outside the table changes nothing', () => {
   }
 });
 
-test('protocol 2: a version-1 guest is turned away with the version message', () => {
-  assert.equal(PROTOCOL, 2);
+test('protocol 3: a 2b-i guest is turned away with the version message', () => {
+  assert.equal(PROTOCOL, 3);
   const sent = [];
   const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send(t, d, id) { sent.push([t, d, id]); }, leave() {} };
   hostSession({ room, table: createTable({ seed: 1 }) });
-  room.handlers.hello({ v: 1, name: 'Agent Fox', token: '0123456789abcdef' }, 'g');
+  room.handlers.hello({ v: 2, name: 'Agent Fox', token: '0123456789abcdef' }, 'g');
   assert.deepEqual(sent, [['nope', { why: 'version' }, 'g']]);
+});
+
+test('tables carry their setup through saves, restarts and rematches', () => {
+  const t = createTable({ setup: MIXED_ALL });
+  assert.match(t.state.seed, /^[0-9a-f]{16}$/);
+  assert.equal(t.state.roster.length, 12);
+  const copy = restoreTable(JSON.parse(JSON.stringify(t.toJSON())));
+  assert.deepEqual([copy.setup, copy.state.roster], [MIXED_ALL, t.state.roster]);
+  const id = t.matchId;
+  t.restart(CLASSIC_SETUP);
+  assert.deepEqual([t.state.roster, t.matchId !== id], [DECK, true]);
+  const r = createTable({ setup: ladderSetup('heron') });
+  r.state.phase = 'match-over';
+  r.act(0, { a: 'rematch' });
+  r.act(1, { a: 'rematch' });
+  assert.deepEqual([r.state.twist, r.state.roster.includes('bodyguard')], [{ ...TWISTS.heron, seat: 1 }, true]);
+});
+
+test('a 2b-i save restores as Classic; a restart keeps listeners and tells them', () => {
+  const v2 = JSON.parse(readFileSync(new URL('./golden/v2-table.json', import.meta.url), 'utf8'));
+  assert.equal('setup' in v2, false);
+  assert.equal(restoreTable(v2).setup, CLASSIC_SETUP);
+  const t = createTable({ seed: 'lobby' });
+  let heard = 0;
+  t.onChange(() => heard++);
+  const seed = t.state.seed;
+  t.restart(MIXED_ALL);
+  assert.deepEqual([heard, t.setup, t.state.seed !== seed, t.state.roster.length], [1, MIXED_ALL, true, 12]);
+  assert.deepEqual(t.toJSON().setup, MIXED_ALL);
+});
+
+test('a lock action passes a partner and a face to the engine, and nothing else', () => {
+  const t = createTable({ seed: 12, setup: { ...MIXED_ALL, must: ['accomplice'] }, cities: ['casablanca', 'berlin', 'monaco'] });
+  const S = t.state;
+  const acc = give(S, 0, 'accomplice');
+  const mate = give(S, 0, 'heavy', { keep: [acc] });
+  assert.ok(t.act(0, { a: 'lock', uid: acc, city: 0, partner: mate, down: true, faceDown: false, power: 9 }));
+  assert.deepEqual(S.round.plans[0], { uid: acc, city: 0, down: true, partner: mate });
+  assert.ok(t.act(0, { a: 'unlock' }));
+  assert.ok(t.act(0, { a: 'lock', uid: acc, city: 0, partner: 7, down: 'yes' }), 'a partner that is not a string and a face that is not a boolean are left out');
+  assert.deepEqual(S.round.plans[0], { uid: acc, city: 0, down: false });
+  assert.ok(t.act(0, { a: 'unlock' }));
+  assert.ok(t.act(0, { a: 'lock', uid: acc, city: 1, partner: mate }));
+  assert.deepEqual(S.round.plans[0], { uid: acc, city: 1, partner: mate });
 });
 
 test('saves: only a v2 table restores; a Phase 1 save is refused', () => {
@@ -295,4 +345,60 @@ test('a three-seat table: one seat escalates and the computer rivals answer', as
   bots.forEach((b) => b.stop());
   assert.equal(t.state.round.called.by, 0);
   assert.ok(t.state.round.called.answers.every((a, s) => (s === 0 ? a === null : ['on', 'fold'].includes(a))));
+});
+
+/** Record every seat's lock as it's made (a turn that resolves at once resets the plans before any listener could read them). */
+function lockLog(t) {
+  const order = [];
+  const act = t.act;
+  t.act = (seat, a) => (a?.a === 'lock' && order.push(seat), act(seat, a));
+  return order;
+}
+const tapTable = (seed) => createTable({ seed, setup: { ...CLASSIC_SETUP, twist: { id: 'tap', from: 1 } } }); // seat 1 taps seat 0 every turn
+
+test('a wiretapping bot waits for its mark, but never for ever', async () => {
+  const t = tapTable(8);
+  const order = lockLog(t);
+  const bot = attachBot(t, 1, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(1), tapWait: 2000 });
+  await sleep(120);
+  assert.deepEqual(order, [], 'waiting for seat 0');
+  t.act(0, { a: 'lock', ...t.view(0).round.legal[0] });
+  await until(() => t.state.round.turn === 2, 3000);
+  assert.deepEqual(order.slice(0, 2), [0, 1]);
+  bot.stop();
+  const lone = tapTable(9);
+  const b2 = attachBot(lone, 1, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(2), tapWait: 200 });
+  await until(() => !!lone.state.round.plans[1], 2000);
+  b2.stop();
+});
+
+test('two seats tapping each other never wait for each other', async () => {
+  const t = tapTable(10);
+  t.state.round.taps.push({ by: 0, on: 1, turn: 1 }); // seat 0 holds a Wiretap on seat 1 this turn
+  const order = lockLog(t);
+  // Each would wait a minute for the other: turn 1 resolving within 5 s means neither waited.
+  const bots = [0, 1].map((seat) => attachBot(t, seat, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(seat), tapWait: 60000 }));
+  try {
+    await until(() => t.state.round.turn === 2, 5000);
+  } finally {
+    bots.forEach((b) => b.stop());
+  }
+  assert.deepEqual(order.slice(0, 2).sort(), [0, 1], 'both seats locked turn 1');
+});
+
+test('a wiretapping bot stops waiting for its mark to answer an escalation it owes', async () => {
+  const t = createTable({ seed: 11 });
+  t.state.round.taps.push({ by: 1, on: 0, turn: 1 }); // seat 1 holds a Wiretap on seat 0 this turn
+  // It would wait a minute for seat 0's lock: an answer within 5 s means the escalation ended the wait.
+  const bot = attachBot(t, 1, { ...RIVALS[0], samples: 2 }, { pace: 0, rng: createRng(3), tapWait: 60000 });
+  try {
+    await sleep(200);
+    assert.ok(!t.state.round.plans[1], 'still waiting for seat 0 to lock');
+    assert.ok(t.act(0, { a: 'escalate' }));
+    await until(() => !!t.state.round.called, 5000); // settled by seat 1's answer, play on or fold
+    assert.equal(t.state.round.pending, null);
+    assert.ok(['on', 'fold'].includes(t.state.round.called.answers[1]));
+  } finally {
+    bot.stop();
+  }
 });

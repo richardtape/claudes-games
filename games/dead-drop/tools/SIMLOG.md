@@ -612,3 +612,237 @@ Agents at 8 samples (win% when played): Heavy 50.8 ±1.4, Sleeper 51.0 ±1.5, Ve
 | Other | pot taken 2.06, 0.59 tokens spent per player, 0.4% rounds begin with a seat out, 3.96 points per round |
 
 - Decision: informative only. Matches are short (3.5 rounds, less than half of B10's) and the half-time leader wins 43.9%, so at four seats the pace, not the stakes, is what Phase 3 will have to retune (target 7 with 4 points a round). Seats are fair.
+
+## 2026-10-19 · B27 Phase 2b-ii timing run, Mixed rosters at 8 samples (Task 11 Step 1)
+- Question: How fast does the Mixed-roster screen run at 8 samples on this machine today? Under half of 2b-i's 8-sample speed (97 rounds/s, B6) would mean a hot-path problem (`candidates`, a new city branch) to find before the long runs.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-time --roster mixed --samples 8 --rounds 1000 --workers 4`, commit a22ae11, seed dd, Heron x Heron at 8 samples, 1,023 rounds / 180 matches (0 capped), 65 rounds/s (15.7 s, 4 workers), load 1.8 before, 2.7 after. No resume.
+- Numbers (a first look only; B28 is the measured run): 5.7 ±0.27 rounds per match, seat 0 wins 52.8% ±7.3 of matches, escalation 50.5% ±3.1, escalator won 69.2% ±4.0, answers were folds 34.6% ±4.1, won at stake 2 or more 40.8% ±3.0, reel wins 18.9% ±5.7, points per round 2.65 ±0.09.
+- Decision: 65 rounds/s is two thirds of 97 (above half), so no hot-path hunt: the Mixed rosters' extra candidates (partners, Casablanca's face-down choice) cost about what Task 9 measured. The 20,000-round screen should take about 5 minutes.
+
+## 2026-10-19 · B28 The Mixed screen, 20,000 rounds at 8 samples (Task 11 Step 2)
+- Question: With all 20 agents and 20 cities in play (Mixed rosters: 12 of 20 agents a match, always the Heavy and a takedown; all 20 cities in the pool), which agents fall outside 44-56% win when played and which cities outside 55-80% "winner took the round"? Those are the outliers to probe (spec 2.8's screen).
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-screen --roster mixed --samples 8 --rounds 20000 --workers 4 --out games/dead-drop/tools/baselines/phase2b2-screen.json`, commit a22ae11, seed dd, Heron x Heron at 8 samples, 20,029 rounds / 3,620 matches (0 capped), 88 rounds/s (228.9 s, 4 workers), load 2.8 before, 5.6 after. No resume.
+- Numbers (95% margins; "in roster" is the rounds dealt with the agent in the match's roster):
+
+| Agent | in roster | played | win% when played | win% when not | 44-56? |
+|---|---|---|---|---|---|
+| Heavy | 20029 | 19868 | 52.7 ±0.7 | 39.1 ±1.0 | yes |
+| Sleeper | 11405 | 10119 | 52.0 ±1.0 | 43.3 ±1.2 | yes |
+| Veteran | 11401 | 9269 | 48.7 ±1.0 | 48.5 ±1.2 | yes |
+| Double Agent | 11621 | 8902 | 48.6 ±1.0 | 48.7 ±1.1 | yes |
+| Jammer | 11396 | 9950 | 50.7 ±1.0 | 45.0 ±1.2 | yes |
+| Handler | 11669 | 8914 | 48.0 ±1.0 | 49.1 ±1.1 | yes |
+| Mole | 11334 | 9305 | 49.0 ±1.0 | 47.8 ±1.2 | yes |
+| Getaway | 11177 | 6721 | 46.2 ±1.2 | 50.0 ±1.0 | yes |
+| Lookout | 11270 | 6290 | 46.8 ±1.2 | 49.5 ±1.0 | yes |
+| Assassin | 13683 | 11100 | 48.6 ±0.9 | 48.6 ±1.1 | yes |
+| Tripwire | 14065 | 9990 | 49.1 ±1.0 | 48.0 ±1.0 | yes |
+| Impostor | 11279 | 7895 | 47.2 ±1.1 | 49.8 ±1.1 | yes |
+| Wiretap | 11557 | 5831 | 46.4 ±1.3 | 49.7 ±1.0 | yes |
+| Interrogator | 11267 | 7404 | 46.9 ±1.1 | 50.0 ±1.1 | yes |
+| Bodyguard | 11167 | 7723 | 46.4 ±1.1 | 50.7 ±1.1 | yes |
+| Accomplice | 11625 | 10091 | 49.4 ±1.0 | 47.3 ±1.2 | yes |
+| Turncoat | 11502 | 8636 | 48.4 ±1.1 | 48.8 ±1.1 | yes |
+| Courier | 11412 | 8369 | 45.9 ±1.1 | 51.1 ±1.1 | yes |
+| Blackmailer | 10133 | 6607 | 47.1 ±1.2 | 49.9 ±1.1 | yes |
+| Decoy | 11356 | 5093 | 46.0 ±1.4 | 49.7 ±0.9 | yes |
+
+| City | rounds | decided | winner took round | 55-80? |
+|---|---|---|---|---|
+| Lisbon | 2278 | 80.9 ±1.6 | 76.7 ±1.9 | yes |
+| Vienna | 2161 | 87.6 ±1.4 | 69.7 ±2.1 | yes |
+| Istanbul | 2037 | 92.4 ±1.2 | 67.1 ±2.1 | yes |
+| Berlin | 2121 | 85.6 ±1.5 | 66.5 ±2.2 | yes |
+| Havana | 2099 | 86.9 ±1.4 | 63.0 ±2.2 | yes |
+| Monaco | 2063 | 89.6 ±1.3 | 64.8 ±2.2 | yes |
+| Hong Kong | 2067 | 88.2 ±1.4 | 63.5 ±2.2 | yes |
+| Helsinki | 2040 | 79.3 ±1.8 | 69.0 ±2.3 | yes |
+| Moscow | 2109 | 89.9 ±1.3 | 63.4 ±2.2 | yes |
+| Venice | 2081 | 81.5 ±1.7 | 67.8 ±2.2 | yes |
+| Tangier | 2246 | 71.5 ±1.9 | 69.1 ±2.3 | yes |
+| Reykjavik | 2189 | 93.4 ±1.0 | 68.0 ±2.0 | yes |
+| Casablanca | 2256 | 87.3 ±1.4 | 69.6 ±2.0 | yes |
+| Rome | 2172 | 91.0 ±1.2 | 69.1 ±2.0 | yes |
+| Tokyo | 2163 | 92.1 ±1.1 | 65.5 ±2.1 | yes |
+| Zurich | 2210 | 87.6 ±1.4 | 71.3 ±2.0 | yes |
+| Macau | 2097 | 89.6 ±1.3 | 62.3 ±2.2 | yes |
+| Glienicke Bridge | 2087 | 87.4 ±1.4 | 65.1 ±2.2 | yes |
+| Prague | 2111 | 87.7 ±1.4 | 62.7 ±2.2 | yes |
+| Geneva | 2154 | 95.6 ±0.9 | 67.3 ±2.0 | yes |
+
+  Seat 0 wins 51.1% ±1.6 of matches (band 45-55: yes) and 50.2% ±0.8 of decided rounds; A wins 49.0% ±1.6.
+
+  Stake rates, report only (this run is at 8 samples, B23 at 24, and B2 showed cheap bots play a more timid stake game, so these are not like for like; Step 5 compares at the bots' own samples):
+
+| Rate | B28 Mixed, 8 samples | B23 Classic, 24 samples (2b-i final) |
+|---|---|---|
+| Escalation | 49.7 ±0.7 | 49.4 ±0.7 |
+| Won at stake 2 or more (`maxStake`) | 41.5 ±0.7 | 30.2 ±0.6 |
+| Escalator won | 68.6 ±0.9 | 66.0 ±0.9 |
+| Answered with a fold | 34.0 ±0.9 | 27.2 ±0.9 |
+| Rounds per match | 5.53 ±0.06 | 5.92 ±0.06 |
+| Reel wins | 17.4 ±1.2 | 22.3 ±1.4 |
+| `reelComeback` | 92.6 ±2.0 | 89.1 ±2.2 |
+| Half-time leader wins | 61.4 ±1.7 | 57.2 ±1.8 |
+| Points per round | 2.69 ±0.02 | 2.38 ±0.02 |
+| Folds / dead heats / tie-breaks | 28.9 / 2.1 / 15.1 | 24.0 / 3.2 / 18.5 |
+| Tokens spent per player per match | 1.37 | 1.46 |
+| Bluffs | 106 | 116 |
+
+- Outliers: none. Every agent's win% when played is inside 44-56 (Courier 45.9 ±1.1 to Heavy 52.7 ±0.7; the closest to an edge are Courier 45.9, Decoy 46.0, Getaway 46.2, Wiretap and Bodyguard 46.4), and every city's "winner took the round" inside 55-80 (Macau 62.3 ±2.2 to Lisbon 76.7 ±1.9). Of the new content, the Accomplice (49.4) reads strongest and the Courier and Decoy weakest; of the new cities, Zurich (71.3) is the most decisive and Macau and Prague (about 62-63) the least.
+- Other: the Blackmailer is in fewer roster rounds than its neighbours (10,133 against about 11,400 for an untargeted agent), but not in fewer rosters: replaying only the roster draws of these 3,620 matches (`matchOptions` on the seeds `dd:<index>:setup`, no play; the roster section of `tools/points-by-roster.mjs --from games/dead-drop/tools/baselines/phase2b2-screen.json`, B30) puts it in 2,035 of them, like any untargeted agent (2,014 to 2,097; the Assassin 2,467 and the Tripwire 2,537 gain from the takedown redraw). So matches holding a Blackmailer are shorter: 4.98 rounds against 6.24 without it (every other agent's matches run 5.48 to 5.63 rounds). Its free escalation (a doubled stake, no fold in answer) pays more points a round; B30 measures it at the bots' own samples (Risk 1). Agents played least: the Decoy (5,093) and the Wiretap (5,831).
+- Decision: no outliers, so Step 3 has nothing to probe and no roster constraint is needed (nothing traces to roster composition). `data.js` keeps the spec's powers and city knobs; Step 5 confirms them at the bots' own samples.
+
+## 2026-10-19 · B29 The Mixed confirm, 20,000 rounds at the bots' own samples (Task 11 Step 5)
+- Question: With the spec's powers and city knobs unchanged (B28 found no outliers), is every agent inside 44-56% win when played, every city inside 55-80% "winner took the round", and seat 0 inside 45-55%, with Heron x Heron at its own 24 samples on Mixed rosters? Near-miss rule (the brief): a row outside its band by less than its margin is logged and accepted.
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-final --roster mixed --rounds 20000 --workers 4 --out games/dead-drop/tools/baselines/phase2b2-final.json`, commit a22ae11, seed dd, Heron x Heron at 24 samples, 20,098 rounds / 3,940 matches (0 capped), 30 rounds/s (674.6 s, 4 workers), load 5.6 before, 8.5 after. No resume.
+- Numbers (95% margins):
+
+| Agent | in roster | played | win% when played | win% when not | 44-56? |
+|---|---|---|---|---|---|
+| Heavy | 20098 | 22859 | 51.8 ±0.6 | 39.3 ±1.0 | yes |
+| Sleeper | 11292 | 11655 | 50.9 ±0.9 | 43.7 ±1.2 | yes |
+| Veteran | 11397 | 10624 | 48.3 ±1.0 | 48.5 ±1.1 | yes |
+| Double Agent | 11552 | 9625 | 48.5 ±1.0 | 48.0 ±1.1 | yes |
+| Jammer | 11403 | 11495 | 50.6 ±0.9 | 44.1 ±1.2 | yes |
+| Handler | 11738 | 10237 | 48.3 ±1.0 | 48.8 ±1.1 | yes |
+| Mole | 11248 | 10695 | 48.6 ±0.9 | 48.1 ±1.2 | yes |
+| Getaway | 11277 | 7317 | 47.0 ±1.1 | 49.2 ±1.0 | yes |
+| Lookout | 11289 | 6597 | 46.7 ±1.2 | 49.2 ±0.9 | yes |
+| Assassin | 13623 | 12498 | 47.7 ±0.9 | 49.4 ±1.0 | yes |
+| Tripwire | 14165 | 11614 | 49.0 ±0.9 | 47.7 ±0.9 | yes |
+| Impostor | 11312 | 8534 | 46.2 ±1.1 | 50.1 ±1.0 | yes |
+| Wiretap | 11607 | 5869 | 46.0 ±1.3 | 49.3 ±0.9 | yes |
+| Interrogator | 11424 | 7909 | 46.6 ±1.1 | 49.7 ±1.0 | yes |
+| Bodyguard | 11424 | 8784 | 46.8 ±1.0 | 49.5 ±1.0 | yes |
+| Accomplice | 11571 | 11458 | 49.1 ±0.9 | 47.2 ±1.2 | yes |
+| Turncoat | 11508 | 9979 | 47.9 ±1.0 | 48.7 ±1.1 | yes |
+| Courier | 11503 | 9522 | 45.9 ±1.0 | 50.7 ±1.0 | yes |
+| Blackmailer | 10284 | 7122 | 46.7 ±1.2 | 49.4 ±1.0 | yes |
+| Decoy | 11461 | 4862 | 47.8 ±1.4 | 48.5 ±0.8 | yes |
+
+  ("played" counts each seat's drop, so the Heavy, in every roster and dropped by both players, is played more often than it is in a roster.)
+
+| City | rounds | decided | winner took round | 55-80? |
+|---|---|---|---|---|
+| Lisbon | 2528 | 77.1 ±1.6 | 75.0 ±1.9 | yes |
+| Vienna | 2523 | 86.9 ±1.3 | 69.8 ±1.9 | yes |
+| Istanbul | 2215 | 91.2 ±1.2 | 66.0 ±2.1 | yes |
+| Berlin | 2365 | 83.7 ±1.5 | 66.3 ±2.1 | yes |
+| Havana | 2396 | 86.4 ±1.4 | 63.5 ±2.1 | yes |
+| Monaco | 2320 | 89.0 ±1.3 | 65.0 ±2.1 | yes |
+| Hong Kong | 2315 | 88.6 ±1.3 | 63.8 ±2.1 | yes |
+| Helsinki | 2258 | 81.3 ±1.6 | 72.0 ±2.1 | yes |
+| Moscow | 2414 | 87.5 ±1.3 | 65.2 ±2.0 | yes |
+| Venice | 2277 | 82.0 ±1.6 | 68.9 ±2.1 | yes |
+| Tangier | 2426 | 71.4 ±1.8 | 68.2 ±2.2 | yes |
+| Reykjavik | 2325 | 93.9 ±1.0 | 64.5 ±2.0 | yes |
+| Casablanca | 2571 | 86.5 ±1.3 | 68.5 ±1.9 | yes |
+| Rome | 2425 | 88.3 ±1.3 | 67.2 ±2.0 | yes |
+| Tokyo | 2466 | 93.1 ±1.0 | 66.7 ±1.9 | yes |
+| Zurich | 2453 | 88.4 ±1.3 | 70.9 ±1.9 | yes |
+| Macau | 2342 | 87.8 ±1.3 | 62.2 ±2.1 | yes |
+| Glienicke Bridge | 2311 | 86.1 ±1.4 | 63.0 ±2.1 | yes |
+| Prague | 2288 | 87.8 ±1.3 | 61.8 ±2.1 | yes |
+| Geneva | 2356 | 95.2 ±0.9 | 65.3 ±2.0 | yes |
+
+  Seat 0 wins 49.8% ±1.6 of matches (band 45-55: yes) and 50.2% ±0.8 of decided rounds; A wins 51.3% ±1.6.
+
+  Stake rates beside 2b-i's (report only: the stake settings are 2b-i's and are not retuned here; bands from spec 2.8):
+
+| Rate | 2b-i band | B29 Mixed | B23 Classic (2b-i final) |
+|---|---|---|---|
+| Escalation | 35-60 | 49.7 ±0.7 | 49.4 ±0.7 |
+| Won at stake 2 or more (`maxStake`) | <= 40 | **46.5** ±0.7 | 30.2 ±0.6 |
+| Escalator won | 55-65 | 64.9 ±0.9 | 66.0 ±0.9 |
+| Answered with a fold | 25-35 | **23.7** ±0.8 | 27.2 ±0.9 |
+| Rounds per match | 5-7 | 5.10 ±0.05 | 5.92 ±0.06 |
+| Reel wins | 5-25 | 19.5 ±1.2 | 22.3 ±1.4 |
+| `reelComeback` | report | 91.9 ±1.9 | 89.1 ±2.2 |
+| Half-time leader wins | report | 60.2 ±1.7 | 57.2 ±1.8 |
+| Points per round | report | 2.86 ±0.02 | 2.38 ±0.02 |
+| Folds / dead heats / tie-breaks | report | 21.1 / 2.7 / 17.7 | 24.0 / 3.2 / 18.5 |
+| Tokens spent per player per match | report | 1.27 | 1.46 |
+| Film city's holder took the round | report | 69.0 ±0.8 | 69.0 ±0.8 |
+| Bluffs | report | 122 | 116 |
+
+  Escalation, Escalator won, Answered with a fold and Bluffs count token escalations only: the Blackmailer's free escalation is not in the sim's `escalations` (its doubled stake does count in `maxStake` and in points), so Mixed's 49.7 against Classic's 49.4 is not like for like.
+
+- Findings: every agent, every city and seat 0 are in band, none near an edge by less than its margin (closest: the Courier at 45.9 ±1.0 and the Wiretap at 46.0 ±1.3, both about 2 points inside 44; Lisbon at 75.0, 5 points inside 80). Against the 8-sample screen (B28), pair by pair (|diff| > the combined margin), only Reykjavik moved (68.0 to 64.5, -3.5 against 2.9); every agent and the other 19 cities carried over, as B2 found. The stake game runs hotter on Mixed than Classic: rounds won at stake 2 or more 46.5% (over 2b-i's 40% bar), folds in answer 23.7% (under its 25%), matches 0.8 rounds shorter and 0.48 more points a round. The Blackmailer explains most of it: replaying the roster draws of these 3,940 matches (`tools/points-by-roster.mjs`, B30) puts it in 2,212, whose matches run 4.65 rounds against 5.68 without it (every other agent's matches: 5.08, the Impostor, to 5.18, the Jammer). Its free escalation doubles the stake without a token and without a fold in answer, so it adds stake-2 rounds and takes answers out of the fold count.
+- Decision: no retune of agents or cities: the spec's powers and knobs stand (`data.js` unchanged by Steps 3-5). The Mixed stake overshoot (`maxStake` 46.5, folds in answer 23.7, and matches holding a Blackmailer at 4.65 rounds) is outside this task's bands and knobs (the stakes are 2b-i's, report only), so it goes to the coordinator, with the Risk 1 numbers in B30.
+
+## 2026-10-19 · B30 Risk 1: points with and without the Blackmailer and Macau, at the bots' own samples
+- Question: Playouts score rounds, not stakes, so an agent or city that pays in points can read "average" in win% when played or "winner took the round" (plan Risk 1). Do the Blackmailer (a free escalation, no fold in answer) and Macau (its holder scores the stake once more) change points per round, and does either favour its side in points more than in rounds?
+- Configuration: `nice -n 19 node games/dead-drop/tools/points-by-roster.mjs --from games/dead-drop/tools/baselines/phase2b2-final.json --rounds 10000 --workers 4` (the tool is committed with this entry, on 6ad70cc; the play code is a22ae11's, since only `data.js`'s `TWISTS` and comments changed in between and a Mixed base deals no twist). It replays B29's configuration (seed dd, Heron x Heron at 24 samples, Mixed rosters) match by match through `playMatch`, so its matches are B29's first ones: the shortest in-order prefix of 20-match batches reaching 10,000 rounds, 10,097 rounds / 1,980 matches, 28 rounds/s (355.8 s, 4 workers), load 4.2 before, 7.2 after. The roster section replays only the roster draws of all 3,940 B29 matches (`matchOptions` on the seeds `dd:<index>:setup`) against B29's `inRoster`; it is where B28's and B29's rounds-per-match figures come from (same tool, `--from` the screen's or the confirm's JSON). A first run of the same method from an uncommitted script (matches 0-2039, 10,395 rounds, a few batches past the prefix) gave the same numbers to within 0.3 points.
+- Definitions (the tool's header says the same):
+  - A round's points are its `result.points`: what the round's winner scores (twice the stake plus the pot, plus Macau's extra; the pot after a fold; 0 for a dead heat). Monaco's +1 is not in them. Points per round count every round, folds included, as the sim's points per round does.
+  - ± on a mean is 1.96 × SD / √n over rounds (as `stats.mjs`'s `histMean`), treating rounds as independent; they cluster in matches, so it is a little narrow. ± on a share is the 95% margin of a proportion.
+  - The Blackmailer "played, to the flip": a (round, seat) pair where the seat dropped it (as its drop or as an Accomplice's partner) and no fold ended the round. Its share of the rounds is that seat's round wins over those pairs; its share of the points is the points that seat won over all the points those rounds paid.
+  - Macau "held at the flip": a round no fold ended, with Macau dealt and won by one seat (`cityWinners`; a tie or an empty Macau holds nothing). Shares as above, for Macau's winner.
+- Numbers:
+
+| Rate | With | Without |
+|---|---|---|
+| Points per round, Blackmailer in the roster | 3.14 ±0.04 (5,188 rounds) | 2.55 ±0.04 (4,909 rounds) |
+| Rounds per match, Blackmailer in the roster (all 3,940 B29 matches; it is in 2,212) | 4.65 | 5.68 |
+| Points per round, Macau dealt | 3.37 ±0.09 (1,538 rounds) | 2.76 ±0.03 (8,559 rounds) |
+
+  The Blackmailer played, to the flip: 3,608 seat-rounds; its seat took 46.6% ±1.6 of those rounds and 48.1% of the points they paid. Macau held at the flip: 1,047 rounds; its holder took 61.8% ±2.9 of them (B29: Macau's winner took the round 62.2%) and 73.1% of the points they paid, so about 647 rounds paid Macau's extra stake. Every other agent's matches run 5.08 (Impostor) to 5.18 (Jammer) rounds with it in the roster.
+- Findings: the Blackmailer is not strong for its player in points (48.1% of the points against 46.6% of the rounds): the bots flip it without regard to who is ahead, so its free escalation raises the stakes for both sides alike. What it does is speed the match: 0.59 more points a round and a match a whole round shorter (4.65 against 5.68 rounds, under the 5-7 band with it, inside without). Macau is the opposite: its holder takes 73.1% of the points against 61.8% of the rounds, so it is worth more than its "winner took the round" shows, and the bots, which score it as any other city, underrate it. Both are what the rules say; neither is out of a band this task tunes.
+- Decision: no change in this task. For the coordinator (Risk 1): matches with a Blackmailer run short (4.65 rounds) and push Mixed's rounds won at stake 2 or more to 46.5% (B29, over 2b-i's 40% bar); if that matters, the lever is the Blackmailer's rule (for instance, its escalation spends a token, or a fold in answer is allowed), a design call outside Task 11's knobs (its power moves round wins, not the stake). Macau's points edge is the design; a bot that weighted Macau by its stake would play it more like a person.
+
+## 2026-10-19 · B31 The ladder: a steady Heron against each rival's setup, with and without its twist (Task 11 Step 6)
+- Question: Playing each rival's ladder setup (Classic plus the packs up to it, its pack's agents always in, its cities featured in round 1, its twist on bot B's seat), does a steady player's match-win rate fall strictly from Wren to Control, each step larger than its combined margin, with Control at least 20%? Heron (24 samples, no twist) is bot A and stands in for the steady player; each rival plays at its own samples. The `notwist` variant replays the same seeds without the twist (paired).
+- Configuration: for each rival R, `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-ladder-R --a heron --b R --setup R --rounds 5000 --variant notwist:twist=off --workers 4 --out games/dead-drop/tools/baselines/phase2b2-ladder-R.json` (the brief's command plus `--workers 4` and `--out`), commit a22ae11 (`TWISTS` as written: magpie lookout, heron sleeper, countess from 6, control count 1), seed dd. No resume.
+- Numbers (Heron's match-win rate is `aMatchWins`; ± is 95%; rows added as each rung finished):
+
+| Rival (samples) | Heron wins, twist on | Heron wins, no twist | Twist's effect | Rounds / matches (each) | Rounds per match (on) | rounds/s, load |
+|---|---|---|---|---|---|---|
+| Wren (6), Classic, no twist | 70.2 ±3.1 | 70.2 ±3.1 | none (identical: Wren has no twist) | 5,107 / 840 | 6.08 | 60 (169.1 s for both), 3.9 before, 5.3 after |
+| Magpie (12), twist: a 13th agent, a Lookout | 63.4 ±2.7 | 59.3 ±2.8 | Heron +4.1 ±3.9 with it (the twist helps Heron) | 5,032 / 1,220 (no twist: 5,084 / 1,220) | 4.12 | 45 (226.4 s), 4.7 before, 5.2 after |
+| Heron (24), twist: a Sleeper placed face down each round | 43.3 ±3.2 | 48.2 ±3.1 | Heron -5.0 ±4.4 | 5,015 / 920 (no twist: 5,007 / 1,020) | 5.45 | 32 (315.4 s), 4.7 before, 5.2 after |
+| Countess (40), twist: a built-in Wiretap from turn 6 | 38.7 ±2.9 | 41.0 ±3.0 | Heron -2.4 ±4.2 | 5,031 / 1,060 (no twist: 5,043 / 1,060) | 4.75 | 22 (465.9 s), 4.5 before, 5.5 after |
+| Control (80), twist: sees 1 card of your hand each round | 40.7 ±3.0 | 39.1 ±3.1 | Heron +1.6 ±4.3 | 5,063 / 1,000 (no twist: 5,029 / 980) | 5.06 | 13 (760.7 s), 5.0 before, 4.0 after |
+
+  Steps (Heron's win rate must fall at each, by more than the two margins combined, `sqrt(m1^2 + m2^2)`):
+
+| Step | Fall | Combined margin | Measurably harder? |
+|---|---|---|---|
+| Wren to Magpie | 70.2 to 63.4: 6.9 | 4.1 | yes |
+| Magpie to Heron | 63.4 to 43.3: 20.1 | 4.2 | yes |
+| Heron to Countess | 43.3 to 38.7: 4.6 | 4.3 | yes (by 0.2) |
+| Countess to Control | 38.7 to 40.7: -2.0 (a rise) | 4.2 | **no** (inverted, within noise) |
+
+- Findings: three steps hold, and Control (40.7) is well above the 20% floor, but Control is no harder than the Countess: a steady Heron wins 40.7% against Control's setup and 38.7% against the Countess's. Without twists the two read 39.1 and 41.0, the same tie, so it is the rivals themselves (80 samples against 40, as in B24's 47.4% Countess v Control) and not their twists. The twists' own effects: Heron's placed Sleeper is the strongest (-5.0 for Heron, just past its 4.4 margin), the Countess's final-turn tap and Control's one seen card are not measurable (-2.4 and +1.6), and the Magpie's extra Lookout makes her easier (+4.1 for Heron; a hypothesis, untested: a 13th, weak card dilutes her deck). The Magpie's setup always holds the Blackmailer (her pack), so her matches are short (4.12 rounds; B30).
+  Without twists the steps are 11.0, 11.0, 7.2 and 2.0 (each against about 4.2): the twists narrow Heron to Countess (Heron's Sleeper makes his own rung harder) and only Countess to Control fails either way.
+- Decision: retune Control's twist by one notch, `control.count` 1 to 2, and re-run Control only (B32). The other rungs stand.
+
+## 2026-10-19 · B32 Ladder retune 1: Control sees 2 cards (`control.count` 2)
+- Question: B31's Countess-to-Control step failed (Heron won 38.7% against the Countess and 40.7% against Control). With Control's twist one notch stronger (it sees 2 cards of your hand each round, not 1), is Control measurably harder than the Countess (a fall in Heron's win rate larger than the combined margin, about 4.2)?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-ladder-control-c2 --a heron --b control --setup control --rounds 5000 --set control.count=2 --workers 4 --out games/dead-drop/tools/baselines/phase2b2-ladder-control-c2.json`, commit a22ae11, seed dd, 5,084 rounds / 1,000 matches (0 capped), 13 rounds/s (396.2 s, 4 workers), load 5.8 before, 5.0 after. No resume. No `notwist` variant: with the twist off, `control.count` is never read, so B31's no-twist Control run (39.1 ±3.1) is exactly what it would replay.
+- Numbers: Heron wins 36.0% ±3.0 of matches against Control seeing 2 cards (B31: 40.7 ±3.0 seeing 1; 39.1 ±3.1 with no twist), 5.08 rounds per match. Countess to Control: 38.7 to 36.0, a fall of 2.7 against a combined margin of 4.2. The twist's effect against no twist: -3.1 ±4.3.
+- Decision: still not measurably harder (2.7 < 4.2), though now in the right direction. `control.count` 2 is the last notch the brief lists; retune 2 (B33) tries one more step of the same knob, `control.count` 3, before taking the closest.
+
+## 2026-10-19 · B33 Ladder retune 2: Control sees 3 cards (`control.count` 3), and the ladder as taken
+- Question: B32's notch (2 cards) moved Control the right way but not past the margin (Countess to Control fell 2.7 against 4.2). One more step of the same knob, the brief's second and last retune round: with Control seeing 3 cards of your hand each round, is the Countess-to-Control step larger than its combined margin?
+- Configuration: `nice -n 19 node games/dead-drop/tools/sim.mjs --run p2b2-ladder-control-c3 --a heron --b control --setup control --rounds 5000 --set control.count=3 --workers 4 --out games/dead-drop/tools/baselines/phase2b2-ladder-control-c3.json`, commit a22ae11, seed dd, 5,062 rounds / 980 matches (0 capped), 13 rounds/s (393.9 s, 4 workers), load 5.3 before, 5.5 after. No resume; no `notwist` variant (as B32: B31's no-twist Control run stands).
+- Numbers: Heron wins 34.6% ±3.0 against Control seeing 3 cards, 5.17 rounds per match; the twist's effect against no twist (39.1 ±3.1) is -4.5 ±4.3. Control's twist at each count (Heron's win rate, and the Countess-to-Control fall against its combined margin):
+
+| `control.count` | Heron wins | Twist's effect (vs 39.1 no twist) | Countess (38.7 ±2.9) to Control | Measurably harder? |
+|---|---|---|---|---|
+| 1 (B31, as first written) | 40.7 ±3.0 | +1.6 ±4.3 | -2.0 against 4.2 | no (inverted) |
+| 2 (B32) | 36.0 ±3.0 | -3.1 ±4.3 | 2.7 against 4.2 | no |
+| **3 (this run, taken)** | **34.6** ±3.0 | -4.5 ±4.3 | 4.1 against 4.2 | no, by 0.1 |
+
+  The ladder as taken (Heron's match-win rate against each rival's setup, twist on):
+
+| Rival | Heron wins | Step from the rival below | Combined margin | Measurably harder? |
+|---|---|---|---|---|
+| Wren | 70.2 ±3.1 | - | - | - |
+| Magpie (extra Lookout) | 63.4 ±2.7 | 6.9 | 4.1 | yes |
+| Heron (placed Sleeper) | 43.3 ±3.2 | 20.1 | 4.2 | yes |
+| Countess (tap from turn 6) | 38.7 ±2.9 | 4.6 | 4.3 | yes |
+| Control (sees 3 cards) | 34.6 ±3.0 | 4.1 | 4.2 | no, by 0.1 |
+
+  Strictly falling: yes. Control at least 20%: yes (34.6). Every step larger than its combined margin: all but Countess to Control, which misses by 0.1 point.
+- Decision: two retune rounds are spent, so take the closest, `control.count` 3, and tell the coordinator: it is one step past the brief's notch list (1 to 2), and B32's `control.count` 2 (a 2.7-point step) is the fallback if three seen cards (of a four-card opening hand) is too strong a twist to announce. The gap is the rivals themselves: without twists Control is no harder than the Countess (B31: 39.1 against 41.0), so Control's twist has to make the whole step. The Magpie, Heron and Countess keep their twists as first written (lookout, sleeper, from 6): their steps hold. `TWISTS.control.count` is 3 in `js/data.js`.

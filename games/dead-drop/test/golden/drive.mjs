@@ -7,13 +7,26 @@ import { RIVALS } from '../../js/data.js';
 export const GOLDEN_SAMPLES = 2;
 export const GOLDEN_MAX_ROUNDS = 40;
 
+/** Keys Phase 2b-ii adds to state, views and calls. Classic play never sets them, but later code may
+ *  write them with default values, so comparisons strip them at any depth. */
+export const NEW_KEYS = Object.freeze(['roster', 'cityPool', 'twist', 'taps', 'tapped', 'exposed', 'macau', 'partner', 'partnerOf', 'placed', 'down', 'free']);
+
+/** A deep copy of a JSON value without any object key in NEW_KEYS, everything else in order. */
+export function project(value) {
+  if (Array.isArray(value)) return value.map(project);
+  if (value === null || typeof value !== 'object') return value;
+  const out = {};
+  for (const k of Object.keys(value)) if (!NEW_KEYS.includes(k)) out[k] = project(value[k]);
+  return out;
+}
+
 export function driveMatch(E, B, index, { samples = GOLDEN_SAMPLES } = {}) {
   const bots = [RIVALS[index % 5], RIVALS[(index + 2) % 5]].map((r) => ({ ...r, samples }));
   const rng = createRng(`golden:${index}:bots`);
   const state = E.newMatch({ seed: `golden:${index}` });
   const steps = [];
   const record = (seat, call, arg, ret) =>
-    steps.push({ round: state.roundNo, turn: state.round.turn, seat, call, json: JSON.stringify({ arg, ret, state, views: [0, 1, -1].map((s) => E.viewFor(state, s)) }) });
+    steps.push({ round: state.roundNo, turn: state.round.turn, seat, call, json: JSON.stringify(project({ arg, ret, state, views: [0, 1, -1].map((s) => E.viewFor(state, s)) })) });
   record(null, 'newMatch', null, null);
   for (let rounds = 0; ; ) {
     while (state.phase === 'plan') {
@@ -50,4 +63,26 @@ export function roundDigests(steps) {
     byRound.get(s.round).push(s.json);
   }
   return [...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([, js]) => createHash('sha256').update(js.join('\n')).digest('hex'));
+}
+
+/** Path of the first difference between two parsed JSON values (key order counts), or null. */
+export function firstDiff(a, b, path = '$') {
+  if (a === b) return null;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return path;
+  if (Array.isArray(a)) {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (i >= a.length || i >= b.length) return `${path}[${i}]`;
+      const d = firstDiff(a[i], b[i], `${path}[${i}]`);
+      if (d) return d;
+    }
+    return null;
+  }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+    if (ka[i] !== kb[i]) return `${path}.${ka[i] ?? kb[i]} (key order or presence)`;
+    const d = firstDiff(a[ka[i]], b[kb[i]], `${path}.${ka[i]}`);
+    if (d) return d;
+  }
+  return null;
 }

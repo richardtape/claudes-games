@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveConfig, applyVariant, withPatches, configHash } from '../tools/sim/config.mjs';
 import { playMatch, playBatch } from '../tools/sim/play.mjs';
-import { emptyStats, addMatch, mergeStats, margin, summarize, compare } from '../tools/sim/stats.mjs';
-import { AGENT, RULES, TARGET } from '../js/data.js';
+import { emptyStats, addMatch, mergeStats, margin, summarize, compare, formatSummary } from '../tools/sim/stats.mjs';
+import { AGENT, CLASSIC_CITIES, RULES, TARGET, TWISTS } from '../js/data.js';
+import { ladderSetup } from '../js/roster.js';
 
 const tiny = (o = {}) => resolveConfig({ samples: 2, target: 4, ...o });
 
@@ -259,4 +260,67 @@ test('stake counters have the denominators Task 7 reads', () => {
   assert.deepEqual([sum.tokensSpent.n, sum.tokensSpent.mean], [2, 1.5]); // seats spent 2 and 1, one finished match
   assert.deepEqual([sum.filmHolderWins.n, sum.filmHolderWins.pct], [1, 100]);
   assert.deepEqual([sum.rollovers.n, stats.carries], [4, 1]);
+});
+
+test('Mixed matches draw a roster per match, forced agents included; Classic stats stay Classic', () => {
+  const m = playMatch(tiny({ roster: 'mixed', force: ['courier'] }), 2);
+  assert.ok(m.roster.length === 12 && m.roster.includes('courier') && m.roster.includes('heavy'));
+  const sum = summarize(playBatch(tiny(), 0, 4).stats);
+  assert.equal(sum.agents.courier.played, 0);
+  assert.ok(!formatSummary(sum).includes('Courier'));
+});
+
+test('a ladder setup puts the twist on bot B’s seat, whichever seat it sits in', () => {
+  const c = tiny({ a: 'heron', b: 'control', setup: 'control' });
+  assert.deepEqual([playMatch(c, 0).twistSeat, playMatch(c, 1).twistSeat], [1, 0]);
+  assert.equal(playMatch({ ...c, twist: 'off' }, 0).twistSeat, null);
+});
+
+test('the CLI takes --roster, --with, --setup and --twist', () => {
+  const r = sim('--workers', '1', '--run', 'test-sim-mixed', '--roster', 'mixed', '--with', 'decoy', '--variant', 'plain:twist=off', '--setup', 'magpie', '--rounds', '10');
+  assert.deepEqual(Object.keys(r.runs).sort(), ['base', 'plain']);
+});
+
+test('rosters, forced agents, setups and twists move the hash; twists take settings', () => {
+  const base = tiny();
+  const hashes = [base, tiny({ roster: 'mixed' }), tiny({ roster: 'mixed', force: ['decoy'] }), tiny({ setup: 'heron' }), tiny({ setup: 'heron', twist: 'off' })].map(configHash);
+  assert.equal(new Set(hashes).size, 5);
+  assert.deepEqual(applyVariant(applyVariant(base, 'with', 'decoy'), 'with', 'courier').force, ['decoy', 'courier']);
+  assert.deepEqual([applyVariant(base, 'roster', 'mixed').roster, applyVariant(base, 'setup', 'control').setup, applyVariant(base, 'twist', 'off').twist], ['mixed', 'control', 'off']);
+  for (const bad of [{ roster: 'all' }, { force: ['nobody'] }, { setup: 'nobody' }, { twist: 'maybe' }]) assert.throws(() => tiny(bad));
+  const before = TWISTS.control.count;
+  withPatches({ 'control.count': 2 }, () => assert.equal(TWISTS.control.count, 2));
+  assert.equal(TWISTS.control.count, before);
+  assert.throws(() => withPatches({ 'control.kind': 'heavy' }, () => {}), /unknown sim setting/);
+});
+
+test('Mixed stats count only the roster: every agent in it, none outside it', () => {
+  const m = playMatch(tiny({ roster: 'mixed' }), 0);
+  const s = emptyStats(2);
+  addMatch(s, m);
+  const out = Object.keys(s.agents).filter((id) => !m.roster.includes(id));
+  assert.equal(out.length, 8);
+  for (const id of out) assert.deepEqual([s.agents[id].notPlayed, s.agents[id].inRoster], [0, 0], id);
+  for (const id of m.roster) assert.equal(s.agents[id].inRoster, m.rounds.length, id);
+  const text = formatSummary(summarize(s));
+  for (const id of out) assert.ok(!text.includes(AGENT[id].name), AGENT[id].name);
+});
+
+test('pinned cities fill from the match’s pool', () => {
+  const pool = ladderSetup('magpie').cities;
+  const m = playMatch(tiny({ setup: 'magpie', pin: ['tokyo'] }), 1);
+  assert.ok(m.rounds.every((r) => r.cities.includes('tokyo') && r.cities.every((id) => pool.includes(id))));
+  const mixed = [0, 1, 2].flatMap((i) => playMatch(tiny({ roster: 'mixed', pin: ['tokyo'] }), i).rounds);
+  assert.ok(mixed.some((r) => r.cities.some((id) => id !== 'tokyo' && !CLASSIC_CITIES.includes(id))), 'the fill draws from all 20');
+  const classic = playMatch(tiny({ pin: ['lisbon'] }), 1);
+  assert.ok(classic.rounds.every((r) => r.cities.every((id) => CLASSIC_CITIES.includes(id))));
+});
+
+test('the agent and city probes cover what a Mixed base can deal', () => {
+  const { agents, cities } = ladderSetup('magpie'); // Classic plus the Courier, the Blackmailer, Tokyo and Macau
+  const r = sim('--workers', '2', '--run', 'test-sim-probe-mixed', '--setup', 'magpie', '--probe', 'agents', '--rounds', '1');
+  assert.deepEqual(Object.keys(r.runs).filter((k) => k !== 'base'), agents.map((id) => `${id}+1`));
+  assert.deepEqual([r.runs['courier+1'].config.force, r.runs['courier+1'].config.set], [['courier'], { 'courier.power': AGENT.courier.power + 1 }]);
+  const c = sim('--workers', '2', '--run', 'test-sim-probe-ladder', '--setup', 'magpie', '--probe', 'cities', '--rounds', '1');
+  assert.deepEqual(Object.keys(c.runs).filter((k) => k !== 'base'), cities.map((id) => `pin-${id}`));
 });

@@ -287,6 +287,25 @@ export const FLOURISH = {
   // Double harmonic on E (E F G# A B C D#), swaying down over a tambourine.
   tangier: phrase(220, 4, 'riff', [[0, 'E5', 0.5], ...run(0.5, 'D#5 C5', 0.25, 0.25), [1, 'B4', 1], ...run(2, 'C5 B4 G#4 F4', 0.25, 0.25), [3, 'E4', 0.75],
     ...[0, 0.75, 1.5, 2, 2.5, 3].map((b) => [b, '-', 0.25, 'hat'])]),
+  // A hymn in open fifths over a drone, with an icy high note.
+  reykjavik: phrase(220, 4, 'brass', [[0, 'E3+B3', 1], [1, 'F#3+C#4', 1], [2, 'E3+B3+F#4', 1.8], [0, 'E2', 4, 'bass'], [1.5, 'B6', 0.5, 'keys'], [3, 'E7', 0.9, 'keys']]),
+  // A maqam run on an oud-like guitar (E F G# A B) over a frame drum.
+  casablanca: phrase(220, 4, 'riff', [...run(0, 'B4 A4 G#4 F4', 0.25, 0.25), [1, 'G#4', 0.5], ...run(1.5, 'A4 G#4 F4 E4', 0.25, 0.25), [2.5, 'F4', 0.25], [2.75, 'G#4', 0.25], [3, 'E4', 0.9],
+    ...[0, 1, 1.5, 2.5, 3].map((b) => [b, '-', 0.25, 'hat'])]),
+  // A tarantella figure in a mandolin tremolo (6/8 eighths).
+  rome: phrase(330, 6, 'riff', [...run(0, 'B4 B4 B4 B4 E5 E5', 0.5, 0.45), ...run(3, 'D5 D5 B4 B4', 0.5, 0.45), [5, 'E4', 0.9], [0, 'E3', 0.9, 'bass'], [3, 'B2', 0.9, 'bass']]),
+  // A koto line in the in scale (E F A B C), plucked and sparse.
+  tokyo: phrase(200, 4, 'riff', [[0, 'E5', 0.5], [0.5, 'F5', 0.5], [1, 'A5', 0.5], ...run(1.5, 'F5 E5', 0.25, 0.25), [2, 'C5', 0.5], [2.5, 'B4', 0.5], [3, 'A4', 0.25], [3.25, 'F4', 0.25], [3.5, 'E4', 0.5]]),
+  // An alphorn call with a yodel leap and one cowbell.
+  zurich: phrase(200, 4, 'brass', [[0, 'E3', 1], [1, 'B3', 0.75], [1.75, 'E4', 0.25], [2, 'B4', 0.5], [2.5, 'E4', 0.25], [2.75, 'B4', 0.25], [3, 'E5', 0.9], [2, '-', 0.2, 'rim']]),
+  // A Portuguese turn, a pentatonic answer, and a low gong.
+  macau: phrase(210, 4, 'riff', [...run(0, 'E5 F#5 E5 D#5 E5', 0.25, 0.25), ...run(2, 'B4 A4 G4 E4', 0.5, 0.45), [0, '-', 2.5, 'kick'], [0, 'E2', 3, 'bass']]),
+  // A lone bugle call over a muffled snare.
+  glienicke: phrase(200, 4, 'brass', [...run(0, 'E4 E4 B4', 0.5, 0.45), [1.5, 'E5', 0.5], ...run(2, 'B4 E5 B4', 0.5, 0.45), [3, 'E4', 0.9], ...[0, 1, 2, 3].map((b) => [b, '-', 0.15, 'snare'])]),
+  // A baroque turn on a harpsichord, ornaments leading to E.
+  prague: phrase(230, 4, 'keys', [...run(0, 'B4 C#5 B4 A4 G#4 A4', 0.25, 0.25), [1.5, 'B4', 0.5], ...run(2, 'E5 D#5 E5 F#5 E5 D#5', 0.25, 0.25), [3.5, 'E5', 0.5], [0, 'E3', 1, 'bass'], [2, 'B2', 1, 'bass']]),
+  // A music-box chime, high and thin.
+  geneva: phrase(220, 4, 'keys', [...run(0, 'E6 G6 B6 E7', 0.5, 0.45), ...run(2, 'D#7 B6 G6', 0.5, 0.45), [3.5, 'E6+B6', 0.4]]),
 };
 
 export const CUES = {

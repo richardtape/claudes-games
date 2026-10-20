@@ -13,6 +13,7 @@
   --teal: #1e6a6e;
   --oxblood: #5c1814;
   --night: #170f0d;
+  --manila: #e9d39c; /* the dossier's folder */
   --c0: var(--red);
   --c1: var(--teal);
   --display: 'League Gothic', 'Oswald', Impact, 'Arial Narrow', sans-serif;
@@ -335,7 +336,7 @@ body[data-screen='title'] .mark {
 .tagline {
   position: relative;
   width: fit-content;
-  max-width: 30ch;
+  max-width: 31ch; /* 30 characters a line, clear of the spy's briefcase */
   margin: 28px 0 0;
   padding: 6px 10px 6px 0;
   font-size: 17px;
@@ -417,6 +418,21 @@ body[data-screen='title'] .mark {
   margin: 4px 0 0;
   font-size: 14px;
 }
+/* Your network, as a typed tab on an ink strip: how much of the 20 and 20 your ladder wins have recruited. */
+.network {
+  width: fit-content;
+  margin: 0;
+  padding: 6px 12px 5px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 13px;
+  clip-path: var(--cut-2);
+}
+.network b {
+  font: 20px/1 var(--display);
+  font-weight: 400;
+  color: var(--mustard);
+}
 
 /* ── rivals, lobby, cover ───────────────────────────────────────────────── */
 .rivals-screen,
@@ -448,16 +464,17 @@ body[data-screen='title'] .mark {
   grid-template-columns: 48px 1fr auto;
   align-items: center;
   gap: 14px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border: 0;
   background: var(--ink);
   color: var(--paper);
   text-align: left;
-  clip-path: var(--cut);
+  /* Rows grow tall with a twist and a pack: px cuts, so a corner never wedges into the text. */
+  clip-path: var(--cut-px);
   cursor: pointer;
 }
-.rival:nth-child(odd) {
-  clip-path: var(--cut-2);
+.rivals li:nth-child(odd) .rival {
+  clip-path: var(--cut-2-px);
 }
 .rival .rank {
   font: 44px/1 var(--display);
@@ -468,9 +485,134 @@ body[data-screen='title'] .mark {
   font: 28px/1 var(--display);
   letter-spacing: 0.02em;
 }
-.rival .who span {
+.rival .who {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.rival .who .blurb {
   font-size: 13px;
   color: var(--paper-2);
+}
+/* The rival's announced twist: a red rubber stamp, then the rule in type. */
+.rival .twist {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.rival .twist i {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 5px 1px;
+  background: var(--red);
+  color: var(--paper);
+  font: 15px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transform: rotate(-4deg);
+}
+.rival .brings {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--paper-2);
+}
+/* What a met rival brings: small silhouettes in paper, each with its name. */
+.pack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 2px;
+}
+.mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--paper);
+}
+.mini .art {
+  display: block;
+  flex: none;
+  height: 24px;
+}
+.mini-agent .art {
+  width: 24px;
+}
+.mini-city .art {
+  width: 50px;
+  height: 20px;
+  color: var(--paper-2);
+}
+.mini .art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mini .ac {
+  fill: var(--mustard);
+}
+.epilogue-link {
+  margin: 0;
+}
+/* A segmented switch: a paper strip, the chosen side inked (the rivals' Ladder / Free play, the
+   host's roster). */
+.rivals-head {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+/* The host's lobby: "Roster" and the switch on one line, what the choice deals under them. */
+.roster-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.roster-pick .seg-note {
+  flex-basis: 100%;
+}
+.seg-switch {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--paper);
+  clip-path: var(--cut-2);
+}
+.seg {
+  min-height: 44px;
+  padding: 9px 18px 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 24px/1 var(--display);
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.seg:hover:not(:disabled):not([aria-pressed='true']) {
+  background: #dccaa0;
+}
+.seg[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--paper);
+  cursor: default;
+}
+.seg:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.seg:focus-visible {
+  outline: 3px solid var(--mustard-deep);
+  outline-offset: -3px;
+}
+.seg-note {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 13px;
+}
+.roster-pick .lbl {
+  font: 22px/1 var(--display);
+  letter-spacing: 0.03em;
 }
 .rival .state {
   font: 20px var(--display);
@@ -750,6 +892,36 @@ body[data-screen='title'] .mark {
     background-color: var(--oxblood);
   }
 }
+/* The Blackmailer raises the stake mid-reveal: the slip flashes paper and red, then stays red
+   (colour only, as a raised stake always is). */
+.stake.blackmail::before {
+  animation: blackmail calc(0.9s * var(--pace, 1)) steps(1, end) both;
+}
+.stake.blackmail {
+  animation: blackmail-ink calc(0.9s * var(--pace, 1)) steps(1, end) both;
+}
+@keyframes blackmail {
+  0%,
+  40% {
+    background: var(--paper);
+  }
+  20%,
+  60%,
+  100% {
+    background: var(--red);
+  }
+}
+@keyframes blackmail-ink {
+  0%,
+  40% {
+    color: var(--ink);
+  }
+  20%,
+  60%,
+  100% {
+    color: var(--paper);
+  }
+}
 /* The final turn's stamp: the stake doubles on this flip. Red ink on a paper label (like the
    turned-asset stamp on cards), slapped on crooked and hanging over the slip's cut edge. */
 .x2-stamp {
@@ -1008,6 +1180,43 @@ body[data-screen='title'] .mark {
   letter-spacing: 0.06em;
   font-weight: 400;
 }
+/* Wiretap: the city your mark locked in, for your eyes only. A slip in the mark's colour with a
+   pair of headphones, in the plate's top-right corner (the canister keeps the left). */
+.plate .tapped {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 2px 6px;
+  background: var(--own);
+  color: var(--paper);
+  font: 15px/1 var(--display);
+  letter-spacing: 0.06em;
+  clip-path: var(--cut-2);
+  rotate: 4deg;
+  pointer-events: none;
+}
+.plate .tapped svg {
+  width: 17px;
+  height: 15px;
+  display: block;
+}
+.plate .tapped b {
+  font-weight: 400;
+}
+/* It comes in once, as the mark's city is heard: the slip shows paper, then takes the mark's colour. */
+.plate .tapped.fresh {
+  animation: tap-in 0.7s ease-out;
+}
+@keyframes tap-in {
+  0%,
+  45% {
+    background: var(--paper);
+    color: var(--ink);
+  }
+}
 .total {
   position: relative;
   min-width: 42px;
@@ -1027,6 +1236,17 @@ body[data-screen='title'] .mark {
 }
 .total.t-1 {
   background: var(--c1);
+}
+/* Reykjavik is held on heads: the total counts agents, and a small cut-out figure says so. */
+.total.count::after {
+  content: '';
+  display: inline-block;
+  width: 0.4em;
+  height: 0.5em;
+  margin-left: 3px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Ccircle cx='5' cy='3' r='2.7'/%3E%3Cpath d='M0 12c0-3.7 2.2-5.8 5-5.8s5 2.1 5 5.8z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Ccircle cx='5' cy='3' r='2.7'/%3E%3Cpath d='M0 12c0-3.7 2.2-5.8 5-5.8s5 2.1 5 5.8z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .city.lead-me .plate::after,
 .city.lead-them .plate::before {
@@ -1199,6 +1419,53 @@ body[data-screen='title'] .mark {
 .chip.muted .art {
   opacity: 0.35;
 }
+/* Public marks on a chip, on both sides of the table: an Accomplice's partner wears linked rings,
+   a card placed before the round a pin, each on an ink badge pinned over the chip's corner. */
+.chip .mk {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 0 0 1.5px var(--paper);
+}
+.chip .mk svg {
+  display: block;
+  width: 12px;
+  height: 14px;
+}
+.chip .mk-partner svg {
+  width: 14px;
+  height: 10px;
+}
+.chip .mk + .mk {
+  right: 13px;
+}
+/* Rome: each side's strongest agent counts double. Its top corner is turned down in mustard. */
+.chip .x2c {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 28px;
+  height: 28px;
+  padding: 2px 2px 0 0;
+  background: var(--mustard);
+  color: var(--ink);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+  font: 13px/1 var(--display);
+  font-style: normal;
+  text-align: right;
+  letter-spacing: 0.02em;
+}
+.chip.x2 .fd-mark {
+  right: 28px;
+}
 .chip.ghost {
   opacity: 0.6;
   outline: 2px dashed var(--line);
@@ -1216,6 +1483,12 @@ body[data-screen='title'] .mark {
   transform: scale(1.18) rotate(-2deg);
   box-shadow: 0 0 0 3px var(--mustard), 0 6px 0 rgb(0 0 0 / 0.3);
   transition: transform 0.15s;
+}
+/* A chip (or a Havana row) in motion rides above the plates and the other rows: see lift() in board.js. */
+.chip.gliding,
+.row.gliding {
+  position: relative;
+  z-index: 3;
 }
 .chip.land-me {
   animation: land-me calc(0.5s * var(--pace, 1)) cubic-bezier(0.2, 0.8, 0.25, 1.15) both;
@@ -1341,6 +1614,40 @@ body[data-screen='title'] .mark {
   min-height: 46px;
   padding: 8px 16px 6px;
 }
+/* What a drop asks for before it can lock in: Casablanca's face and the Accomplice's Drop alone.
+   Paper slips, so they read on the mustard table and in the dark. */
+.controls .choice {
+  display: flex;
+  gap: 8px;
+}
+/* Both faces on one slip; the chosen one is inked, face down hatched like a face-down chip. */
+.controls .slip.face {
+  gap: 0;
+  padding: 0;
+  align-items: stretch;
+}
+.slip.face > span {
+  display: flex;
+  align-items: center;
+  padding: 8px 11px 6px;
+  color: rgb(29 26 23 / 0.5);
+}
+.slip.face > .on {
+  background: var(--ink);
+  color: var(--paper);
+}
+.slip.face > .dn.on {
+  background: var(--ink) repeating-linear-gradient(135deg, rgb(240 226 196 / 0.18) 0 4px, transparent 4px 9px);
+}
+.slip.face kbd {
+  align-self: center;
+  margin: 0 9px 0 8px;
+}
+.slip.alone[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 0 0 0 2px var(--paper);
+}
 
 /* Cards in hand */
 .hand {
@@ -1409,17 +1716,34 @@ body[data-screen='title'] .mark {
   line-height: 1.25;
   padding-bottom: 12px;
 }
+/* A long rule (more than 60 characters: the Wiretap's, the Decoy's) sets a size smaller. */
+.card.long .tx {
+  font-size: 10px;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
 .card kbd {
   position: absolute;
   right: 6px;
   bottom: 6px;
   background: rgb(29 26 23 / 0.12);
 }
-/* A turned asset: the rival's agent, now yours. Stamped in the rival's colour over its portrait. */
-.card .turned {
+/* Rubber stamps over a card's portrait, in the rival's colour: a turned asset (the rival's agent,
+   now yours) and a card the rival has seen (Control's twist). An Accomplice's chosen partner is
+   stamped in ink. */
+.card .stamps {
   position: absolute;
   top: 44px;
   right: 5px;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  pointer-events: none;
+}
+.card .stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   padding: 2px 4px 1px;
   border: 2px solid var(--them-col);
   color: var(--them-col);
@@ -1428,7 +1752,36 @@ body[data-screen='title'] .mark {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   transform: rotate(-9deg);
-  pointer-events: none;
+}
+.card .stamp.seen {
+  transform: rotate(5deg);
+}
+.card .stamp.partner {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.card .stamp svg {
+  width: 13px;
+  height: 9px;
+}
+/* An Accomplice asks for a partner: the cards that can go with it are outlined, the outline
+   pulsing in colour; the one chosen lifts beside it, hatched like a face-down chip. */
+.hand.asking .card.candidate {
+  outline: 2px dashed var(--line);
+  outline-offset: 3px;
+  animation: candidate 1.2s ease-in-out infinite;
+}
+@keyframes candidate {
+  50% {
+    outline-color: var(--red);
+  }
+}
+.hand.asking .card.mate {
+  transform: translateY(-12px) rotate(0deg);
+  background: var(--paper) repeating-linear-gradient(135deg, rgb(29 26 23 / 0.1) 0 4px, transparent 4px 9px);
+  outline-style: solid;
+  animation: none;
+  box-shadow: 0 10px 0 rgb(0 0 0 / 0.22);
 }
 /* Drag to drop (main.js): a card pressed and moved lifts out of the hand as a ghost that
    follows the pointer. Only the hand keeps a touch from panning, so the page still scrolls
@@ -1701,6 +2054,22 @@ body[data-screen='title'] .mark {
 .title-card {
   --own: var(--mustard);
 }
+/* Cards with a lot to read scroll if they outgrow a short screen (three new cities' fine print on
+   a phone, a dossier on a phone on its side): the card starts at the top, and its tilted bars stay
+   inside it, so only the content scrolls. */
+.title-card,
+.roster-card,
+.dossier-card,
+.epilogue-card {
+  overflow-y: auto;
+  place-content: safe center;
+}
+.title-card .bars,
+.roster-card .bars,
+.dossier-card .bars,
+.epilogue-card .bars {
+  overflow: hidden;
+}
 .title-card .bars i:nth-child(4) {
   background: var(--teal);
 }
@@ -1791,8 +2160,9 @@ body[data-screen='title'] .mark {
   width: 16px;
   height: 16px;
 }
-/* Under the credits, typed on ink slips: where the film travels, and any pot rolled over. They
-   come in with the third city (at 0.8 s), so each is fully up for at least 1.2 s of the 2.5 s card. */
+/* Under the credits, typed on an ink slip: any pot rolled over (the cable says where the film
+   travels). It comes in with the third city (at 0.8 s), so it is fully up for at least 1.2 s of the
+   2.5 s card. */
 .title-card .notes {
   position: relative;
   display: grid;
@@ -1816,13 +2186,6 @@ body[data-screen='title'] .mark {
 }
 .title-card .notes p + p {
   animation-delay: 0.9s;
-}
-.title-card .notes .canister {
-  width: 24px;
-  height: 24px;
-}
-.title-card .film-line b {
-  color: var(--mustard);
 }
 @keyframes note-in {
   from {
@@ -2046,6 +2409,24 @@ body[data-screen='title'] .mark {
   flex-wrap: wrap;
   margin-top: 14px;
 }
+/* Pass and play's roster choice: two full-width slips, each with a line of fine print. */
+.pass-sheet .picks {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+.pass-sheet .picks .slip {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 18px 10px;
+  text-align: left;
+}
+.pass-sheet .picks small {
+  font: 13px/1.3 var(--type);
+  letter-spacing: 0;
+  opacity: 0.85;
+}
 /* What the Microfilm does with this choice: a strip of ink with the canister, like its plate. */
 .sheet .film-note {
   display: flex;
@@ -2160,11 +2541,14 @@ body[data-screen='title'] .mark {
 .agent-list li {
   display: grid;
   grid-template-columns: 40px 1fr;
-  gap: 2px 10px;
-  align-items: center;
+  gap: 10px;
+  align-items: start;
+}
+.agent-list .txt {
+  display: grid;
+  gap: 2px;
 }
 .agent-list .art {
-  grid-row: span 2;
   width: 40px;
   height: 40px;
   --own: var(--red);
@@ -2189,12 +2573,41 @@ body[data-screen='title'] .mark {
   font: 18px var(--display);
   font-weight: 400;
 }
+/* Every rule reading in plain words, under the card's own text. */
+.agent-list .note,
 .city-list .note {
   display: block;
   margin-top: 5px;
   padding-left: 8px;
   border-left: 3px solid var(--mustard-deep);
   font-style: italic;
+}
+/* Help's Agents and Cities tabs come in sections: tonight's, the rest of your network, the rest. */
+.help-sec + .help-sec {
+  margin-top: 22px;
+}
+.help-sec h3 {
+  margin: 0 0 10px;
+  padding-bottom: 3px;
+  border-bottom: 3px solid var(--ink);
+  font: 26px/1 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+.help-sec.locked h3 {
+  border-bottom-style: dashed;
+  border-bottom-width: 2px;
+}
+/* Not yet recruited: dark silhouettes, and who to beat for them. */
+.agent-list .locked .art {
+  color: var(--ink-2);
+}
+.agent-list .locked .ac {
+  fill: currentColor;
+}
+.help-sec .recruit {
+  font-style: italic;
+  color: #5a4c33;
 }
 .key-list {
   grid-template-columns: 1fr;
@@ -2234,7 +2647,7 @@ body[data-screen='title'] .mark {
 .dossier {
   position: relative;
   padding: 26px 28px 22px;
-  background: #e9d39c;
+  background: var(--manila);
   color: var(--ink);
   /* A 14px folder tab, sized in px so a tall dossier on a phone keeps the same small tab. */
   clip-path: polygon(0 14px, 26% 14px, calc(26% + 16px) 0, calc(56% - 14px) 0, 56% 14px, 100% 14px, calc(100% - 4px) 100%, 3px calc(100% - 8px));
@@ -2346,6 +2759,529 @@ body[data-screen='title'] .mark {
   clip-path: var(--cut);
 }
 
+/* ── the match frame: dossiers, rosters, cables, the twist, the unseen strip ── */
+
+/* Typed text (typedHTML in main.js): each key comes up on its own beat (--t). Under reduced motion
+   the global rule puts every key up at once. */
+.typed i {
+  font-style: normal;
+  animation: key 1ms var(--t, 0ms) both;
+}
+@keyframes key {
+  from {
+    visibility: hidden;
+  }
+}
+/* Read out, never seen: the whole line beside its typed keys. */
+.vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* A red rubber stamp: New, on a city or an agent you meet for the first time. */
+.new-tag {
+  display: inline-block;
+  justify-self: start;
+  padding: 2px 6px 1px;
+  border: 2px solid var(--red);
+  color: var(--red);
+  font: 15px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  rotate: -5deg;
+}
+
+/* C's cable on the round card, typed onto telegram tape: one pasted strip a line, the tape laid
+   down first, then the keys. */
+.title-card .cable {
+  position: relative;
+  margin: -4px 0 0;
+  max-width: min(660px, calc(100vw - 32px));
+  font: 700 14px/2.1 var(--type);
+  letter-spacing: 0.05em;
+  text-align: left;
+  rotate: -0.5deg;
+  animation: tape 0.3s 0.2s steps(12) both;
+}
+.title-card .cable .typed {
+  padding: 3px 9px 2px;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+@keyframes tape {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+/* A city met for the first time: its fine print on a row of its own under the rule (the skyline
+   and the name stand beside both). */
+.title-card .line.new .sky,
+.title-card .line.new .name {
+  grid-row: 1 / 3;
+}
+.title-card .line.new > p {
+  align-self: end;
+  padding-bottom: 4px;
+}
+.title-card .line > .note {
+  grid-column: 3;
+  margin: 2px 0 12px;
+  padding-left: 8px;
+  border-left: 3px solid var(--red);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.3;
+}
+
+/* A rival's dossier: a manila folder over bars in their colour, the DOSSIER stamp slammed on. */
+.dossier-card .folder {
+  position: relative;
+  width: min(560px, calc(100vw - 32px));
+  padding: 30px 30px 24px;
+  background: var(--manila);
+  color: var(--ink);
+  text-align: left;
+  /* The folder's tab, in px as the dossier's is. */
+  clip-path: polygon(0 14px, 26% 14px, calc(26% + 16px) 0, calc(56% - 14px) 0, 56% 14px, 100% 14px, calc(100% - 4px) 100%, 3px calc(100% - 8px));
+  animation: folder-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes folder-in {
+  from {
+    opacity: 0;
+    transform: translateY(48px) rotate(-3deg);
+  }
+}
+.dossier-card .file-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.dossier-card .file-no {
+  margin: 0;
+  font: 700 13px var(--type);
+}
+/* Red ink, slapped on crooked as the folder lands (STAMP_MS in main.js, with the slam). */
+.dossier-stamp {
+  padding: 5px 9px 2px;
+  border: 3px solid var(--red);
+  color: var(--red);
+  font: 30px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: inset 0 0 0 2px var(--manila), inset 0 0 0 4px var(--red);
+  rotate: 7deg;
+  animation: stamp 0.36s 0.2s cubic-bezier(0.3, 0, 0.35, 1.3) both;
+}
+.dossier-card .who {
+  margin: 10px 0 12px;
+  font: clamp(54px, 12vw, 84px) / 0.86 var(--display);
+  text-transform: uppercase;
+}
+.dossier-card .file {
+  margin: 0 0 14px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.dossier-card .twist {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.dossier-card .twist i {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 5px 1px;
+  background: var(--red);
+  color: var(--paper);
+  font: 16px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  rotate: -4deg;
+}
+.dossier-card .brings {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 2px dashed rgb(29 26 23 / 0.35);
+}
+.dossier-card p.brings {
+  font-size: 13px;
+  font-style: italic;
+}
+.dossier-card .brings h3 {
+  margin: 0 0 8px;
+  font: 22px/1 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+}
+.dossier-card .mini {
+  color: var(--ink);
+  font-weight: 700;
+}
+.dossier-card .mini-city .art {
+  color: var(--ink-2);
+}
+.dossier-card .mini .ac {
+  fill: var(--red);
+}
+
+/* Tonight's roster: the agents dealt onto the card as small paper cards, the new ones stamped, and
+   their fine print on slips under the deal. */
+.roster-card {
+  --own: var(--mustard);
+  gap: 14px;
+}
+.roster-card .bars i:nth-child(4) {
+  background: var(--teal);
+}
+.roster-card .big {
+  font-size: clamp(56px, min(13vw, 12vh), 104px);
+}
+/* Typed on an ink slip, as the round card's notes are, so it reads over any bar. */
+.roster-card .sub {
+  position: relative;
+  margin: -6px 0 0;
+  padding: 6px 14px 5px;
+  background: var(--ink);
+  font: 700 14px/1.3 var(--type);
+  clip-path: var(--cut);
+}
+.roster-card .minis {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, 84px);
+  gap: 12px 10px;
+}
+.mc {
+  position: relative;
+  height: 96px;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  align-items: end;
+  padding: 20px 3px 6px;
+  background: var(--paper);
+  color: var(--ink);
+  border-top: 6px solid var(--mustard-deep);
+  border-radius: 3px;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 0.35);
+  rotate: -1.4deg;
+  animation: deal 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(0.25s + var(--i) * 0.05s);
+}
+.mc:nth-child(even) {
+  rotate: 1.1deg;
+}
+.mc.new {
+  border-top-color: var(--red);
+}
+@keyframes deal {
+  from {
+    opacity: 0;
+    transform: translateY(-28px) rotate(-10deg);
+  }
+}
+.mc .pow {
+  position: absolute;
+  top: 2px;
+  left: 6px;
+  font: 24px/1 var(--display);
+}
+.mc .art {
+  width: 42px;
+  height: 42px;
+  align-self: center;
+}
+.mc .art svg,
+.news-line .art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mc .ac,
+.news-line .ac {
+  fill: var(--red);
+}
+.mc .nm {
+  max-width: 100%;
+  overflow: hidden;
+  font: 14px/1 var(--display);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.mc .new-tag {
+  position: absolute;
+  top: 3px;
+  right: -5px;
+  padding: 1px 4px 0;
+  background: var(--paper);
+  font-size: 13px;
+  rotate: 9deg;
+}
+.roster-card .news {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  width: min(680px, calc(100vw - 32px));
+}
+.news-line {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  padding: 10px 20px 12px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut-px);
+  animation: line-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(0.9s + var(--i) * 0.2s);
+}
+.news-line:nth-child(2n) {
+  clip-path: var(--cut-2-px);
+  animation-name: line-in-right;
+}
+.news-line .art {
+  width: 52px;
+  height: 52px;
+}
+.news-line h3 {
+  margin: 2px 0 3px;
+  font: 26px/1 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+.news-line h3 b {
+  font-weight: 400;
+  color: var(--red);
+}
+.news-line p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+.news-line .note {
+  margin-top: 5px;
+  padding-left: 8px;
+  border-left: 3px solid var(--mustard-deep);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+/* The epilogue: C's last cable on a telegram form, typed out line by line over oxblood bars and
+   signed in red. */
+.epilogue-card {
+  --own: var(--oxblood);
+  background: rgb(22 11 9 / 0.95);
+}
+.epilogue-card .bars i:nth-child(4) {
+  background: var(--paper-2);
+}
+.telegram {
+  position: relative;
+  width: min(620px, calc(100vw - 32px));
+  padding: 20px 28px 26px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut-px);
+  rotate: -0.8deg;
+  animation: folder-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.telegram .form-head {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--red);
+  color: var(--red);
+  font: 22px/1 var(--display);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.telegram .eline {
+  margin: 0 0 10px;
+  font: 700 17px/1.45 var(--type);
+  letter-spacing: 0.04em;
+}
+.telegram .eline.sig {
+  margin: 18px 0 0;
+  color: var(--red);
+  font: 44px/1 var(--display);
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+
+/* A rival's tools, on a row of their own under its name and score: the twist chip and the unseen
+   strip's toggle. The open strip hangs from the scorebar over the top of the board, so opening it
+   never moves the table. */
+.scorebar {
+  position: relative;
+}
+.scorebar .side.has-intel {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.scorebar .intel {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.twist-chip,
+.unseen-btn {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+/* Each is a 40px target without making its row any taller. */
+.twist-chip::after,
+.unseen-btn::after {
+  content: '';
+  position: absolute;
+  inset: -10px -5px;
+}
+.twist-chip {
+  padding: 3px 6px 1px;
+  background: var(--red);
+  color: var(--paper);
+  font: 16px/1 var(--display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  rotate: -4deg;
+  box-shadow: 0 2px 0 rgb(0 0 0 / 0.3);
+}
+.unseen-btn .face {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 9px 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 12px/1 var(--type);
+  clip-path: var(--cut-2);
+}
+.unseen-btn b {
+  font: 18px/0.8 var(--display);
+  font-weight: 400;
+}
+.unseen-btn .face i {
+  font-style: normal;
+  transition: rotate 0.15s ease;
+}
+.unseen-btn.open .face {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 0 0 0 2px var(--paper);
+}
+.unseen-btn.open .face i {
+  rotate: 180deg;
+}
+.unseen-btn kbd {
+  align-self: center;
+  margin-left: 2px;
+  padding: 2px 4px 1px;
+  font-size: 9px;
+  background: rgb(29 26 23 / 0.14);
+}
+.unseen-btn.open kbd {
+  background: rgb(240 226 196 / 0.2);
+}
+.twist-chip:focus-visible,
+.unseen-btn:focus-visible {
+  outline: 3px solid var(--line);
+  outline-offset: 3px;
+}
+.unseen-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 25;
+  width: min(560px, 100%);
+  padding: 12px 16px 14px;
+  background: var(--paper);
+  color: var(--ink);
+  --line: var(--ink); /* paper: focus rings stay ink, by day or night */
+  text-align: left;
+  clip-path: var(--cut-px);
+}
+/* It drops in once, as it opens (main.js sets .enter only then), never on a re-render. */
+.unseen-panel.enter {
+  animation: unseen-in 0.18s ease-out both;
+}
+/* Opened under the escalation prompt, it sits over the prompt's veil, where it can be read. */
+body:has(.modal.hot) .unseen-panel {
+  z-index: 55;
+}
+@keyframes unseen-in {
+  from {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}
+.unseen-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 3px solid var(--own);
+  font: 700 12px var(--type);
+}
+.unseen-head b {
+  font: 22px/1 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+}
+.unseen-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.unseen-panel .mini {
+  color: var(--ink);
+  font-weight: 700;
+}
+.unseen-panel .mini .ac {
+  fill: var(--own);
+}
+.unseen-none {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* The rival's remark on the round, under the tally: in its colour, in its own voice. */
+.result .remark {
+  margin: -4px 0 0;
+  padding-left: 10px;
+  border-left: 4px solid var(--them-col);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* The dossier names each round's operation. */
+.rounds .op {
+  display: block;
+  font: 18px/1.05 var(--display);
+  letter-spacing: 0.03em;
+}
+
 /* ── night: a round's final turn ────────────────────────────────────────── */
 /* The same film after dark (main.js sets body[data-night] for the final turn's planning, its
    reveal and its result). The ground goes to ink, with an oxblood glow hanging under the
@@ -2419,6 +3355,21 @@ body[data-night='1'] .hand .card {
 body[data-night='1'] .hand .card.sel {
   box-shadow: 0 0 0 2px var(--red), 0 0 0 5px var(--line), 0 0 26px rgb(200 50 31 / 0.55), 0 12px 0 rgb(0 0 0 / 0.22);
 }
+body[data-night='1'] .hand.asking .card.mate {
+  box-shadow: 0 0 0 2px var(--red), 0 0 22px rgb(200 50 31 / 0.5), 0 10px 0 rgb(0 0 0 / 0.3);
+}
+/* The new marks after dark. The partner and pin badges keep their paper ring against the ink table;
+   Rome's corner and the wiretap slip catch the spotlight (a touch of paper in them); the choice
+   slips stay paper, and a pressed Drop alone keeps its paper edge. */
+body[data-night='1'] .chip .mk {
+  box-shadow: 0 0 0 1.5px var(--paper), 0 0 8px rgb(255 214 150 / 0.35);
+}
+body[data-night='1'] .chip .x2c {
+  background: color-mix(in srgb, var(--mustard) 85%, var(--paper));
+}
+body[data-night='1'] .plate .tapped {
+  background: color-mix(in srgb, var(--own) 82%, var(--paper));
+}
 /* The final flip: once both lock in, the house lights go down on everything but the cities, the
    ticker that narrates them and the reveal's Speed up / Skip control (its only control). */
 body[data-night='1'] .play.revealing > :not(#board, .banner, .ticker, .controls),
@@ -2446,13 +3397,17 @@ body[data-night='1']:has(.play.revealing) #top {
   .logo {
     font-size: clamp(110px, 34vw, 160px);
   }
+  /* The tagline takes the width under the logo; the spy stands beside the logo only, so no word
+     of the story goes behind his coat. */
   .tagline {
-    max-width: 22ch;
+    max-width: none;
     font-size: 15px;
     margin-top: 16px;
   }
   .spy {
-    height: 100%;
+    top: 0;
+    bottom: auto;
+    height: calc(clamp(110px, 34vw, 160px) * 1.75);
     right: -10px;
   }
 }
@@ -2461,6 +3416,26 @@ body[data-night='1']:has(.play.revealing) #top {
     padding-left: 10px;
     padding-right: 10px;
     gap: 6px;
+  }
+  /* Rival rows: a narrower rank, so the twist and the pack get the width. */
+  .rivals-screen {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .rival {
+    grid-template-columns: 30px 1fr auto;
+    gap: 10px;
+    padding: 12px 12px 12px 14px;
+  }
+  .rival .rank {
+    font-size: 36px;
+  }
+  .rival .state {
+    font-size: 18px;
+    padding: 4px 8px 2px;
+  }
+  .pack {
+    gap: 6px 10px;
   }
   .mark {
     font-size: 22px;
@@ -2572,10 +3547,6 @@ body[data-night='1']:has(.play.revealing) #top {
     font-size: 13px;
     padding: 6px 12px 5px 8px;
   }
-  .title-card .notes .canister {
-    width: 20px;
-    height: 20px;
-  }
   .film-tag {
     font-size: 11px;
   }
@@ -2644,6 +3615,47 @@ body[data-night='1']:has(.play.revealing) #top {
   .chip.back .q {
     font-size: 28px;
   }
+  .chip .mk {
+    right: -4px;
+    bottom: -4px;
+    width: 15px;
+    height: 15px;
+    box-shadow: 0 0 0 1px var(--paper);
+  }
+  .chip .mk svg {
+    width: 9px;
+    height: 11px;
+  }
+  .chip .mk-partner svg {
+    width: 11px;
+    height: 8px;
+  }
+  .chip .mk + .mk {
+    right: 9px;
+  }
+  .chip .x2c {
+    width: 18px;
+    height: 18px;
+    padding: 1px 1px 0 0;
+    font-size: 9px;
+  }
+  /* No room for both: the hatching already says face down. */
+  .chip.x2 .fd-mark {
+    display: none;
+  }
+  /* The wiretap slip keeps its headphones and loses its word, clear of the total. */
+  .plate .tapped {
+    top: 6px;
+    right: 6px;
+    padding: 3px 5px 2px;
+  }
+  .plate .tapped svg {
+    width: 14px;
+    height: 12px;
+  }
+  .plate .tapped b {
+    display: none;
+  }
   .plate {
     min-height: 126px;
     padding: 6px 4px;
@@ -2705,6 +3717,10 @@ body[data-night='1']:has(.play.revealing) #top {
     line-height: 1.2;
     padding-bottom: 0;
   }
+  .card.long .tx {
+    font-size: 9px;
+    line-height: 1.15;
+  }
   /* Five cards: smaller print, so the longest rules (the Assassin's) stay on the card down to
      360px wide, and "Double Agent" stays on one line. */
   .hand[data-n='5'] .card {
@@ -2745,11 +3761,32 @@ body[data-night='1']:has(.play.revealing) #top {
   .result.peek .btns > * {
     flex: 1;
   }
-  .card .turned {
+  .card .stamps {
     top: 24px;
     right: 3px;
+    gap: 2px;
+  }
+  .card .stamp {
     font-size: 12px;
     padding: 2px 3px 1px;
+  }
+  .card .stamp svg {
+    width: 10px;
+    height: 7px;
+  }
+  /* A drop's choices take a row of their own above the table's buttons. */
+  .controls .choice {
+    flex: 0 0 100%;
+    gap: 6px;
+  }
+  .controls .choice .slip {
+    flex: 1 1 auto;
+    font-size: 19px;
+  }
+  .slip.face > span {
+    flex: 1;
+    justify-content: center;
+    padding: 8px 6px 6px;
   }
   .sheet.help {
     height: 88dvh;
@@ -2799,6 +3836,117 @@ body[data-night='1']:has(.play.revealing) #top {
     padding: 2px 0 12px;
     font-size: 13px;
     line-height: 1.3;
+  }
+  /* On a phone the fine print takes the slip's whole width, under the skyline. */
+  .title-card .line.new .name {
+    grid-row: auto;
+  }
+  .title-card .line.new > p {
+    padding-bottom: 6px;
+  }
+  .title-card .line > .note {
+    grid-column: 1 / -1;
+    margin: 0 0 10px 10px;
+    font-size: 11px;
+  }
+  .title-card .cable {
+    font-size: 11.5px;
+    line-height: 1.95;
+    letter-spacing: 0.03em;
+  }
+  .title-card .cable .typed {
+    padding: 2px 7px 1px;
+  }
+  /* The rival's tools take a third row on its side, under the score (its name is on the first). */
+  .scorebar .side.has-intel {
+    row-gap: 3px;
+  }
+  .scorebar .intel {
+    order: 2;
+    gap: 8px;
+  }
+  .twist-chip {
+    font-size: 14px;
+  }
+  .unseen-btn .face {
+    padding: 4px 7px 2px;
+    font-size: 11px;
+  }
+  .unseen-btn b {
+    font-size: 16px;
+  }
+  /* The open strip spans the table, over the top of the board. */
+  .unseen-panel {
+    right: 0;
+    width: auto;
+    padding: 10px 12px 12px;
+  }
+  .unseen-head b {
+    font-size: 19px;
+  }
+  .unseen-list {
+    gap: 5px 10px;
+  }
+  .dossier-card .folder {
+    padding: 26px 18px 20px;
+  }
+  .dossier-stamp {
+    font-size: 24px;
+  }
+  .dossier-card .file {
+    font-size: 13.5px;
+    line-height: 1.45;
+  }
+  .dossier-card .twist {
+    font-size: 13px;
+  }
+  .roster-card .sub {
+    font-size: 12.5px;
+  }
+  .roster-card .minis {
+    grid-template-columns: repeat(4, minmax(0, 78px));
+    gap: 9px 8px;
+  }
+  .mc {
+    height: 84px;
+    padding-top: 18px;
+  }
+  .mc .pow {
+    font-size: 21px;
+  }
+  .mc .art {
+    width: 34px;
+    height: 34px;
+  }
+  .mc .nm {
+    font-size: 12.5px;
+  }
+  .news-line {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 10px;
+    padding: 8px 14px 10px 8px;
+  }
+  .news-line .art {
+    width: 40px;
+    height: 40px;
+  }
+  .news-line h3 {
+    font-size: 22px;
+  }
+  .news-line p {
+    font-size: 12px;
+  }
+  .news-line .note {
+    font-size: 11.5px;
+  }
+  .telegram {
+    padding: 16px 18px 20px;
+  }
+  .telegram .eline {
+    font-size: 14px;
+  }
+  .telegram .eline.sig {
+    font-size: 36px;
   }
 }
 

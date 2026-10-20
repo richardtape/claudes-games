@@ -15,7 +15,7 @@
 // rival can't recognise it later face down. Any new path that sends a card to a hand must use
 // returnToHand (Phase 2b-ii).
 import { createRng, hashString } from '../../../shared/rng.js';
-import { AGENT, CAPACITY, CITIES, CITY, DECK, MAX_HAND, MAX_SEATS, MIN_SEATS, RULES, START_HAND, TARGET, TURNS } from './data.js';
+import { AGENT, CAPACITY, CITY, CLASSIC_CITIES, DECK, MAX_HAND, MAX_SEATS, MIN_SEATS, RULES, START_HAND, TARGET, TURNS } from './data.js';
 
 // ── randomness kept inside state.rng ─────────────────────────────────────────
 const rng = createRng(0);
@@ -87,9 +87,17 @@ function mintUid(state, seat) {
   }
 }
 
-export function newMatch({ seed = Date.now(), target = TARGET, cities = null, seats = 2, film = null } = {}) {
+/**
+ * A new match. `roster` is the agents every seat is dealt one of (default: Classic, DECK) and `pool` the
+ * cities rounds are dealt from (default: Classic, CLASSIC_CITIES); js/roster.js builds both for Mixed and
+ * ladder matches. `feature` (ids from the pool) makes round 1 deal one of them. `twist` is a ladder rival's
+ * twist ({ ...TWISTS[id], seat }) or null. `cities` deals those three ids in round 1 instead (tests, the sim).
+ */
+export function newMatch({ seed = Date.now(), target = TARGET, cities = null, seats = 2, film = null, roster = DECK, pool = CLASSIC_CITIES, feature = null, twist = null } = {}) {
   if (!Number.isInteger(seats) || seats < MIN_SEATS || seats > MAX_SEATS) throw new RangeError(`seats must be ${MIN_SEATS} to ${MAX_SEATS}, got ${seats}`);
   if (film !== null && !(Number.isInteger(film) && film >= 0 && film <= 2)) throw new RangeError(`film must be null or 0 to 2, got ${film}`);
+  if (!roster.length || !roster.every((id) => AGENT[id])) throw new RangeError(`unknown agent in roster: ${roster}`);
+  if (pool.length < 3 || !pool.every((id) => CITY[id])) throw new RangeError(`a city pool needs 3 or more known cities, got ${pool}`);
   const state = {
     v: STATE_VERSION,
     seed: String(seed),
@@ -107,19 +115,61 @@ export function newMatch({ seed = Date.now(), target = TARGET, cities = null, se
     history: [],
     winner: null,
     winBy: null,
+    // Phase 2b-ii, last so Classic states keep 2b-i's key order (startRound reads them).
+    roster: roster.slice(),
+    cityPool: pool.slice(),
+    twist: twist ? { ...twist } : null,
   };
-  startRound(state, { cities, film });
+  startRound(state, { cities, film, feature });
   return state;
 }
 
-export function startRound(state, { cities = null, film = null } = {}) {
+/**
+ * The agents `seat` is dealt each round: the match's roster, plus the twist's card for the seat holding an
+ * `extra` twist. A fresh array. Works on a state and on a view. Call it per deal, never per card.
+ */
+export function deckList(stateOrView, seat) {
+  const t = stateOrView.twist;
+  return t && t.id === 'extra' && t.seat === seat ? [...stateOrView.roster, t.kind] : stateOrView.roster.slice();
+}
+
+/**
+ * Round 1 of a match with featured cities: one of them (drawn first), then two from a shuffle of the rest
+ * of the pool, the three shuffled.
+ */
+function featuredCities(state, feature) {
+  const first = feature[rint(state, feature.length)];
+  const rest = rshuffle(state, state.cityPool.filter((id) => id !== first)).slice(0, 2);
+  return rshuffle(state, [first, ...rest]);
+}
+
+/**
+ * Fills the fields Phase 2b-ii added to the state with their Classic defaults, where missing, so a
+ * match saved by 2b-i resumes as Classic. In place, idempotent; returns the state.
+ */
+export function upgradeState(state) {
+  if (!Array.isArray(state.roster)) state.roster = DECK.slice();
+  if (!Array.isArray(state.cityPool)) state.cityPool = CLASSIC_CITIES.slice();
+  if (state.twist === undefined) state.twist = null;
+  if (state.round && !Array.isArray(state.round.taps)) state.round.taps = [];
+  if (state.round && !Array.isArray(state.round.exposed)) state.round.exposed = [];
+  return state;
+}
+
+/**
+ * Deals round `state.roundNo`: three cities (`cities` if given; in round 0 one of `feature` if given;
+ * otherwise three from a shuffle of the pool) and each seat's deck from deckList, then sets up the
+ * match's twist, if any (setUpTwist).
+ */
+export function startRound(state, { cities = null, film = null, feature = null } = {}) {
   const no = state.roundNo;
   const n = seatCount(state);
-  const cityIds = cities || rshuffle(state, CITIES.map((c) => c.id)).slice(0, 3);
+  // A Classic pool is CITIES' first 11 in 2b-i's order, so this shuffle draws exactly as 2b-i's did.
+  const cityIds = cities || (feature?.length && no === 0 ? featuredCities(state, feature) : rshuffle(state, state.cityPool).slice(0, 3));
   const cards = {};
   state.round = { no, cards }; // mintUid reads these two while dealing
   const decks = allSeats(n).map((seat) =>
-    rshuffle(state, DECK).map((kind) => {
+    rshuffle(state, deckList(state, seat)).map((kind) => {
       const uid = mintUid(state, seat);
       cards[uid] = { uid, kind, id0: kind, owner: seat, origin: seat, city: null, turn: 0, faceDown: false, hidden: false, bonus: 0 };
       return uid;
@@ -147,11 +197,54 @@ export function startRound(state, { cities = null, film = null } = {}) {
     folded: Array(n).fill(false),
     events: [],
     result: null,
+    // Phase 2b-ii, last so Classic rounds keep 2b-i's key order. Wiretaps: { by, on, turn } (flipTrick,
+    // the `tap` twist); hand cards a `seen` twist has shown its seat: { by, uid }.
+    taps: [],
+    exposed: [],
   };
+  // After the film draw, so a match without a twist draws exactly as 2b-i's did.
+  if (state.twist) setUpTwist(state);
   state.carry = 0;
   state.phase = 'plan';
   beginTurn(state);
   return state;
+}
+
+/**
+ * The twist's part of a deal (startRound, every round), for the seat holding it. `extra`: nothing more
+ * (deckList dealt its card). `placed`: the seat's card of `kind` (from its deck, or else from its hand,
+ * which then takes the deck's top card, with no event) starts the round face down in a random city,
+ * turn 0, flagged `placed`; it doesn't arrive (no Istanbul, Tokyo, Tripwire or Prague). `tap`: the seat
+ * taps its mark on turns `from`..TURNS, as a Wiretap would. `seen`: the seat sees `count` cards of its
+ * mark's hand, picked at random.
+ */
+function setUpTwist(state) {
+  const R = state.round;
+  const { id, seat } = state.twist;
+  if (id === 'placed') {
+    const { kind } = state.twist;
+    let uid = R.decks[seat].find((u) => R.cards[u].kind === kind);
+    if (uid) R.decks[seat].splice(R.decks[seat].indexOf(uid), 1);
+    else {
+      uid = R.hands[seat].find((u) => R.cards[u].kind === kind);
+      if (!uid) return; // not among the seat's cards: nothing to place
+      R.hands[seat].splice(R.hands[seat].indexOf(uid), 1);
+      if (R.decks[seat].length) R.hands[seat].push(R.decks[seat].shift());
+    }
+    const ci = rint(state, 3);
+    Object.assign(R.cards[uid], { city: ci, turn: 0, hidden: true, faceDown: true, placed: true });
+    R.cities[ci].sides[seat].push(uid);
+  } else if (id === 'tap') {
+    const on = markOf(seatCount(state), seat, R.no);
+    for (let turn = state.twist.from; turn <= TURNS; turn++) R.taps.push({ by: seat, on, turn });
+  } else if (id === 'seen') {
+    const mark = markOf(seatCount(state), seat, R.no);
+    for (let i = 0; i < state.twist.count; i++) {
+      const unseen = R.hands[mark].filter((u) => !R.exposed.some((e) => e.uid === u));
+      if (!unseen.length) break;
+      R.exposed.push({ by: seat, uid: unseen[rint(state, unseen.length)] });
+    }
+  }
 }
 
 function beginTurn(state) {
@@ -181,13 +274,38 @@ export function cityOpen(state, ci, turn = state.round.turn) {
 
 const canArrive = (state, seat, ci) => cityOpen(state, ci) && state.round.cities[ci].sides[seat].length < capacityOf(state.round.cities[ci].id);
 
+/**
+ * Every drop `seat` may lock this turn, in hand order, then cities 0..2: `{ uid, city }`, and for an
+ * Accomplice where its side has two or more free places, right after that, `{ uid, city, partner }` for
+ * every other card in hand (in hand order). In Casablanca every one of those drops comes twice, face up
+ * then face down: `{ uid, city, down: false }`, `{ uid, city, down: true }` (and `{ uid, city, down,
+ * partner }`). A plan's `partner` and `down` are present only when used.
+ */
 export function legalDrops(state, seat) {
   const R = state.round;
   if (!R || state.phase !== 'plan' || !isSeat(state, seat) || R.folded[seat]) return [];
   const out = [];
-  for (const uid of R.hands[seat]) for (let ci = 0; ci < 3; ci++) if (canArrive(state, seat, ci)) out.push({ uid, city: ci });
+  const hand = R.hands[seat];
+  for (const uid of hand) {
+    // One property read per card: Classic hands never take the partner branch.
+    const partners = AGENT[R.cards[uid].kind].partner;
+    for (let ci = 0; ci < 3; ci++) {
+      if (!canArrive(state, seat, ci)) continue;
+      const pair = partners && capacityOf(R.cities[ci].id) - R.cities[ci].sides[seat].length >= 2;
+      if (R.cities[ci].id === 'casablanca') {
+        out.push({ uid, city: ci, down: false }, { uid, city: ci, down: true });
+        if (pair) for (const p of hand) if (p !== uid) out.push({ uid, city: ci, down: false, partner: p }, { uid, city: ci, down: true, partner: p });
+        continue;
+      }
+      out.push({ uid, city: ci });
+      if (pair) for (const p of hand) if (p !== uid) out.push({ uid, city: ci, partner: p });
+    }
+  }
   return out;
 }
+
+/** The same drop: uid and city, the same partner (none if missing) and the same face (`down`, missing is face up). */
+const sameDrop = (a, b) => a.uid === b.uid && a.city === b.city && (a.partner ?? null) === (b.partner ?? null) && !!a.down === !!b.down;
 
 const cityOf = (state, card) => state.round.cities[card.city];
 
@@ -206,10 +324,13 @@ function jammed(state, card) {
   return false;
 }
 
-/** Tricks work unless the card dropped face down (Vienna, Sleeper, Tripwire's power) or is jammed. */
+/**
+ * Tricks work unless the card dropped face down (Vienna, Sleeper) or is jammed. Tripwire and Decoy are
+ * the exceptions: their tricks work face down (not in Vienna, not jammed).
+ */
 export function hasTricks(state, card) {
   if (card.city === null) return false;
-  if (card.hidden && card.kind !== 'tripwire') return false;
+  if (card.hidden && card.kind !== 'tripwire' && card.kind !== 'decoy') return false;
   if (cityOf(state, card).id === 'vienna') return false;
   return !jammed(state, card);
 }
@@ -228,20 +349,54 @@ export function powerOf(state, uid) {
     if (r === card.owner) continue;
     for (const u of city.sides[r]) if (R.cards[u].kind === 'mole' && hasTricks(state, R.cards[u])) p -= 1;
   }
+  // Tokyo: every agent that arrived on the latest turn with an arrival here (a placed card's turn 0 never counts).
+  if (city.id === 'tokyo' && card.turn >= 1 && card.turn === latestTurn(state, city)) p += CITY.tokyo.bonus;
   return Math.max(0, p);
 }
 
+/** The latest turn any agent in this city arrived on (0 if none has). Plain loops: powerOf calls it in Tokyo. */
+function latestTurn(state, city) {
+  const cards = state.round.cards;
+  let latest = 0;
+  for (let r = 0; r < city.sides.length; r++) for (const u of city.sides[r]) if (cards[u].turn > latest) latest = cards[u].turn;
+  return latest;
+}
+
 export function cityTotals(state, ci) {
-  const sides = state.round.cities[ci].sides;
-  return sides.map((side) => side.reduce((s, u) => s + powerOf(state, u), 0));
+  const city = state.round.cities[ci];
+  // Rome: each side's single strongest agent counts again, × (factor − 1).
+  if (city.id === 'rome') return city.sides.map((side) => romeTotal(state, side, true, null));
+  return city.sides.map((side) => side.reduce((s, u) => s + powerOf(state, u), 0));
 }
 
 /**
- * Who holds a city, given each seat's total there (`totals[s]`) and number of agents there
- * (`counts[s]`). Seats with nobody there take no part. Lisbon goes to the single lowest total;
- * anywhere else to the single highest, if it is above 0. A tie holds nothing.
+ * A side's total in Rome: its powers plus the strongest one again × (CITY.rome.factor − 1). With `all`
+ * false, only what `seat` can see (viewFor's `known`): its own cards and the face-up ones; a spectator
+ * sees the face-up ones.
  */
-export function leaderOf(cityId, totals, counts) {
+function romeTotal(state, side, all, seat) {
+  const cards = state.round.cards;
+  let sum = 0;
+  let top = 0;
+  for (const u of side) {
+    if (!all && cards[u].faceDown && cards[u].owner !== seat) continue;
+    const p = powerOf(state, u);
+    sum += p;
+    if (p > top) top = p;
+  }
+  return sum + top * (CITY.rome.factor - 1);
+}
+
+/**
+ * Who holds a city, given each seat's total there (`totals[s]`), number of agents there (`counts[s]`)
+ * and match points (`scores[s]`, for Geneva). Seats with nobody there take no part. Lisbon goes to the
+ * single lowest total; Reykjavik to the single seat with the most agents, a tie on agents to the single
+ * higher total among those seats, whatever the power; anywhere else to the single highest, if it is
+ * above 0. A tie holds nothing, except in Geneva: it goes to the tied seat single lowest on `scores`
+ * (still nothing if those are level too, or without `scores`).
+ */
+export function leaderOf(cityId, totals, counts, scores = null) {
+  if (cityId === 'reykjavik') return mostAgents(totals, counts);
   const low = cityId === 'lisbon';
   let best = null;
   let tied = false;
@@ -252,14 +407,43 @@ export function leaderOf(cityId, totals, counts) {
       tied = false;
     } else if (totals[s] === totals[best]) tied = true;
   }
-  if (best === null || tied) return null;
-  return low || totals[best] > 0 ? best : null;
+  if (best === null) return null;
+  if (tied) best = cityId === 'geneva' && scores ? behindOf(totals, counts, scores, totals[best]) : null;
+  return best !== null && (low || totals[best] > 0) ? best : null;
+}
+
+/** Reykjavik: the single seat with the most agents there; among seats tied on agents, the single higher total. */
+function mostAgents(totals, counts) {
+  let best = null;
+  let tied = false;
+  for (let s = 0; s < counts.length; s++) {
+    if (!counts[s]) continue;
+    if (best === null || counts[s] > counts[best] || (counts[s] === counts[best] && totals[s] > totals[best])) {
+      best = s;
+      tied = false;
+    } else if (counts[s] === counts[best] && totals[s] === totals[best]) tied = true;
+  }
+  return tied ? null : best;
+}
+
+/** Geneva: among the seats with agents there and a total of `top`, the one single lowest on match points, or null. */
+function behindOf(totals, counts, scores, top) {
+  let best = null;
+  let tied = false;
+  for (let s = 0; s < totals.length; s++) {
+    if (!counts[s] || totals[s] !== top) continue;
+    if (best === null || scores[s] < scores[best]) {
+      best = s;
+      tied = false;
+    } else if (scores[s] === scores[best]) tied = true;
+  }
+  return tied ? null : best;
 }
 
 /** Seat that holds the city right now, or null. */
 export function cityLeader(state, ci) {
   const city = state.round.cities[ci];
-  return leaderOf(city.id, cityTotals(state, ci), city.sides.map((s) => s.length));
+  return leaderOf(city.id, cityTotals(state, ci), city.sides.map((s) => s.length), state.scores);
 }
 
 // ── planning ────────────────────────────────────────────────────────────────
@@ -271,8 +455,10 @@ export function lock(state, seat, plan) {
     R.plans[seat] = { pass: true };
     return true;
   }
-  if (!legalDrops(state, seat).some((d) => d.uid === plan.uid && d.city === plan.city)) return false;
-  R.plans[seat] = { uid: plan.uid, city: plan.city };
+  // Store the matched legal drop, not the caller's object, so a plan never carries a stray key.
+  const drop = legalDrops(state, seat).find((d) => sameDrop(d, plan));
+  if (!drop) return false;
+  R.plans[seat] = drop;
   return true;
 }
 
@@ -341,6 +527,23 @@ function settleCall(state) {
     }
   if (P.from.some((s) => P.calls[s] === 'on')) R.stake *= 2;
   if (folder !== null && activeSeats(state).length === 1) endByFold(state, folder);
+}
+
+/**
+ * The Blackmailer's flip (Decision 4): the round's one escalation, free and settled on the spot. If nobody
+ * has escalated this round, `seat` has: the stake doubles and every other seat still in is recorded as
+ * playing on (`called.free`). No token is spent and nobody answers: it fires while a turn resolves, after
+ * every plan is locked. Internal on purpose (never an option on `escalate`, so no table action reaches it).
+ * Returns whether it escalated.
+ */
+function freeEscalation(state, seat) {
+  const R = state.round;
+  if (R.escalated.some(Boolean)) return false;
+  R.escalated[seat] = true;
+  R.stake *= 2;
+  // A fresh array, as settleCall's answers are.
+  R.called = { by: seat, answers: R.folded.map((out, s) => (out || s === seat ? null : 'on')), free: true };
+  return true;
 }
 
 /**
@@ -442,6 +645,42 @@ function takeOut(state, uid, ev, cause) {
   R.gone[card.owner].push(uid);
 }
 
+/**
+ * Is this agent guarded: does another agent of its owner's, in its city, a Bodyguard with tricks, stand
+ * with it? A guarded agent can't be taken out or turned (Assassin, Tripwire, Tangier, Turncoat). A plain
+ * loop: the arrival path runs it.
+ */
+function guarded(state, uid) {
+  const R = state.round;
+  const card = R.cards[uid];
+  for (const u of R.cities[card.city].sides[card.owner]) {
+    if (u === uid) continue;
+    const c = R.cards[u];
+    if (c.kind === 'bodyguard' && hasTricks(state, c)) return true;
+  }
+  return false;
+}
+
+/**
+ * The card that actually takes a take-out or a turn meant for `uid`: the owner's first face-down Decoy
+ * with tricks in that city (never `uid` itself), turned face up, or else `uid`. Check guarded() first,
+ * so a guarded agent never uses up a Decoy.
+ */
+function stand(state, uid, ev) {
+  const R = state.round;
+  const card = R.cards[uid];
+  for (const u of R.cities[card.city].sides[card.owner]) {
+    if (u === uid) continue;
+    const c = R.cards[u];
+    if (c.kind === 'decoy' && c.faceDown && hasTricks(state, c)) {
+      c.faceDown = false;
+      ev.push({ t: 'decoy', uid: u, saved: uid, city: card.city });
+      return u;
+    }
+  }
+  return uid;
+}
+
 function draw(state, seat, ev, why = 'turn') {
   const R = state.round;
   if (!R.decks[seat].length || R.hands[seat].length >= MAX_HAND) return;
@@ -450,8 +689,13 @@ function draw(state, seat, ev, why = 'turn') {
   ev.push({ t: 'draw', seat, uid, why });
 }
 
-/** Put a card into a city (as a drop or a move) and spring any armed rival Tripwire there. */
-function arrive(state, uid, ci, ev) {
+/**
+ * Put a card into a city (as a drop or a move) and spring any armed rival Tripwire there, unless the
+ * card is guarded. A Decoy can take the wire for it. Then, in Prague, every other face-down agent there
+ * turns face up, whether or not the arrival survived; resolveOne's drops pass `prague` false and reveal
+ * together once all have arrived (pragueDrops). Returns whether the arriving card is still there.
+ */
+function arrive(state, uid, ci, ev, prague = true) {
   const R = state.round;
   const card = R.cards[uid];
   const city = R.cities[ci];
@@ -467,24 +711,49 @@ function arrive(state, uid, ci, ev) {
     });
     if (wire) break;
   }
-  if (!wire) return true;
-  R.cards[wire].faceDown = false;
-  ev.push({ t: 'tripwire', uid: wire, victim: uid, city: ci });
-  takeOut(state, uid, ev, 'tripwire');
-  return false;
+  // A guarded arrival walks past, and the wire stays armed. (Asked only once a wire is found: the
+  // search has no side effects, and most arrivals meet no wire.)
+  let here = true;
+  if (wire && !guarded(state, uid)) {
+    R.cards[wire].faceDown = false;
+    ev.push({ t: 'tripwire', uid: wire, victim: uid, city: ci });
+    const gone = stand(state, uid, ev);
+    takeOut(state, gone, ev, 'tripwire');
+    here = gone !== uid;
+  }
+  if (prague && city.id === 'prague') blowCovers(state, uid, city, ev);
+  return here;
 }
 
-/** The strongest face-up agent of any rival here; ties go to the latest arrival, then the later in table order. */
-function strongestRival(state, card) {
+/**
+ * Prague: every face-down agent in the city but `uid` (the arrival, which keeps its face; null for none)
+ * turns face up, seats in order, each side in order. Revealed cards keep `hidden`, as the Interrogator's do.
+ */
+function blowCovers(state, uid, city, ev) {
+  const cards = state.round.cards;
+  for (let r = 0; r < city.sides.length; r++)
+    for (const u of city.sides[r]) {
+      const c = cards[u];
+      if (u === uid || !c.faceDown) continue;
+      c.faceDown = false;
+      ev.push({ t: 'reveal', uid: u, kind: c.kind, by: 'prague' });
+    }
+}
+
+/**
+ * The strongest (Assassin) or, with `weakest`, the weakest (Turncoat) face-up, unguarded agent of any
+ * rival here; ties go to the latest arrival, then the later in table order. Null if there is none.
+ */
+function rivalTarget(state, card, weakest = false) {
   const R = state.round;
   const sides = cityOf(state, card).sides;
   let best = null;
   for (const r of rivalSeats(seatCount(state), card.owner))
     for (const u of sides[r]) {
       const c = R.cards[u];
-      if (c.faceDown) continue;
+      if (c.faceDown || guarded(state, u)) continue;
       const p = powerOf(state, u);
-      if (!best || p > best.p || (p === best.p && c.turn >= best.turn)) best = { uid: u, p, turn: c.turn };
+      if (!best || (weakest ? p < best.p : p > best.p) || (p === best.p && c.turn >= best.turn)) best = { uid: u, p, turn: c.turn };
     }
   return best?.uid ?? null;
 }
@@ -500,6 +769,10 @@ function returnToHand(state, uid, seat) {
   const fresh = mintUid(state, seat);
   delete R.cards[uid];
   Object.assign(card, { uid: fresh, kind: card.id0, city: null, turn: 0, faceDown: false, hidden: false, bonus: 0, owner: seat });
+  delete card.partner;
+  delete card.placed;
+  // A `seen` twist forgets it: the old uid is free now and could be minted again for another card. (In place: bot playouts send cards home.)
+  for (let i = R.exposed.length - 1; i >= 0; i--) if (R.exposed[i].uid === uid) R.exposed.splice(i, 1);
   R.cards[fresh] = card;
   R.hands[seat].push(fresh);
   return fresh;
@@ -508,7 +781,8 @@ function returnToHand(state, uid, seat) {
 function flipTrick(state, uid, seat, ev) {
   const R = state.round;
   const card = R.cards[uid];
-  if (card.city === null || card.faceDown || !hasTricks(state, card)) return;
+  // An agent taken out or turned (Turncoat) before its flip loses the flip. (In Classic the owner is always the seat.)
+  if (card.city === null || card.faceDown || card.owner !== seat || !hasTricks(state, card)) return;
   const city = cityOf(state, card);
   // "Your rival's drop" is your mark's drop this round.
   const rivalPlan = R.plans[markOf(seatCount(state), seat, R.no)];
@@ -519,9 +793,9 @@ function flipTrick(state, uid, seat, ev) {
       draw(state, seat, ev, 'lookout');
       break;
     case 'assassin': {
-      const target = city.id === 'moscow' ? null : strongestRival(state, card);
+      const target = city.id === 'moscow' ? null : rivalTarget(state, card);
       ev.push({ t: 'trick', uid, kind: 'assassin', target });
-      if (target) takeOut(state, target, ev, 'assassin');
+      if (target) takeOut(state, stand(state, target, ev), ev, 'assassin');
       break;
     }
     case 'double': {
@@ -555,6 +829,73 @@ function flipTrick(state, uid, seat, ev) {
       }
       break;
     }
+    case 'interrogator': {
+      // Every face-down rival agent here, seats in table order after the owner, each side in order.
+      // Revealed cards keep `hidden`, so a face-down drop still has no tricks, and a Tripwire is disarmed.
+      const revealed = [];
+      for (const r of rivalSeats(seatCount(state), card.owner)) for (const u of city.sides[r]) if (R.cards[u].faceDown) revealed.push(u);
+      ev.push({ t: 'trick', uid, kind: 'interrogator', revealed });
+      for (const u of revealed) {
+        R.cards[u].faceDown = false;
+        ev.push({ t: 'reveal', uid: u, kind: R.cards[u].kind, by: 'interrogator' });
+      }
+      break;
+    }
+    case 'turncoat': {
+      const target = city.id === 'moscow' ? null : rivalTarget(state, card, true);
+      if (!target) {
+        ev.push({ t: 'trick', uid, kind: 'turncoat', target: null, to: null });
+        break;
+      }
+      const to = R.cards[target].owner;
+      ev.push({ t: 'trick', uid, kind: 'turncoat', target, to });
+      // The two swap places and owners (origin kept). Both are face up: a Decoy that stands in turns over.
+      const turned = stand(state, target, ev);
+      const mine = city.sides[card.owner];
+      const theirs = city.sides[to];
+      mine[mine.indexOf(uid)] = turned;
+      theirs[theirs.indexOf(turned)] = uid;
+      R.cards[turned].owner = card.owner;
+      card.owner = to;
+      break;
+    }
+    case 'courier': {
+      // Your strongest face-up agent in another city, never one in Moscow (ties: the latest arrival, then
+      // the lowest city index), moves here if there is room. The move is an arrival (Decision 4).
+      const here = card.city;
+      let pick = null;
+      if (canArrive(state, seat, here))
+        for (let ci = 0; ci < R.cities.length; ci++) {
+          if (ci === here || R.cities[ci].id === 'moscow') continue;
+          for (const u of R.cities[ci].sides[seat]) {
+            const c = R.cards[u];
+            if (c.faceDown) continue;
+            const p = powerOf(state, u);
+            if (!pick || p > pick.p || (p === pick.p && c.turn > pick.turn)) pick = { uid: u, p, turn: c.turn, ci };
+          }
+        }
+      ev.push({ t: 'trick', uid, kind: 'courier', moved: pick ? pick.uid : null, from: pick ? pick.ci : null });
+      if (pick) {
+        const side = R.cities[pick.ci].sides[seat];
+        side.splice(side.indexOf(pick.uid), 1);
+        const moved = R.cards[pick.uid];
+        moved.bonus = 0;
+        moved.turn = R.turn;
+        arrive(state, pick.uid, here, ev);
+      }
+      break;
+    }
+    case 'blackmailer':
+      ev.push({ t: 'trick', uid, kind: 'blackmailer', stake: freeEscalation(state, seat) ? R.stake : null });
+      break;
+    case 'wiretap': {
+      // Next turn `seat` hears which city its mark locks (viewFor's `tapped`). The final turn has no next turn.
+      const on = markOf(seatCount(state), seat, R.no);
+      const turn = R.turn < TURNS ? R.turn + 1 : null;
+      if (turn !== null) R.taps.push({ by: seat, on, turn });
+      ev.push({ t: 'trick', uid, kind: 'wiretap', on, turn });
+      break;
+    }
     case 'impostor': {
       if (!rivalCard || rivalCard.hidden || rivalCard.kind === 'impostor') {
         ev.push({ t: 'trick', uid, kind: 'impostor', as: null });
@@ -582,6 +923,52 @@ export function resolveTurn(state) {
   return ev;
 }
 
+/**
+ * The rest of an Accomplice's drop with a partner (resolveOne, after the Accomplice's own): the partner
+ * leaves the hand too, face down and flagged `partner` (no tricks but a Tripwire's or a Decoy's), dropped
+ * this turn, with Istanbul's bonus whenever the Accomplice took it. Pushes both drop events.
+ */
+function dropPartner(state, seat, plan, ev) {
+  const R = state.round;
+  const card = R.cards[plan.uid];
+  const mate = R.cards[plan.partner];
+  const city = R.cities[plan.city];
+  R.hands[seat].splice(R.hands[seat].indexOf(plan.partner), 1);
+  mate.hidden = true;
+  mate.faceDown = true;
+  mate.partner = true;
+  mate.turn = R.turn;
+  // The Accomplice's drop just set Istanbul's first busy turn if it took the bonus.
+  if (city.id === 'istanbul' && city.first === R.turn) mate.bonus = 3;
+  ev.push({ t: 'drop', seat, uid: plan.uid, city: plan.city, kind: card.kind, faceDown: card.faceDown, partner: plan.partner });
+  ev.push({ t: 'drop', seat, uid: plan.partner, city: plan.city, kind: mate.kind, faceDown: true, partnerOf: plan.uid });
+}
+
+/**
+ * Prague for a turn's drops, after every drop has arrived: each drop (or partner) that arrived in city `ci`
+ * this turn and is still there turns every other face-down agent there face up. So with two or more of
+ * them every face-down agent there turns over, and with one, all but it. Each card is revealed once.
+ */
+function pragueDrops(state, ci, order, dropped, ev) {
+  const R = state.round;
+  let count = 0;
+  let only = null;
+  for (const seat of order) {
+    const uid = dropped[seat];
+    if (!uid) continue;
+    if (R.cards[uid].city === ci) {
+      count++;
+      only = uid;
+    }
+    const mate = R.plans[seat].partner;
+    if (mate && R.cards[mate].city === ci) {
+      count++;
+      only = mate;
+    }
+  }
+  if (count) blowCovers(state, count === 1 ? only : null, R.cities[ci], ev);
+}
+
 function resolveOne(state, ev) {
   const R = state.round;
   const n = seatCount(state);
@@ -599,7 +986,8 @@ function resolveOne(state, ev) {
     const card = R.cards[plan.uid];
     R.hands[seat].splice(R.hands[seat].indexOf(plan.uid), 1);
     const cid = R.cities[plan.city].id;
-    card.hidden = !!AGENT[card.kind].faceDown || cid === 'vienna';
+    // Casablanca: the face the drop chose. (Its partner, if any, is always face down: dropPartner.)
+    card.hidden = cid === 'casablanca' ? !!plan.down : !!AGENT[card.kind].faceDown || cid === 'vienna';
     card.faceDown = card.hidden;
     card.turn = R.turn;
     if (cid === 'istanbul' && (!R.cities[plan.city].first || R.cities[plan.city].first === R.turn)) {
@@ -607,29 +995,44 @@ function resolveOne(state, ev) {
       card.bonus = 3;
     }
     dropped[seat] = plan.uid;
-    ev.push({ t: 'drop', seat, uid: plan.uid, city: plan.city, kind: card.kind, faceDown: card.faceDown });
+    if (plan.partner) dropPartner(state, seat, plan, ev);
+    else ev.push({ t: 'drop', seat, uid: plan.uid, city: plan.city, kind: card.kind, faceDown: card.faceDown });
   }
-  // Place without traps first, so a Tripwire also catches a rival dropped on the same turn.
+  // Place without traps first, so a Tripwire also catches a rival dropped on the same turn. An
+  // Accomplice's partner is placed with it, before any arrival.
   for (const seat of order) {
     const uid = dropped[seat];
     if (!uid) continue;
     const card = R.cards[uid];
     card.city = R.plans[seat].city;
     R.cities[card.city].sides[seat].push(uid);
+    const mate = R.plans[seat].partner;
+    if (mate) {
+      R.cards[mate].city = card.city;
+      R.cities[card.city].sides[seat].push(mate);
+    }
   }
   for (const seat of order) {
     const uid = dropped[seat];
     if (!uid) continue;
-    const card = R.cards[uid];
-    const ci = card.city;
+    const ci = R.plans[seat].city;
     const side = R.cities[ci].sides[seat];
     side.splice(side.indexOf(uid), 1);
-    arrive(state, uid, ci, ev);
+    arrive(state, uid, ci, ev, false);
+    // Then the partner, unless it already left: a Decoy partner can take a Tripwire meant for its Accomplice.
+    const mate = R.plans[seat].partner;
+    if (mate && R.cards[mate].city !== null) {
+      side.splice(side.indexOf(mate), 1);
+      arrive(state, mate, ci, ev, false);
+    }
   }
+  // Prague reveals for the drops once all of them have arrived, so (like the traps) it doesn't depend on who moves first.
+  for (let ci = 0; ci < R.cities.length; ci++) if (R.cities[ci].id === 'prague') pragueDrops(state, ci, order, dropped, ev);
   for (const seat of order) if (dropped[seat]) flipTrick(state, dropped[seat], seat, ev);
   for (const seat of order) {
     const uid = dropped[seat];
-    if (uid && R.cards[uid].city === R.plans[seat].city && R.cities[R.plans[seat].city].id === 'hongkong') draw(state, seat, ev, 'hongkong');
+    // A drop can be gone from the cards: a Turncoat turned to a rival's side, then sent home (re-keyed) by its Getaway.
+    if (uid && R.cards[uid]?.city === R.plans[seat].city && R.cities[R.plans[seat].city].id === 'hongkong') draw(state, seat, ev, 'hongkong');
   }
 
   // Havana: at the end of turn 4 everyone there defects to the next seat still in round the
@@ -652,6 +1055,7 @@ function resolveOne(state, ev) {
       ev.push({ t: 'havana', city: ci });
     });
   }
+  if (R.turn === CITY.glienicke.turn) for (let ci = 0; ci < R.cities.length; ci++) if (R.cities[ci].id === 'glienicke') crossBridge(state, ci, ev);
 
   if (R.turn >= TURNS) {
     endRound(state, ev);
@@ -660,6 +1064,39 @@ function resolveOne(state, ev) {
     R.turn++;
     beginTurn(state);
   }
+}
+
+/**
+ * Glienicke Bridge, at the end of turn CITY.glienicke.turn: each seat still in with agents in city `ci`
+ * sends its strongest there (by powerOf, face-down ones too; ties: the latest arrival, then the last in
+ * side order) across to the next seat still in after it round the table (two seats swap). Every move is
+ * worked out first, then made: the crosser changes owner and side, turns face up (keeping `hidden`, as
+ * Havana's do) and keeps its origin. Neither a Bodyguard nor a Decoy stops it. Pushes a `bridge` event.
+ */
+function crossBridge(state, ci, ev) {
+  const R = state.round;
+  const sides = R.cities[ci].sides;
+  const seats = activeSeats(state);
+  const moves = [];
+  for (let i = 0; i < seats.length; i++) {
+    const from = seats[i];
+    const to = seats[(i + 1) % seats.length];
+    let pick = null;
+    for (const u of sides[from]) {
+      const p = powerOf(state, u);
+      const turn = R.cards[u].turn;
+      if (!pick || p > pick.p || (p === pick.p && turn >= pick.turn)) pick = { uid: u, p, turn };
+    }
+    if (pick && to !== from) moves.push({ uid: pick.uid, from, to });
+  }
+  if (!moves.length) return;
+  for (const { uid, from, to } of moves) {
+    sides[from].splice(sides[from].indexOf(uid), 1);
+    sides[to].push(uid);
+    R.cards[uid].owner = to;
+    R.cards[uid].faceDown = false;
+  }
+  ev.push({ t: 'bridge', city: ci, moves });
 }
 
 /** Each seat's total for the tie-break. Lisbon (lowest wins) is left out, inverted, or counted, per `mode`. */
@@ -697,40 +1134,61 @@ export function roundWinner(cityIds, cityWinners, totals, mode = RULES.lisbonTie
 
 function endRound(state, ev) {
   const R = state.round;
+  // Everything face down turns over, except a Decoy in Tangier: it stays down until Tangier has struck,
+  // so it can still take the hit for its side (then it's revealed below).
   for (const city of R.cities)
+    for (const side of city.sides)
+      for (const u of side)
+        if (R.cards[u].faceDown && !(R.cards[u].kind === 'decoy' && city.id === 'tangier')) {
+          R.cards[u].faceDown = false;
+          ev.push({ t: 'reveal', uid: u, kind: R.cards[u].kind });
+        }
+  R.cities.forEach((city, ci) => {
+    if (city.id !== 'tangier') return;
+    // Every unguarded agent at the top power among the unguarded ones, each through a Decoy. Skip one
+    // already gone: a Decoy at the top power that stood in for another.
+    const all = city.sides.flat().filter((u) => !guarded(state, u));
+    if (all.length) {
+      const top = Math.max(...all.map((u) => powerOf(state, u)));
+      for (const u of all.filter((u) => powerOf(state, u) === top)) if (R.cards[u].city !== null) takeOut(state, stand(state, u, ev), ev, 'tangier');
+    }
+    // The Decoys Tangier didn't need turn over now.
     for (const side of city.sides)
       for (const u of side)
         if (R.cards[u].faceDown) {
           R.cards[u].faceDown = false;
           ev.push({ t: 'reveal', uid: u, kind: R.cards[u].kind });
         }
-  R.cities.forEach((city, ci) => {
-    if (city.id !== 'tangier') return;
-    const all = city.sides.flat();
-    if (!all.length) return;
-    const top = Math.max(...all.map((u) => powerOf(state, u)));
-    for (const u of all.filter((u) => powerOf(state, u) === top)) takeOut(state, u, ev, 'tangier');
   });
   const totals = R.cities.map((_, ci) => cityTotals(state, ci));
   const cityWinners = R.cities.map((_, ci) => cityLeader(state, ci));
   const winner = roundWinner(R.cities.map((c) => c.id), cityWinners, totals, RULES.lisbonTiebreak, R.folded);
   const mi = R.cities.findIndex((c) => c.id === 'monaco');
   const monaco = mi >= 0 ? cityWinners[mi] : null;
+  // Macau: the round's winner holding it scores the stake (before the final doubling) once more per time.
+  let macau = null;
+  if (winner !== null) for (let ci = 0; ci < R.cities.length; ci++) if (R.cities[ci].id === 'macau' && cityWinners[ci] === winner) macau = winner;
   const { stake, pot } = R;
   // A dead heat rolls the stake (not doubled) and the pot into the next round's pot.
   const carry = winner === null && RULES.rollover ? stake + pot : 0;
   R.pending = null;
-  R.result = { winner, points: winner === null ? 0 : stake * 2 + pot, folded: null, cityWinners, totals, monaco, strip: stripFor(state, winner, cityWinners), stake, pot, carry };
+  const extra = macau === null ? 0 : stake * CITY.macau.times;
+  // `macau` last: Phase 2b-ii's key, so Classic results keep 2b-i's key order.
+  R.result = { winner, points: winner === null ? 0 : stake * 2 + pot + extra, folded: null, cityWinners, totals, monaco, strip: stripFor(state, winner, cityWinners), stake, pot, carry, macau };
   ev.push({ t: 'round', ...R.result });
   award(state);
 }
 
 // ── what a seat may see ─────────────────────────────────────────────────────
-/** A card as `seat` sees it: rival face-down cards hide their identity and power. */
+/**
+ * A card as `seat` sees it: rival face-down cards hide their identity and power. A card dropped as an
+ * Accomplice's partner says so to everyone (`partner: true`, present only then), and so does a card a
+ * `placed` twist put in place before the round (`placed: true`, present only then).
+ */
 export function cardView(state, uid, seat) {
   const c = state.round.cards[uid];
   const secret = c.faceDown && c.owner !== seat;
-  return {
+  const v = {
     uid,
     owner: c.owner,
     origin: secret ? c.owner : c.origin,
@@ -745,6 +1203,9 @@ export function cardView(state, uid, seat) {
     bonus: secret ? 0 : c.bonus,
     tricks: secret || c.city === null ? null : hasTricks(state, c),
   };
+  if (c.partner) v.partner = true;
+  if (c.placed) v.placed = true;
+  return v;
 }
 
 /** Events as `seat` sees them: the rival's face-down drops and their draws stay secret. */
@@ -761,6 +1222,8 @@ function maskEvent(e, seat) {
 export function viewFor(state, seat) {
   const R = state.round;
   const player = isSeat(state, seat);
+  // This turn's wiretaps: who is tapping whom is public; the city a mark locks reaches its wiretapper only.
+  const taps = state.phase === 'plan' ? R.taps.filter((t) => t.turn === R.turn) : [];
   const myDeck = player ? R.decks[seat].map((u) => R.cards[u].kind).sort() : [];
   const secretIn = (city) => city.sides.some((side) => side.some((u) => R.cards[u].faceDown && R.cards[u].owner !== seat));
   return {
@@ -788,7 +1251,7 @@ export function viewFor(state, seat) {
       pending: R.pending
         ? { by: R.pending.by, from: R.pending.from.slice(), answered: R.pending.calls.map((c) => c !== null), mine: player ? R.pending.calls[seat] : null }
         : null,
-      called: R.called ? { by: R.called.by, answers: R.called.answers.slice() } : null,
+      called: R.called ? (R.called.free ? { by: R.called.by, answers: R.called.answers.slice(), free: true } : { by: R.called.by, answers: R.called.answers.slice() }) : null,
       folded: R.folded.slice(),
       cities: R.cities.map((city, ci) => ({
         id: city.id,
@@ -797,7 +1260,9 @@ export function viewFor(state, seat) {
         capacity: capacityOf(city.id),
         sides: city.sides.map((side) => side.map((u) => cardView(state, u, seat))),
         leader: secretIn(city) ? null : cityLeader(state, ci),
-        known: city.sides.map((side) => side.reduce((s, u) => s + (R.cards[u].faceDown && R.cards[u].owner !== seat ? 0 : powerOf(state, u)), 0)),
+        known: city.sides.map((side) =>
+          city.id === 'rome' ? romeTotal(state, side, false, seat) : side.reduce((s, u) => s + (R.cards[u].faceDown && R.cards[u].owner !== seat ? 0 : powerOf(state, u)), 0),
+        ),
         hiddenCount: city.sides.map((side) => side.filter((u) => R.cards[u].faceDown && R.cards[u].owner !== seat).length),
       })),
       hand: player ? R.hands[seat].map((u) => cardView(state, u, seat)) : [],
@@ -811,6 +1276,16 @@ export function viewFor(state, seat) {
       legal: player ? legalDrops(state, seat) : [],
       events: R.events.map((e) => maskEvent(e, seat)),
       result: R.result ? JSON.parse(JSON.stringify(R.result)) : null,
+      // Phase 2b-ii, last so Classic views keep 2b-i's key order. A mark that is unlocked, passing or folded shows no city.
+      taps: taps.map((t) => ({ by: t.by, on: t.on })),
+      tapped: player ? taps.filter((t) => t.by === seat).map((t) => ({ seat: t.on, city: R.plans[t.on] && !R.plans[t.on].pass ? R.plans[t.on].city : null })) : [],
+      // A `seen` twist's cards, for the seat that saw them and the card's owner only. The watcher keeps the
+      // kind even once the card has gone down face down; a card re-keyed on its way back to a hand drops out.
+      exposed: player ? R.exposed.filter((e) => R.cards[e.uid] && (e.by === seat || R.cards[e.uid].owner === seat)).map((e) => ({ uid: e.uid, by: e.by, kind: R.cards[e.uid].kind })) : [],
     },
+    // Phase 2b-ii, last so Classic views keep 2b-i's key order. Public: everyone plays the same roster.
+    roster: state.roster.slice(),
+    cityPool: state.cityPool.slice(),
+    twist: state.twist ? { ...state.twist } : null,
   };
 }

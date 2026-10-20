@@ -360,6 +360,30 @@ document it here rather than burying it in the game.
   from behind on points about 90% of the time (B20, B23).
 - Tune each table size at that size: the two-player pace and target gave 3- and 4-seat matches
   of 4.2 and 3.5 rounds (B25–B26).
+- Screen, probe, confirm for new content (Dead Drop Phase 2b-ii, `tools/SIMLOG.md` B27–B29): one
+  20,000-round screen on Mixed rosters at 8 samples (4 minutes) found no agent outside 44–56%
+  and no city outside 55–80%, so nothing needed a probe, and one 20,000-round confirm at the
+  bots' own samples (11 minutes) put all 20 agents at 45.9–51.8, all 20 cities at 61.8–75.0 and
+  seat 0 at 49.8%. The 8-sample numbers carried over for every agent and 19 of the 20 cities;
+  Reykjavik moved by more than the combined margin (68.0 to 64.5). Screen cheaply, but take the
+  numbers you publish from the confirm.
+- Measure a rival's twist on and off over the same seeds (`--variant notwist:twist=off`,
+  B31–B33). Mr Heron's placed Sleeper moved a steady bot's win rate by −5.0, the Countess's
+  final-turn tap by −2.4 and Control seeing one card by +1.6 (noise), and the Magpie's extra
+  Lookout made her *easier* (+4.1): a 13th, weak card can dilute a deck. Without twists the
+  Countess and Control played alike (41.0 against 39.1), so Control's twist had to make the
+  whole step. Seeing 1, 2 and 3 cards gave 40.7, 36.0 and 34.6; 3 was taken, a 4.1-point step
+  against a 4.2 margin. The ladder reads 70.2 / 63.4 / 43.3 / 38.7 / 34.6 (a steady Heron
+  against Wren to Control).
+- Content that pays in stakes hides from win rates, because playouts score rounds, not points
+  (B29–B30, `tools/points-by-roster.mjs`). On 2b-i's stake knobs the Blackmailer's free
+  escalation (no token, no fold in answer) pushed Mixed rounds won at stake 2 or more to 46.5%
+  (bar: 40 at most) and folds in answer down to 23.7% (bar: 25 or more), and matches holding one
+  ran 4.65 rounds against 5.68 without; its own player took 46.6% of the rounds and 48.1% of the
+  points, so it speeds the match for both sides rather than favouring its owner. Macau's holder
+  took 61.8% of the rounds but 73.1% of the points. The sim's escalation rate counts token
+  escalations only, so Mixed's 49.7% isn't like for like with Classic's. Report points beside
+  win rates; retuning the Mixed stakes is a Phase 3 item.
 
 ## Deploying
 
@@ -405,7 +429,8 @@ and new files.
 - A safety check you've never seen fail isn't proven: plant the problem (a leaked email, an
   absolute URL, a nested button) once and watch the check catch it.
 - Shell: don't `cd` inside compound commands (the working directory persists and breaks later
-  relative paths); use absolute paths. macOS `sed -i ''`. For multi-line edits a short
+  relative paths, and a `cd` in one of several Bash calls sent in the same response moves the
+  working directory for the others); use absolute paths. macOS `sed -i ''`. For multi-line edits a short
   `python3 - <<'EOF'` script with exact-match asserts is reliable.
 - Chained find-and-replace edits collide when one new value equals another old value
   (tiger's new `eat: 3.4` matched rosy's old one). Key each replacement by its context.
@@ -537,6 +562,41 @@ and new files.
 - When another session commits to the repo while a task runs, build the task's review diff
   from its own commit's parent (`git diff <commit>^ <commit>`), not the base noted before it
   started, or the reviewer reads the other session's files as the task's.
+- Freeze the previous engine and compare through a projection when a phase adds state. Dead Drop
+  Phase 2b-ii copied the 2b-i engine, bot and data into `test/golden/v2/` and replays Classic
+  bot matches on old and new side by side, comparing the state, the returns and the views as
+  JSON after `project()` drops every key in `NEW_KEYS` (`test/golden/drive.mjs`). Each new key
+  went at the end of its object, or appeared only when set, and joined `NEW_KEYS` in the commit
+  that added it, so 15 tasks added rosters, taps, partners and twists while
+  `tools/golden.mjs --check --matches 400` stayed identical. Old saves stayed readable without a version bump:
+  `upgradeState()` fills each missing field with its Classic default in place, and the restore
+  calls it (a bump would have turned away every 2b-i save and changed every golden digest).
+- In a simultaneous turn, a rule that fires on arrival must not depend on who moved first. Dead
+  Drop's Prague first revealed face-down agents on each arrival, so with the initiative a seat's
+  own drop could disarm its Tripwire before the rival's arrival on the same turn sprang it. It
+  now reveals once, after every drop of the turn has arrived (`pragueDrops`), and its test plays
+  the same drops in two rounds whose initiative differs.
+- `side.splice(side.indexOf(x), 1)` with `x` missing removes the *last* element, silently. Dead
+  Drop Phase 2b-ii hit it twice: a Double Agent turned before its own flip removed the Turncoat
+  from its side, and an Accomplice's Decoy partner that had already taken a Tripwire's hit took
+  the Accomplice with it on its own arrival. Check that the card is still there before such a
+  splice, and keep a random-play invariant that every card sits in exactly the side its city and
+  owner name.
+- Random-play property tests can't vouch for a case they never reach: count how often they hit
+  each rule. Dead Drop's Mixed seeds made 325 partner drops and 242 Turncoat swaps but almost
+  never dropped a turned asset face down after a Getaway sent it home, so an origin leak planted
+  there passed them all; a directed test caught it. Give rare cases a directed test, and have
+  the reviewer plant the bug.
+- Smoke setups must hold on every roster the step can deal. A smoke that ended a match by
+  setting the scores to [9, 3] (target 1) could tie at 9 on a Mixed table, where a Blackmailer
+  and Macau can pay the trailing side 6 in one round; match endings now use [30, 0], a margin no
+  round can close. And when two sources can make the same entry, assert on distinct values: the
+  Countess's tap twist plus a Wiretap gave two identical `tapped` entries, and a length check
+  flaked about one check run in seven.
+- Commit a sim's analysis script as a tool before its numbers go in the log. Dead Drop's B30
+  came from a scratch script, so nobody could rerun it until it became
+  `tools/points-by-roster.mjs`, with its definitions (what a round's points include, how the ±
+  is taken) in its header and in the SIMLOG entry.
 
 ## Games so far
 
@@ -544,5 +604,5 @@ and new files.
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
-| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye) |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

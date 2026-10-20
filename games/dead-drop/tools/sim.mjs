@@ -9,12 +9,22 @@
 //                         Every table size plays the stake game (tokens, answers, the pot, the Microfilm)
 //   --target N            points to win a match (default: TARGET in js/data.js)
 //   --seed S              default "dd"
-//   --pin city            pin a city into every round (repeatable, at most 3)
-//   --set path=value      (repeatable) change data, e.g. heavy.power=5; applies to the base and every variant
-//   --variant name:key=value   (repeatable; repeat a name to set more than one key). Keys: a, b, samples,
-//                         a, b, c, d, seats, samples, target, pin, or a settings path
-//   --probe agents|cities|stakes   agents: one "<id>+1" variant per agent (power + 1); cities: "pin-<id>" variants;
-//                         stakes: tokens2, tokens9, no-film (rules.reel=0) and no-rollover (rules.rollover=0)
+//   --pin city            pin a city into every round (repeatable, at most 3); the rest come from the match's pool
+//   --roster classic|mixed   classic (default): the original 12 agents and 11 cities. mixed: each match draws a
+//                         roster of 12 from all 20 agents (always the Heavy, always a takedown) and deals all 20 cities
+//   --with ID             (repeatable) force this agent into every Mixed roster (--roster mixed, or a --setup past Wren)
+//   --setup RIVAL         play that rival's ladder setup instead of --roster: Classic plus the packs up to it, its own
+//                         pack's agents always in, its cities featured in round 1, and its twist held by bot B
+//                         (whichever seat B sits in). wren is Classic
+//   --twist on|off        off plays a --setup without its twist (default on)
+//   --set path=value      (repeatable) change data, e.g. heavy.power=5 or control.count=2 (a twisted rival's id edits
+//                         its twist); applies to the base and every variant
+//   --variant name:key=value   (repeatable; repeat a name to set more than one key). Keys: a, b, c, d, seats,
+//                         samples, target, pin, roster, with, setup, twist, or a settings path
+//   --probe agents|cities|stakes   agents: one "<id>+1" variant (power + 1) per agent the base can deal, each forcing
+//                         its agent into the roster when the base is Mixed; cities: a "pin-<id>" variant per city
+//                         of the base's pool; stakes: tokens2, tokens9, no-film (rules.reel=0) and no-rollover
+//                         (rules.rollover=0)
 //   --ladder [all]        adjacent rival pairs (default) or all 10 pairs, no base run
 //   --workers W           default 4; 1 runs in-process with no threads
 //   --run NAME            batch log .tmp/dead-drop-sim/NAME.jsonl (default "sim"); --resume reuses it
@@ -28,8 +38,8 @@
 import { Worker } from 'node:worker_threads';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { AGENTS, CITIES, RIVALS } from '../js/data.js';
-import { resolveConfig, applyVariant, configHash, SIM_VERSION, BATCH } from './sim/config.mjs';
+import { AGENT, AGENTS, CITIES, RIVALS } from '../js/data.js';
+import { resolveConfig, applyVariant, configHash, setupOf, SIM_VERSION, BATCH } from './sim/config.mjs';
 import { playBatch } from './sim/play.mjs';
 import { emptyStats, mergeStats, summarize, formatSummary, compare, margin } from './sim/stats.mjs';
 
@@ -37,12 +47,12 @@ const DIR = new URL('../../../.tmp/dead-drop-sim/', import.meta.url).pathname;
 const WORKER = new URL('./sim/worker.mjs', import.meta.url);
 
 // ---- arguments ----
-const REPEAT = new Set(['pin', 'set', 'variant']);
+const REPEAT = new Set(['pin', 'set', 'variant', 'with']);
 const FLAGS = new Set(['json', 'resume']);
-const VALUED = new Set(['rounds', 'a', 'b', 'c', 'd', 'seats', 'samples', 'target', 'seed', 'probe', 'workers', 'run', 'out', 'against']);
+const VALUED = new Set(['rounds', 'a', 'b', 'c', 'd', 'seats', 'samples', 'target', 'seed', 'probe', 'workers', 'run', 'out', 'against', 'roster', 'setup', 'twist']);
 const POSITIVE_INTS = ['rounds', 'workers', 'samples', 'target'];
 function parseArgs(argv) {
-  const o = { pin: [], set: [], variant: [] };
+  const o = { pin: [], set: [], variant: [], with: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument: ${a}`);
@@ -74,7 +84,7 @@ const splitOnce = (s, ch) => {
 
 // ---- configurations ----
 function buildConfigs(o) {
-  const common = { seed: o.seed ?? 'dd', samples: o.samples ?? null, target: o.target, pin: o.pin };
+  const common = { seed: o.seed ?? 'dd', samples: o.samples ?? null, target: o.target, pin: o.pin, roster: o.roster ?? 'classic', force: o.with, setup: o.setup ?? null, twist: o.twist ?? 'on' };
   const withSets = (c) => o.set.reduce((acc, s) => applyVariant(acc, ...splitOnce(s, '=')), c);
   const named = (c, name) => ({ ...c, name });
   const list = [];
@@ -97,13 +107,16 @@ function buildConfigs(o) {
     if (!name || !key || value === undefined) throw new Error(`bad --variant (want name:key=value): ${v}`);
     variants.set(name, applyVariant(variants.get(name) ?? base, key, value));
   }
+  // The probes cover what the base can deal: its setup's agents (each forced into a Mixed roster) and its pool.
+  const deals = setupOf(base);
   if (o.probe === 'agents') {
-    for (const a of AGENTS) {
-      const key = `${a.id}.power`;
-      variants.set(`${a.id}+1`, applyVariant(base, key, (base.set[key] ?? a.power) + 1));
+    for (const id of deals.agents) {
+      const key = `${id}.power`;
+      const up = applyVariant(base, key, (base.set[key] ?? AGENT[id].power) + 1);
+      variants.set(`${id}+1`, deals.mixed && !up.force.includes(id) ? applyVariant(up, 'with', id) : up);
     }
   } else if (o.probe === 'cities') {
-    for (const c of CITIES) variants.set(`pin-${c.id}`, applyVariant(base, 'pin', c.id));
+    for (const id of deals.cities) variants.set(`pin-${id}`, applyVariant(base, 'pin', id));
   } else if (o.probe === 'stakes') {
     for (const [vname, key, value] of [['tokens2', 'rules.tokens', 2], ['tokens9', 'rules.tokens', 9], ['no-film', 'rules.reel', 0], ['no-rollover', 'rules.rollover', 0]]) variants.set(vname, applyVariant(base, key, value));
   } else if (o.probe) throw new Error(`unknown --probe: ${o.probe}`);
@@ -203,6 +216,12 @@ const f1 = (v) => (v === null ? 'n/a' : v.toFixed(1));
 function compareLines(rows) {
   return rows.map((r) => `  ${r.sig ? '*' : ' '} ${r.key.padEnd(14)} ${f1(r.base).padStart(6)} -> ${f1(r.other).padStart(6)}  (${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(1)} ±${r.margin.toFixed(1)})`);
 }
+/** The deal settings a variant changed from the base (roster, forced agents, setup, twist). */
+function dealDiff(config, base) {
+  const out = {};
+  for (const k of ['roster', 'force', 'setup', 'twist']) if (JSON.stringify(config[k]) !== JSON.stringify(base[k])) out[k] = config[k];
+  return out;
+}
 function textReport(o, header, runs, base, probe, against) {
   const L = [header, ''];
   if (o.ladder) {
@@ -216,13 +235,18 @@ function textReport(o, header, runs, base, probe, against) {
   L.push(formatSummary(base.summary, 'Base'));
   for (const [name, r] of Object.entries(runs)) {
     if (name === 'base') continue;
-    L.push('', `Variant ${name}: ${JSON.stringify({ ...r.config.set, ...(r.config.pin.length ? { pin: r.config.pin } : {}) })}`, ...compareLines(compare(base.summary, r.summary)));
+    L.push('', `Variant ${name}: ${JSON.stringify({ ...r.config.set, ...(r.config.pin.length ? { pin: r.config.pin } : {}), ...dealDiff(r.config, base.config) })}`, ...compareLines(compare(base.summary, r.summary)));
   }
   if (probe === 'agents') {
-    L.push('', 'Agent probe: win% when played (base -> power + 1)');
+    L.push('', `Agent probe: win% when played (base -> power + 1${setupOf(base.config).mixed ? ', forced into every roster' : ''})`);
     for (const a of AGENTS) {
       const v = runs[`${a.id}+1`];
+      if (!v) continue;
       const b = base.summary.agents[a.id].winPlayed, x = v.summary.agents[a.id].winPlayed;
+      if (b === null || x === null) {
+        L.push(`  ${a.name.padEnd(14)} ${f1(b).padStart(6)} -> ${f1(x).padStart(6)}`);
+        continue;
+      }
       const m = Math.sqrt(base.summary.agents[a.id].winPlayedMargin ** 2 + v.summary.agents[a.id].winPlayedMargin ** 2);
       L.push(`  ${a.name.padEnd(14)} ${f1(b).padStart(6)} -> ${f1(x).padStart(6)}  (${x - b >= 0 ? '+' : ''}${(x - b).toFixed(1)} ±${m.toFixed(1)})${Math.abs(x - b) > m ? ' *' : ''}`);
     }
@@ -230,6 +254,7 @@ function textReport(o, header, runs, base, probe, against) {
   if (probe === 'cities') {
     L.push('', 'City probe: pinned city, share of rounds it was decided, and winner took round');
     for (const c of CITIES) {
+      if (!runs[`pin-${c.id}`]) continue;
       const s = runs[`pin-${c.id}`].summary.cities[c.id];
       const d = s.n ? (100 * s.decided) / s.n : null;
       const g = s.decided ? (100 * s.agrees) / s.decided : null;
@@ -248,11 +273,17 @@ try {
   console.error(`sim: ${e.message}`);
   process.exit(1);
 }
+let configs;
+try {
+  configs = buildConfigs(o);
+} catch (e) {
+  console.error(`sim: ${e.message}`);
+  process.exit(1);
+}
 const name = o.run ?? 'sim';
 mkdirSync(DIR, { recursive: true });
 const log = `${DIR}${name}.jsonl`;
 const t0 = Date.now();
-const configs = buildConfigs(o);
 const done = await runAll(configs, o, log);
 const seconds = (Date.now() - t0) / 1000;
 
@@ -270,6 +301,7 @@ writeFileSync(o.out ? resolve(o.out) : `${DIR}${name}.json`, JSON.stringify(out)
 if (o.json) console.log(JSON.stringify(out));
 else {
   const total = Object.values(runs).reduce((n, r) => n + r.rounds, 0);
-  const header = `${total} rounds across ${configs.length} configuration${configs.length > 1 ? 's' : ''} in ${seconds.toFixed(1)}s (${(total / Math.max(seconds, 0.001)).toFixed(0)} rounds/s), ${o.workers ?? 4} workers, seed ${out.seed}${base && base.config.bots.length !== 2 ? `, ${base.config.bots.length} seats` : ''}${out.resumedBatches ? `, ${out.resumedBatches} batches resumed` : ''}`;
+  const deal = base ? (base.config.setup ? `, ${base.config.setup}'s setup${base.config.twist === 'off' ? ' without its twist' : ''}` : base.config.roster === 'mixed' ? ', Mixed rosters' : '') + (base.config.force.length ? ` with ${base.config.force.join(', ')}` : '') : '';
+  const header = `${total} rounds across ${configs.length} configuration${configs.length > 1 ? 's' : ''} in ${seconds.toFixed(1)}s (${(total / Math.max(seconds, 0.001)).toFixed(0)} rounds/s), ${o.workers ?? 4} workers, seed ${out.seed}${base && base.config.bots.length !== 2 ? `, ${base.config.bots.length} seats` : ''}${deal}${out.resumedBatches ? `, ${out.resumedBatches} batches resumed` : ''}`;
   console.log(textReport(o, header, runs, base, o.probe, against));
 }

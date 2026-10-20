@@ -230,6 +230,37 @@ export function createAudio(sfx, slug) {
         sfx.tone({ freq: 660, type: 'square', dur: 0.08, vol: 0.06, delay: 0.32 });
         sfx.tone({ freq: 660, type: 'square', dur: 0.08, vol: 0.06, delay: 0.44 });
       } else if (kind === 'tripwire') sfx.tone({ freq: 1760, type: 'triangle', dur: 0.5, vol: 0.12 });
+      else if (kind === 'wiretap') {
+        // A click on the line, then the hum of a live tap.
+        sfx.noise({ dur: 0.025, freq: 3200, type: 'bandpass', q: 2, vol: 0.35 });
+        sfx.tone({ freq: 120, type: 'sawtooth', dur: 0.3, vol: 0.05, attack: 0.04, delay: 0.03 });
+        sfx.tone({ freq: 240, type: 'sine', dur: 0.3, vol: 0.05, attack: 0.04, delay: 0.03 });
+      } else if (kind === 'interrogator') {
+        // The lamp switched on in your face: a hard switch, then the bulb's bright ping.
+        sfx.noise({ dur: 0.03, freq: 2400, type: 'highpass', vol: 0.1 });
+        sfx.tone({ freq: 140, to: 80, type: 'square', dur: 0.05, vol: 0.06 });
+        sfx.tone({ freq: 2637, to: 2600, type: 'sine', dur: 0.26, vol: 0.05, delay: 0.04 });
+      } else if (kind === 'turncoat') {
+        // A sweep played backwards: it swells as it falls, then cuts off.
+        sfx.tone({ freq: 1100, to: 280, type: 'triangle', dur: 0.3, vol: 0.12, attack: 0.27 });
+        sfx.noise({ dur: 0.3, freq: 3000, to: 500, type: 'bandpass', vol: 0.12, attack: 0.27 });
+      } else if (kind === 'courier') {
+        // Footsteps: three quick steps, each a muffled heel and a scuff.
+        [0.54, 0.4, 0.5].forEach((vol, i) => {
+          sfx.noise({ dur: 0.06, freq: 520, type: 'lowpass', vol, delay: i * 0.1 });
+          sfx.noise({ dur: 0.015, freq: 2500, type: 'bandpass', vol: vol * 0.4, delay: i * 0.1 + 0.01 });
+        });
+      } else if (kind === 'blackmailer') {
+        // A camera shutter: click, clack.
+        sfx.noise({ dur: 0.02, freq: 5000, type: 'highpass', vol: 0.11 });
+        sfx.noise({ dur: 0.04, freq: 1800, type: 'bandpass', q: 1.5, vol: 0.12, delay: 0.07 });
+        sfx.tone({ freq: 900, to: 500, type: 'square', dur: 0.03, vol: 0.03, delay: 0.07 });
+      } else if (kind === 'decoy') {
+        // A hollow thud: the dummy takes the hit.
+        sfx.tone({ freq: 170, to: 70, type: 'sine', dur: 0.3, vol: 0.12 });
+        sfx.tone({ freq: 340, to: 300, type: 'triangle', dur: 0.16, vol: 0.04 });
+        sfx.noise({ dur: 0.07, freq: 380, type: 'lowpass', vol: 0.12 });
+      }
     },
     swap: () => sfx.noise({ dur: 0.6, freq: 400, to: 2400, type: 'bandpass', vol: 0.18 }),
     escalate() {

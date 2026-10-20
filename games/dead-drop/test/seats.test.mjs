@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
 import { DECK, START_HAND, MAX_HAND, TURNS } from '../js/data.js';
+import { drawRoster } from '../js/roster.js';
+import { createRng } from '../../../shared/rng.js';
+import { ALL_AGENTS, ALL_CITIES } from './helpers.mjs';
 
 const m = (n, cities, seed = 7) => E.newMatch({ seed, cities, seats: n });
 const uidOf = (s, seat, kind) => Object.values(s.round.cards).find((c) => c.origin === seat && c.id0 === kind).uid;
@@ -196,16 +199,31 @@ function leaks(state, seat) {
     for (const [k, x] of Object.entries(o)) walk(x, `${path}.${k}`);
   })(v, '$');
   if (JSON.stringify(v.round.hand.map((c) => c.uid)) !== JSON.stringify(player ? R.hands[seat] : [])) out.push('$.round.hand is not exactly this seat’s hand');
+  // Only a `seen` twist exposes a card, and random play has no twists.
+  if (!Array.isArray(v.round.exposed)) out.push('$.round.exposed is missing');
+  else {
+    for (const e of v.round.exposed) if (secret.has(e.uid)) out.push(`$.round.exposed: names secret card ${e.uid}`);
+    if (!state.twist && v.round.exposed.length) out.push('$.round.exposed is not empty without a twist');
+  }
   if (!player && (v.round.myDeck.length || v.round.plan || v.round.legal.length)) out.push('a spectator sees a deck, a plan or legal drops');
   if (player && v.round.myDeck.length !== R.decks[seat].length) out.push('$.round.myDeck is not this seat’s deck');
   return out;
 }
 
-/** Random legal play at n seats; calls check(state) after every action. Escalates, answers and folds now and then. */
-function randomMatch(n, seed, check) {
-  const s = E.newMatch({ seed, seats: n, target: 6 });
+/**
+ * Random legal play at n seats; after every action checks that no hand is over MAX_HAND, then calls
+ * look(state). Escalates, answers and folds now and then. `mixed` plays a Mixed roster drawn from all
+ * 20 agents and deals from all 20 cities, so the random legal drops include partners and Casablanca's faces.
+ */
+function randomMatch(n, seed, look, { mixed = false } = {}) {
+  const content = mixed ? { roster: drawRoster(ALL_AGENTS, createRng(seed)), pool: ALL_CITIES } : {};
+  const s = E.newMatch({ seed, seats: n, target: 6, ...content });
   let r = seed >>> 0;
   const next = () => (r = (r * 1103515245 + 12345) >>> 0);
+  const check = (st) => {
+    assert.ok(st.round.hands.every((h) => h.length <= MAX_HAND), `${n} seats, seed ${seed}${mixed ? ' (Mixed)' : ''}: a hand over ${MAX_HAND}`);
+    look(st);
+  };
   for (let rounds = 0; s.phase !== 'match-over' && rounds < 40; ) {
     if (s.phase === 'round-over') {
       E.nextRound(s);
@@ -234,6 +252,7 @@ test('property: no seat ever sees a card face down that it has seen face up, at 
   for (const [n, seeds] of [[2, 150], [3, 80], [4, 60]])
     for (let seed = 1; seed <= seeds; seed++) {
       const known = Array.from({ length: n + 1 }, () => new Map()); // the last one is the spectator's
+      const mixed = seed > seeds / 2;
       randomMatch(n, seed, (s) => {
         for (let seat = -1; seat < n; seat++) {
           const mem = known[seat < 0 ? n : seat];
@@ -242,35 +261,45 @@ test('property: no seat ever sees a card face down that it has seen face up, at 
             assert.match(cv.uid, UID);
             if (cv.kind) mem.set(cv.uid, cv.kind);
             else {
-              assert.ok(!mem.has(cv.uid), `${n} seats, seed ${seed}, seat ${seat}: ${cv.uid} was seen as ${mem.get(cv.uid)} and is now face down`);
+              const where = `${n} seats, seed ${seed}${mixed ? ' (Mixed)' : ''}, seat ${seat}`;
+              assert.ok(!mem.has(cv.uid), `${where}: ${cv.uid} was seen as ${mem.get(cv.uid)} and is now face down`);
               assert.equal(cv.origin, cv.owner);
+              // No card changes owner while face down: a face-down card's uid names the seat that holds it.
+              assert.equal(cv.uid[0], 'abcd'[cv.owner], `${where}: face-down ${cv.uid} belongs to seat ${cv.owner}`);
             }
           }
         }
-      });
+      }, { mixed });
     }
 });
 
 test('property: no view at any table size shows a rival’s hand, deck or face-down card', () => {
   for (const [n, seeds] of [[2, 120], [3, 80], [4, 60]])
-    for (let seed = 1; seed <= seeds; seed++)
+    for (let seed = 1; seed <= seeds; seed++) {
+      const mixed = seed > seeds / 2;
       randomMatch(n, seed, (s) => {
-        for (let seat = -1; seat < n; seat++) assert.deepEqual(leaks(s, seat), [], `${n} seats, seed ${seed}, seat ${seat}, round ${s.roundNo} turn ${s.round.turn}`);
-      });
+        for (let seat = -1; seat < n; seat++) assert.deepEqual(leaks(s, seat), [], `${n} seats, seed ${seed}${mixed ? ' (Mixed)' : ''}, seat ${seat}, round ${s.roundNo} turn ${s.round.turn}`);
+      }, { mixed });
+    }
 });
 
 test('invariant: random play at 2 to 4 seats never loses a card and always finishes', () => {
   for (const [n, seeds] of [[2, 100], [3, 100], [4, 100]])
     for (let seed = 1; seed <= seeds; seed++) {
+      const mixed = seed > seeds / 2;
+      const where = `${n} seats, seed ${seed}${mixed ? ' (Mixed)' : ''}`;
       const s = randomMatch(n, seed, (st) => {
         const R = st.round;
+        let dealt = 0;
+        for (let seat = 0; seat < n; seat++) dealt += E.deckList(st, seat).length;
         const seen = [...R.hands.flat(), ...R.decks.flat(), ...R.gone.flat(), ...R.cities.flatMap((c) => c.sides.flat())];
-        assert.equal(seen.length, n * DECK.length, `${n} seats, seed ${seed}: card count`);
-        assert.equal(new Set(seen).size, n * DECK.length, `${n} seats, seed ${seed}: duplicates`);
+        assert.equal(seen.length, dealt, `${where}: card count`);
+        assert.equal(new Set(seen).size, dealt, `${where}: duplicates`);
+        assert.equal(Object.keys(R.cards).length, dealt, `${where}: a card left behind under an old uid`);
         for (const c of R.cities) c.sides.forEach((side, seat) => assert.ok(side.length <= E.capacityOf(c.id) && side.every((u) => R.cards[u].owner === seat)));
         assert.ok(R.turn <= TURNS && R.hands.every((h) => h.length <= MAX_HAND));
-      });
-      assert.equal(s.phase, 'match-over', `${n} seats, seed ${seed} finished`);
+      }, { mixed });
+      assert.equal(s.phase, 'match-over', `${where} finished`);
     }
 });
 

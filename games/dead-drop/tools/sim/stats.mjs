@@ -1,5 +1,5 @@
 // Mergeable tallies from match records, with 95% margins. Stats stay plain JSON.
-import { AGENTS, CITIES } from '../../js/data.js';
+import { AGENTS, CITIES, DECK } from '../../js/data.js';
 
 export function emptyStats(seats = 2) {
   const zeros = () => new Array(seats).fill(0);
@@ -9,16 +9,23 @@ export function emptyStats(seats = 2) {
     pointsHist: {}, escalated: 0, escalatorWon: 0, answers: 0, answeredFold: 0,
     reelWins: 0, reelComebacks: 0, strips: 0, filmDecided: 0, filmAgrees: 0, potHist: {}, carries: 0, tokensSpentHist: {}, outOfTokens: 0, maxStake: 0,
     bluffs: 0, escTurnHist: {},
-    agents: Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, wonPlayed: 0, notPlayed: 0, wonNotPlayed: 0, turnSum: 0 }])),
+    // inRoster: rounds dealt with the agent in the match's roster (folds included).
+    agents: Object.fromEntries(AGENTS.map((a) => [a.id, { played: 0, wonPlayed: 0, notPlayed: 0, wonNotPlayed: 0, turnSum: 0, inRoster: 0 }])),
     cities: Object.fromEntries(CITIES.map((c) => [c.id, { n: 0, decided: 0, agrees: 0 }])),
   };
 }
 
 const bump = (hist, key, by = 1) => { hist[key] = (hist[key] || 0) + by; };
 
+/**
+ * Folds one match record (play.mjs) into `stats`. An agent counts as not played only in a match whose roster
+ * holds it; a record without a roster (an older or hand-made one) is Classic.
+ */
 export function addMatch(stats, rec) {
+  const roster = rec.roster ?? DECK;
   stats.matches++;
   stats.rounds += rec.rounds.length;
+  for (const id of roster) stats.agents[id].inRoster += rec.rounds.length;
   for (const r of rec.rounds) {
     const res = r.result;
     bump(stats.pointsHist, res.points);
@@ -56,7 +63,7 @@ export function addMatch(stats, rec) {
         a.wonPlayed += won;
         a.turnSum += p.turn;
       }
-      for (const id of Object.keys(stats.agents)) {
+      for (const id of roster) {
         if (kinds.has(id)) continue;
         stats.agents[id].notPlayed++;
         stats.agents[id].wonNotPlayed += won;
@@ -134,7 +141,10 @@ function histMean(hist) {
 export function summarize(s) {
   const finished = s.matches - s.capped;
   const agents = {};
+  // Rounds each agent was in the roster, beside `agents` so each agent's numbers keep their 2b-i shape.
+  const inRoster = {};
   for (const [id, a] of Object.entries(s.agents)) {
+    inRoster[id] = a.inRoster ?? 0;
     agents[id] = {
       played: a.played,
       winPlayed: a.played ? (100 * a.wonPlayed) / a.played : null,
@@ -180,6 +190,7 @@ export function summarize(s) {
     roundsPerMatch: histMean(s.roundsHist),
     agents,
     cities,
+    inRoster,
   };
 }
 
@@ -218,15 +229,21 @@ export function formatSummary(sum, title = 'Dead Drop sim') {
     sum.seatRounds.forEach((r, i) => L.push(`seat ${i}${' '.repeat(10)}${pc(r).padStart(18)}  ${pc(sum.seatMatches[i]).padStart(16)}`));
     sum.botMatches.forEach((r, i) => L.push(`bot ${String.fromCharCode(65 + i)} wins matches ${pc(r).padStart(16)}`));
   }
-  L.push('', 'Agent           played  win% when played  win% when not  avg turn');
+  // Only what the run dealt: agents some roster held (every agent, for a summary from before rosters) and
+  // cities dealt at least once. A run whose rosters varied also shows the rounds each agent was in one.
+  const held = (id) => !sum.inRoster || sum.inRoster[id] > 0;
+  const varied = !!sum.inRoster && AGENTS.some((a) => held(a.id) && sum.inRoster[a.id] < sum.rounds);
+  L.push('', `Agent           played  win% when played  win% when not  avg turn${varied ? '  in roster' : ''}`);
   for (const a of AGENTS) {
+    if (!held(a.id)) continue;
     const s = sum.agents[a.id];
     const w = (v, m) => (v === null ? 'n/a' : `${v.toFixed(1)}% ±${m.toFixed(1)}`);
-    L.push(`${a.name.padEnd(14)}${String(s.played).padStart(8)}  ${w(s.winPlayed, s.winPlayedMargin).padStart(16)}  ${w(s.winNot, s.winNotMargin).padStart(13)}  ${num(s.avgTurn).padStart(8)}`);
+    L.push(`${a.name.padEnd(14)}${String(s.played).padStart(8)}  ${w(s.winPlayed, s.winPlayedMargin).padStart(16)}  ${w(s.winNot, s.winNotMargin).padStart(13)}  ${num(s.avgTurn).padStart(8)}${varied ? String(sum.inRoster[a.id]).padStart(11) : ''}`);
   }
   L.push('', 'City           rounds  decided  winner took round');
   for (const c of CITIES) {
     const s = sum.cities[c.id];
+    if (!s.n) continue;
     const d = rate(s.decided, s.n), g = rate(s.agrees, s.decided);
     L.push(`${c.name.padEnd(14)}${String(s.n).padStart(7)}  ${pc(d).padStart(14)}  ${pc(g).padStart(18)}`);
   }

@@ -4,14 +4,17 @@ import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, s
 import { createSfx } from '../../../shared/sfx.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
-import { AGENT, AGENTS, CITIES, CITY, CODENAMES, RIVALS, RULES, SEAT_NAMES, TARGET, TURNS } from './data.js';
-import { rivalsOf, seatCount } from './engine.js';
+import { AGENT, AGENTS, CITIES, CITY, CLASSIC_CITIES, CODENAMES, DECK, RIVALS, ROSTER, RULES, SEAT_NAMES, TARGET, TURNS } from './data.js';
+import { deckList, rivalsOf, seatCount } from './engine.js';
 import { attachBot, createTable, guestSession, hostSession, restoreTable, canRestore } from './session.js';
-import { canisterHTML, cardHTML, chipHTML, cityHTML, esc, FAST, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
+import { canisterHTML, cardHTML, chipHTML, cityHTML, esc, FAST, faceDownText, playEvents, REVEAL_GUARD_MS, revealTap } from './board.js';
 import { agentSVG, citySVG, spySVG } from './art.js';
 import { createAudio } from './audio.js';
 import { levelFor } from './music.js';
-import { countMatch, countWin, migrateMeta } from './meta.js';
+import { countMatch, countWin, meet, migrateMeta } from './meta.js';
+import { CLASSIC_SETUP, MIXED_ALL, freeSetup, ladderSetup, network } from './roster.js';
+import { cable, DOSSIERS, EPILOGUE, operation, REMARKS, twistText } from './story.js';
+import { sightings, unseen } from './counting.js';
 
 const SLUG = 'dead-drop';
 const saved = store(SLUG);
@@ -41,6 +44,13 @@ const ui = {
   shownSeq: 0, // turnSeq already animated
   selected: null,
   target: null,
+  // The rest of the drop being chosen (cleared with selected and target, by clearPick): an
+  // Accomplice's partner (null until chosen, 'alone', or a card's uid), and the face in Casablanca
+  // (null for the agent's own face, true face down, false face up).
+  partner: null,
+  down: null,
+  tapShown: null, // the wiretap slips last drawn on the plates (a new one comes in once)
+  holdAt: null, // __game.holdAt(kind): the reveal holds once a trick of this kind has played (once)
   animating: false,
   dirty: false,
   // Reveal pacing (see wait()): the reveal started at revealAt (performance.now()) and plays at
@@ -72,6 +82,19 @@ const ui = {
   initShown: null, // the seat whose First flip token was last drawn (it flips across when this changes)
   reelKey: null, // the matchId whose full reel card was last due (it plays once per match)
   holdBoard: false, // a fold is playing out over the board as it stood: render() leaves #screen alone
+  free: false, // solo: free play (Mixed from your network, no twist; a win recruits nothing), not the ladder
+  rivalsTab: 'ladder', // the rivals screen's switch: ladder | free
+  epilogue: false, // a ladder win over Control has just happened: Final report plays the epilogue before the dossier
+  recruits: null, // that win's recruits toast, held until the epilogue has gone (flushRecruits)
+  holdRival: false, // __game.holdRival(): the computer rival waits, as it does behind a card (a check's steady table)
+  introKey: null, // the matchId whose intro (the rival's dossier, tonight's roster) was last due: it plays once per match
+  // The unseen strip's sightings this round: { key: `${matchId}:${roundNo}`, seen: Map(`${viewer}:${origin}:${id0}` → n) },
+  // n the most cards of that kind from that deck one view has shown (feedSightings).
+  sighted: null,
+  unseenOpen: null, // the rival seat whose unseen strip is open (U), or null: a planning tool, closed by any reveal or result
+  unseenEnter: false, // the strip has just been opened: its next render drops it in (once)
+  remark: null, // the computer rival's remark on a round's result, said once: { key: `${matchId}:${roundNo}`, text }
+  typeNext: null, // a line just said (say()): the next render types it out in the ticker again
 };
 let table = null;
 let bot = null;
@@ -119,7 +142,7 @@ function pace({ speed = ui.speed, skip = ui.skip } = {}) {
     arm(w);
   }
 }
-const toast = (msg) => cgToast(msg, { className: 'toast' });
+const toast = (msg, ms) => cgToast(msg, { className: 'toast', ms });
 const view = () => ui.view;
 const me = () => (ui.mode === 'pass' ? (ui.seat ?? 0) : ui.mode === 'guest' ? 1 : 0);
 const label = (seat, v = view()) => {
@@ -156,6 +179,14 @@ const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 /** "Two strips win the match": how many strips of film the full reel needs, as a sentence. */
 const reelSentence = (reel) => `${capital(counted(reel, 'strip'))} ${reel === 1 ? 'wins' : 'win'} the match`;
 
+/** Forget the drop being chosen: the card, its city, an Accomplice's partner and Casablanca's face. */
+function clearPick() {
+  ui.selected = null;
+  ui.target = null;
+  ui.partner = null;
+  ui.down = null;
+}
+
 // ── sessions ────────────────────────────────────────────────────────────────
 
 function watch(t) {
@@ -168,7 +199,7 @@ function watch(t) {
 
 function persist() {
   if (!table) return;
-  if (ui.mode === 'solo' || ui.mode === 'pass') saved.set('match', { mode: ui.mode, rival: ui.rival?.id ?? null, table: table.toJSON() });
+  if (ui.mode === 'solo' || ui.mode === 'pass') saved.set('match', { mode: ui.mode, rival: ui.rival?.id ?? null, free: ui.mode === 'solo' && ui.free, table: table.toJSON() });
   if (ui.mode === 'host' && ui.net?.code) saved.set(`host-${ui.net.code}`, { table: table.toJSON(), at: Date.now() });
 }
 
@@ -179,8 +210,9 @@ function persist() {
 function freshMatchUi() {
   ui.shownSeq = 0;
   ui.view = null;
-  ui.selected = null;
-  ui.target = null;
+  clearPick();
+  ui.tapShown = null;
+  ui.holdAt = null;
   ui.modal = null;
   ui.cover = null;
   ui.caption = '';
@@ -199,6 +231,13 @@ function freshMatchUi() {
   ui.initShown = null;
   ui.reelKey = null;
   ui.holdBoard = false;
+  ui.epilogue = false;
+  ui.recruits = null;
+  ui.introKey = null;
+  ui.sighted = null;
+  ui.unseenOpen = null;
+  ui.unseenEnter = false;
+  ui.remark = null;
   cancelDrag();
   clearOverlays();
 }
@@ -206,6 +245,7 @@ function freshMatchUi() {
 /** Leaving a mode altogether: a fresh match screen, no host view kept, no computer rival. */
 function resetMatchUi() {
   freshMatchUi();
+  ui.free = false;
   ui.remote = null;
   bot?.stop();
   bot = null;
@@ -234,27 +274,37 @@ function countOnce(id) {
   }
 }
 
-function startSolo(rivalId, resume = null) {
+/** The computer rival waits while an update plays (a reveal, a card, a flash), or while a check holds it. */
+const botHold = () => ui.updating || ui.holdRival;
+
+/**
+ * Play the computer: `rivalId` on the ladder (its setup: Classic for Wren, then each rival's packs and
+ * twist), or in free play (`free`: Mixed from your network, no twist). `resume` is a saved table to
+ * continue, which brings its own setup.
+ */
+function startSolo(rivalId, { free = false, resume = null } = {}) {
   leaveMatch({ keepSave: !!resume });
   resetMatchUi();
   ui.mode = 'solo';
   ui.rival = RIVALS.find((r) => r.id === rivalId) || RIVALS[0];
+  ui.free = !!free;
   if (resume) restoreSaved(resume);
-  else table = createTable({ names: [meta.codename, ui.rival.name] });
+  else table = createTable({ names: [meta.codename, ui.rival.name], setup: ui.free ? freeSetup(meta.beaten) : ladderSetup(ui.rival.id), twistSeat: 1 });
   watch(table);
   beginMatch();
   // Seated once the table is up: the round's title card holds the rival (ui.updating) from its
   // very first move, as it does in every later round.
-  bot = attachBot(table, 1, ui.rival, { hold: () => ui.updating });
+  bot = attachBot(table, 1, ui.rival, { hold: botHold });
 }
 
-function startPass(resume = null) {
+/** Pass and play on one device: the Classic roster, or `setup` (the sheet's Mixed is MIXED_ALL). */
+function startPass({ resume = null, setup = CLASSIC_SETUP } = {}) {
   leaveMatch({ keepSave: !!resume });
   resetMatchUi();
   ui.mode = 'pass';
   ui.rival = null;
   if (resume) restoreSaved(resume);
-  else table = createTable({ names: SEAT_NAMES.slice(0, 2) });
+  else table = createTable({ names: SEAT_NAMES.slice(0, 2), setup });
   watch(table);
   ui.seat = null;
   beginMatch();
@@ -272,6 +322,7 @@ async function startHost({ code = roomCode(), resume = null } = {}) {
   else table = createTable({ names: [meta.codename, 'Your rival'] });
   table.names[0] = meta.codename;
   watch(table);
+  render(); // the roster switch, while the room opens
   let room;
   try {
     room = await joinRoom({ slug: SLUG, code, transport: NET });
@@ -396,6 +447,8 @@ function leaveMatch({ keepSave = false } = {}) {
   }
   // Flashes and title cards go with the table; a card's promise resolves, so nothing waits on it.
   clearOverlays();
+  // Leaving Control's last result before Final report: the epilogue is skipped, but not the recruits.
+  flushRecruits();
   bot?.stop();
   bot = null;
   unwatch?.();
@@ -503,8 +556,7 @@ async function showLatest() {
   const prev = ui.view;
   if (v.turnSeq > ui.shownSeq && prev && v.round.events.length) {
     ui.shownSeq = v.turnSeq;
-    ui.selected = null;
-    ui.target = null;
+    clearPick();
     ui.inspect = null;
     const from = ui.mode === 'pass' && ui.prevSpectator ? ui.prevSpectator : prev;
     const shown = v;
@@ -515,6 +567,30 @@ async function showLatest() {
     ui.view = shown;
   }
   ui.shownSeq = Math.max(ui.shownSeq, v.turnSeq);
+  // The match opens on its intro, once per match, before round 1's title card and before any drop of
+  // mine (a reload mid-turn goes straight to the table): the rival's dossier, solo on the ladder, the
+  // first time you meet them; then tonight's roster, unless it is Classic. What a card shows for the
+  // first time is met (meta.met) as it shows, never while cards are skipped. Whatever arrives while
+  // they are up is read afterwards, as for the round card.
+  if (v.phase === 'plan' && v.roundNo === 0 && v.round.turn === 1 && !v.round.plan && ui.introKey !== v.matchId) {
+    ui.introKey = v.matchId;
+    if (cardsShow()) {
+      ui.view = v;
+      render();
+      const rival = ui.mode === 'solo' && !ui.free ? ui.rival : null;
+      if (rival && meet(meta, { rivals: [rival.id] }).rivals.length) {
+        saveMeta();
+        await dossierCard(rival, v.twist);
+        if (!upToDate()) return;
+      }
+      if (!isClassic(v.roster) && cardsShow()) {
+        const fresh = meet(meta, { agents: v.roster }).agents;
+        if (fresh.length) saveMeta();
+        await rosterCard(v, fresh);
+        if (!upToDate()) return;
+      }
+    }
+  }
   // An escalation just landed: flash it once.
   const pend = v.round.pending;
   if (pend && v.phase === 'plan' && ui.flashSeen !== `${v.roundNo}-${pend.by}`) {
@@ -523,6 +599,7 @@ async function showLatest() {
     render();
     await flashEscalate(v, pend.by);
     if (!upToDate()) return;
+    if (pend.by !== me()) remark('escalate');
   }
   // A fold ended the round: the board stays as it stood under the fold's flash, then the folder's
   // agents pull out of it and (if the fold left anyone a strip of film) the strip flies. render()
@@ -541,9 +618,9 @@ async function showLatest() {
     ui.view = ended;
     ui.caption = '';
     // As the reveal path does: a pick made in the round that folded must not arm Lock in in the next.
-    ui.selected = null;
-    ui.target = null;
+    clearPick();
     ui.inspect = null;
+    ui.unseenOpen = null;
     ui.holdBoard = true;
     try {
       renderPlay({ board, still: true, bottom: spectator ? 0 : null });
@@ -577,8 +654,11 @@ async function showLatest() {
     ui.roundKey = roundKey;
     ui.view = v;
     render();
+    const shown = cardsShow();
     await roundCard(v);
     if (!upToDate()) return;
+    // The rival opens about half the rounds with a remark (never over a teaching hint).
+    if (shown && !hintText(v) && Math.random() < 0.5) remark('start');
   }
   // The final turn opens on its own card, once per round: night falls, and the stake doubles on
   // this flip. Under reduced motion there is no card (the night colours and the ×2 stamp carry the
@@ -596,6 +676,15 @@ async function showLatest() {
     }
   }
   ui.view = v;
+  if (v.phase !== 'plan') ui.unseenOpen = null;
+  // As a round's result comes up, the rival remarks on it, once: its fold, its win or its loss.
+  const resultKey = `${v.matchId}:${v.roundNo}`;
+  if (v.phase !== 'plan' && v.round.result && ui.remark?.key !== resultKey) {
+    const res = v.round.result;
+    const them = foe(v);
+    const kind = res.folded === them ? 'fold' : res.winner === them ? 'won' : res.winner === me() ? 'lost' : null;
+    ui.remark = { key: resultKey, text: kind ? remark(kind) : null };
+  }
   if (ui.mode === 'pass') passCover(v);
   audio.level(levelFor(v));
   if (v.phase === 'match-over' && !ui.matchDone) {
@@ -612,6 +701,16 @@ function passCover(v) {
     ui.cover = null;
     return;
   }
+  const next = passActor();
+  if (next && next.seat !== ui.seat) {
+    ui.seat = null;
+    ui.cover = next;
+    ui.screen = 'cover';
+  }
+}
+
+/** Pass and play, while planning: `{ seat, why }` for the seat whose hands the device belongs in next ('turn' or 'escalated'), or null. */
+function passActor() {
   const full = table.view(-1).round;
   let actor = null;
   let why = 'turn';
@@ -620,17 +719,18 @@ function passCover(v) {
     actor = foe(table.view(-1), full.pending.by); // stakes are two-player
     why = 'escalated';
   } else {
-    const first = full.locked.indexOf(false);
-    actor = first < 0 ? null : first;
+    // A tapped mark goes before its wiretapper, so the wiretapper hears the city (two seats tapping
+    // each other go in table order).
+    const open = allSeats(table.state).filter((s) => !full.locked[s]);
+    const waits = (s) => full.taps.some((t) => t.by === s && t.on !== s && !full.locked[t.on] && !full.taps.some((u) => u.by === t.on && u.on === s));
+    actor = open.find((s) => !waits(s)) ?? open[0] ?? null;
   }
-  if (actor !== null && actor !== ui.seat) {
-    ui.seat = null;
-    ui.cover = { seat: actor, why };
-    ui.screen = 'cover';
-  }
+  return actor === null ? null : { seat: actor, why };
 }
 
 async function animateTurn(from, next) {
+  // The unseen strip is for planning: the reveal plays over the whole board.
+  ui.unseenOpen = null;
   ui.animating = true;
   ui.revealAt = performance.now();
   ui.speed = 1;
@@ -670,6 +770,13 @@ async function animateTurn(from, next) {
       say: (text) => cancelled() || say(text),
       sound: (what, arg) => cancelled() || (what === 'chord' ? audio.spyChord() : audio[what]?.(arg)),
       shake: (n) => cancelled() || shake(root, n),
+      stake: (n) => cancelled() || raiseStake(n),
+      moment: (kind) => {
+        if (cancelled() || ui.holdAt !== kind) return;
+        ui.holdAt = null;
+        pace({ speed: 1e-4 }); // as holdReveal: a tap or Space speeds it up, then skips it
+      },
+      reduced: reducedMotion(),
       cityName: (ci) => cityName(next, ci),
       cardOf: (uid) => nextOnBoard.get(uid) || null,
       kindOf: (uid) => kinds.get(uid) || known.get(uid)?.kind || null,
@@ -689,7 +796,21 @@ async function animateTurn(from, next) {
   ui.caption = '';
 }
 
-/** The final flip: every city resolves in turn, then the stake slides to the winner. */
+/**
+ * The Blackmailer raised the stake to `n` mid-reveal: the slip on screen (drawn from the view before
+ * the turn) shows it at once and flashes (colour only); the next render draws it from the view.
+ */
+function raiseStake(n) {
+  const slip = $('#screen .scorebar .stake');
+  if (!slip) return;
+  const b = slip.querySelector('b');
+  if (b) b.textContent = String(n);
+  const small = slip.querySelector('small');
+  if (small) small.textContent = `${n * 2} at the final flip`;
+  slip.classList.add('hot', 'blackmail');
+}
+
+/** The final flip: every city resolves in turn, then the stake slides to the winner. Reykjavik ticks up its head counts, not power. */
 async function finale(e, next, bottom, cancelled) {
   say('The final flip.');
   await wait(500);
@@ -698,7 +819,8 @@ async function finale(e, next, bottom, cancelled) {
     const sec = $(`#board .city[data-city="${ci}"]`);
     if (!sec) continue;
     sec.classList.add('resolving');
-    const totals = e.totals[ci];
+    const city = next.round.cities[ci];
+    const totals = city.id === 'reykjavik' ? city.sides.map((side) => side.length) : e.totals[ci];
     const els = [...sec.querySelectorAll('[data-total]')];
     for (let step = 1; step <= 6; step++) {
       for (const el of els) {
@@ -738,16 +860,19 @@ async function finale(e, next, bottom, cancelled) {
  */
 function flashEscalate(v, by) {
   audio.escalate();
-  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div><p class="big">${jitter('Escalate')}</p><p class="small">${esc(label(by, v))} doubled the stake</p>`;
-  const done = showCard(html, `flash esc own-${by}`, ui.skip ? 300 : 1300, { label: `Escalate: ${label(by, v)} doubled the stake` });
+  // The story's words under the plain one: escalating is going loud.
+  const loud = `${label(by, v)} ${ui.mode !== 'pass' && by === me() ? 'go' : 'goes'} loud: the stake doubles`;
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div><p class="big">${jitter('Escalate')}</p><p class="small">${esc(loud)}</p>`;
+  const done = showCard(html, `flash esc own-${by}`, ui.skip ? 300 : 1300, { label: `Escalate: ${loud}` });
   if (ui.card) shake(app, 2);
   return done;
 }
 
 function flashFold(v, seat) {
   audio.fold();
-  const walk = `${label(seat, v)} ${ui.mode !== 'pass' && seat === me() ? 'walk' : 'walks'} away from the round`;
-  return showCard(`<p class="big">${jitter('Fold')}</p><p class="small">${esc(walk)}</p>`, `flash fold own-${seat}`, 1000, { label: `Fold: ${walk}` });
+  // Folding is aborting, in the story.
+  const abort = `${label(seat, v)} ${ui.mode !== 'pass' && seat === me() ? 'abort' : 'aborts'} to save the network`;
+  return showCard(`<p class="big">${jitter('Fold')}</p><p class="small">${esc(abort)}</p>`, `flash fold own-${seat}`, 1000, { label: `Fold: ${abort}` });
 }
 
 /**
@@ -868,6 +993,14 @@ function reelCard(v) {
 
 /** How long a round's title card stays up (a tap, Enter, Space or Escape skips it). */
 const ROUND_CARD_MS = 2500;
+/** How much longer it stays for each city met for the first time with fine print to read. */
+const NEW_CITY_MS = 2000;
+/** The cable types out from this far into the card, a key every CABLE_KEY_MS. */
+const CABLE_DELAY = 350;
+const CABLE_KEY_MS = 9;
+
+/** A card put up now would show: showCard shows nothing with every animation skipped or a modal up. */
+const cardsShow = () => !ui.alwaysSkip && !ui.modal;
 
 /**
  * Put up a title card: a full-screen `<div class="cine ${className}" role="dialog">` on #app
@@ -915,37 +1048,48 @@ function skipCard() {
 }
 
 /**
- * The round's opening credits: "Round N", then each city in turn (its skyline, name and rule),
- * sliding in 250 ms apart over the Saul Bass bars. Under reduced motion it stands still.
+ * The round's opening credits: "Round N", C's cable typed out on telegram tape, then each city in
+ * turn (its skyline, name and rule), sliding in 250 ms apart over the Saul Bass bars. A city met for
+ * the first time wears a New stamp, with its fine print under the rule (and the card stays longer).
+ * Under reduced motion it stands still.
  */
 function roundCard(v) {
   const n = v.roundNo + 1;
   const { film, pot } = v.round;
   const cities = v.round.cities.map((c) => CITY[c.id]);
+  // Met as the card shows, so a skipped card leaves them new for the next one.
+  const fresh = cardsShow() ? meet(meta, { cities: cities.map((c) => c.id) }).cities : [];
+  if (fresh.length) saveMeta();
   const canister = canisterHTML({ label: false });
   const lines = cities
     .map((c, i) => {
+      const isNew = fresh.includes(c.id);
       const tag = i === film ? `<span class="film-tag">${canister}Carries the film</span>` : '';
-      return `<div class="line${i === film ? ' film' : ''}" style="--i:${i}"><span class="sky" aria-hidden="true">${citySVG(c.id)}</span><div class="name"><h3>${esc(c.name)}</h3>${tag}</div><p>${esc(c.rule)}</p></div>`;
+      const stamp = isNew ? '<i class="new-tag">New</i>' : '';
+      const note = isNew && c.note ? `<span class="note">${esc(c.note)}</span>` : '';
+      return `<div class="line${i === film ? ' film' : ''}${isNew ? ' new' : ''}" style="--i:${i}"><span class="sky" aria-hidden="true">${citySVG(c.id)}</span><div class="name"><h3>${esc(c.name)}</h3>${stamp}${tag}</div><p>${esc(c.rule)}</p>${note}</div>`;
     })
     .join('');
-  // Under the credits: where the Microfilm travels, and any points a dead heat rolled over.
+  // Under the credits: any points a dead heat rolled over. (The cable says where the film travels;
+  // the card's label says it too.)
   const notes = [];
   const said = [];
-  if (film !== null) {
-    notes.push(`<p class="film-line">${canister}<span>The film travels via <b>${esc(cities[film].name)}</b>.</span></p>`);
-    said.push(`The film travels via ${cities[film].name}.`);
-  }
+  if (film !== null) said.push(`The film travels via ${cities[film].name}.`);
   if (pot > 0) {
     const line = `${pot} point${pot === 1 ? '' : 's'} rolled over into this round’s pot.`;
     notes.push(`<p class="pot-line">${esc(line)}</p>`);
     said.push(line);
   }
+  const wire = cable(v);
   const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <h2 class="big">${jitter(`Round ${n}`, n + 4)}</h2>
+    <p class="cable">${typedHTML(wire, { delay: CABLE_DELAY, per: CABLE_KEY_MS })}</p>
     <div class="slate">${lines}</div>
     ${notes.length ? `<div class="notes">${notes.join('')}</div>` : ''}`;
-  return showCard(html, 'title-card', ROUND_CARD_MS, { label: [`Round ${n}: ${cities.map((c) => c.name).join(', ')}.`, ...said].join(' ') });
+  const ms = ROUND_CARD_MS + NEW_CITY_MS * fresh.filter((id) => CITY[id].note).length;
+  const done = showCard(html, 'title-card', ms, { label: [`Round ${n}: ${cities.map((c) => c.name).join(', ')}.`, ...said].join(' ') });
+  clatter(ui.card, Math.ceil(wire.length / 2), CABLE_KEY_MS * 2, CABLE_DELAY);
+  return done;
 }
 
 /** How long the final turn's card stays up (skipped like the round card). */
@@ -967,8 +1111,139 @@ function finalCard() {
   return done;
 }
 
+/** How long a rival's dossier stays up (skipped like every card): long enough to read the file. */
+const DOSSIER_CARD_MS = 9000;
+/** The DOSSIER stamp lands this far into the card (style.css .dossier-stamp), with the slam. */
+const STAMP_MS = 560;
+
+/**
+ * The first time you meet a rival on the ladder, their file comes up in a manila folder over bars in
+ * their colour, and the DOSSIER stamp slams on: the name, the file, the announced twist (`matchTwist`,
+ * the twist this match plays: the view's), and what they bring to the table (or that they play Classic).
+ */
+function dossierCard(rival, matchTwist) {
+  const i = RIVALS.findIndex((r) => r.id === rival.id);
+  const twist = twistText(rival.id, matchTwist);
+  const brings =
+    rival.pack.agents.length || rival.pack.cities.length
+      ? `<div class="brings"><h3>Brings to the table</h3>${packHTML(rival.pack)}</div>`
+      : `<p class="brings">Plays Classic: the original ${DECK.length} agents and ${CLASSIC_CITIES.length} cities.</p>`;
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="folder">
+      <div class="file-head"><p class="file-no">File ${i + 1} of ${RIVALS.length}</p><i class="dossier-stamp" aria-hidden="true">Dossier</i></div>
+      <h2 class="who">${jitter(rival.name, i + 2)}</h2>
+      <p class="file">${esc(DOSSIERS[rival.id])}</p>
+      ${twist ? `<p class="twist"><i>Twist</i> ${esc(twist)}</p>` : ''}
+      ${brings}
+    </div>`;
+  const done = showCard(html, `dossier-card own-${foe()}`, DOSSIER_CARD_MS, { label: `Dossier: ${rival.name}. ${DOSSIERS[rival.id]}${twist ? ` Twist: ${twist}` : ''}` });
+  const card = ui.card;
+  if (card) setTimeout(() => ui.card === card && audio.slam(), reducedMotion() ? 0 : STAMP_MS);
+  return done;
+}
+
+/** How long tonight's roster stays up (skipped like every card). */
+const ROSTER_CARD_MS = 6000;
+/** How much longer it stays for each agent met for the first time (its text and fine print), up to ROSTER_MAX_MS. */
+const NEW_AGENT_MS = 2000;
+const ROSTER_MAX_MS = 20000;
+
+/** The Classic 12, in any order (a Mixed draw can come out as exactly those). */
+const isClassic = (roster) => roster.length === DECK.length && DECK.every((id) => roster.includes(id));
+
+/**
+ * A match that isn't Classic opens on its roster: the agents every player holds tonight, dealt onto
+ * the card as small paper cards. Agents met for the first time (`fresh`) wear a New stamp, and their
+ * text and fine print follow on slips under the deal.
+ */
+function rosterCard(v, fresh) {
+  const minis = v.roster
+    .map((id, i) => {
+      const a = AGENT[id];
+      const isNew = fresh.includes(id);
+      return `<div class="mc${isNew ? ' new' : ''}" style="--i:${i}"><b class="pow">${a.power}</b><span class="art" aria-hidden="true">${agentSVG(id)}</span><span class="nm">${esc(a.name)}</span>${isNew ? '<i class="new-tag">New</i>' : ''}</div>`;
+    })
+    .join('');
+  const news = fresh
+    .map((id, i) => {
+      const a = AGENT[id];
+      return `<div class="news-line" style="--i:${i}"><span class="art" aria-hidden="true">${agentSVG(id)}</span><div class="txt"><h3>${esc(a.name)} <b>${a.power}</b></h3><p>${esc(a.text)}</p>${a.note ? `<p class="note">${esc(a.note)}</p>` : ''}</div></div>`;
+    })
+    .join('');
+  // Every deck deals the roster; a rival's `extra` twist adds one card to theirs.
+  const t = v.twist;
+  const extra = t?.id === 'extra' ? ` ${v.names?.[t.seat] ?? 'Your rival'} carries one more: an extra ${AGENT[t.kind].name}.` : '';
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <h2 class="big">${jitter('Tonight’s roster', 8)}</h2>
+    <p class="sub">Every deck at the table holds these ${v.roster.length} agents.${esc(extra)}</p>
+    <div class="minis">${minis}</div>
+    ${news ? `<div class="news">${news}</div>` : ''}`;
+  const named = (ids) => ids.map((id) => AGENT[id].name).join(', ');
+  const label = `Tonight’s roster: ${named(v.roster)}.${fresh.length ? ` New to you: ${named(fresh)}.` : ''}`;
+  const ms = Math.min(ROSTER_MAX_MS, ROSTER_CARD_MS + NEW_AGENT_MS * fresh.length);
+  const done = showCard(html, 'roster-card', ms, { label });
+  if (ui.card) audio.drop();
+  return done;
+}
+
+/** How long the epilogue stays up (skipped like every card), and how it types: a key every EPILOGUE_KEY_MS, a pause between lines. */
+const EPILOGUE_MS = 12000;
+const EPILOGUE_KEY_MS = 38;
+const EPILOGUE_PAUSE_MS = 450;
+
+/**
+ * After a ladder win over Control (and again from the rivals screen): C's last cable, typed out line
+ * by line on a telegram form over oxblood bars, and signed in red.
+ */
+function epilogueCard() {
+  let at = 500;
+  const starts = [];
+  const lines = EPILOGUE.map((line, i) => {
+    starts.push([at, line.length]);
+    const html = `<p class="eline${i === EPILOGUE.length - 1 ? ' sig' : ''}">${typedHTML(line, { delay: at, per: EPILOGUE_KEY_MS })}</p>`;
+    at += line.length * EPILOGUE_KEY_MS + EPILOGUE_PAUSE_MS;
+    return html;
+  }).join('');
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="telegram"><p class="form-head" aria-hidden="true"><span>Cable</span><span>Most secret</span></p>${lines}</div>`;
+  const done = showCard(html, 'epilogue-card', EPILOGUE_MS, { label: `Epilogue: ${EPILOGUE.join(' ')}` });
+  const card = ui.card;
+  for (const [t, n] of starts) clatter(card, n, EPILOGUE_KEY_MS, t);
+  return done;
+}
+
+/**
+ * A teleprinter's clatter while a card types: `keys` soft clicks `gap` ms apart, from `delay` ms, for
+ * as long as `card` stays up. None under reduced motion (nothing types) or in a hidden tab.
+ */
+function clatter(card, keys, gap, delay = 0) {
+  if (!card || reducedMotion()) return;
+  let i = 0;
+  const key = () => {
+    if (ui.card !== card || document.hidden || i >= keys) return;
+    i++;
+    sfx.noise({ dur: 0.016, freq: 2800 + (i % 3) * 650, type: 'bandpass', q: 4, vol: 0.05 });
+    setTimeout(key, gap);
+  };
+  setTimeout(key, delay);
+}
+
+/**
+ * The computer rival's remark of `kind` (REMARKS: start, escalate, fold, won, lost), picked at random
+ * and said in the ticker. Solo only, and never during a reveal. Returns the line, or null.
+ */
+function remark(kind) {
+  if (ui.mode !== 'solo' || !ui.rival || ui.animating) return null;
+  const lines = REMARKS[ui.rival.id]?.[kind];
+  if (!lines?.length) return null;
+  const text = lines[Math.floor(Math.random() * lines.length)];
+  say(text);
+  return text;
+}
+
 function say(text) {
   ui.caption = text;
+  ui.typeNext = text;
   const el = $('#ticker');
   if (el) {
     el.textContent = text;
@@ -978,10 +1253,46 @@ function say(text) {
   }
 }
 
+/** "Courier", "Courier and Blackmailer", "Prague, Glienicke Bridge and Geneva". */
+const andList = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/**
+ * What a ladder win added to the network, as the toast says it: "Recruited: Courier and Blackmailer.
+ * Tokyo and Macau join your network." Empty when nothing new came in (Wren brings nothing).
+ */
+function recruitsText(before, after) {
+  const agents = after.agents.filter((id) => !before.agents.includes(id)).map((id) => AGENT[id].name);
+  const cities = after.cities.filter((id) => !before.cities.includes(id)).map((id) => CITY[id].name);
+  const out = [];
+  if (agents.length) out.push(`Recruited: ${andList(agents)}.`);
+  if (cities.length) out.push(`${andList(cities)} ${cities.length === 1 ? 'joins' : 'join'} your network.`);
+  return out.join(' ');
+}
+
+/** Show a ladder win's held recruits toast (after the epilogue, or on leaving before it), once. */
+function flushRecruits() {
+  if (!ui.recruits) return;
+  toast(ui.recruits, 6000);
+  ui.recruits = null;
+}
+
 function finishMatch(v) {
   if (ui.mode === 'solo') {
     const won = v.winner === 0;
-    if (won && ui.rival && !meta.beaten.includes(ui.rival.id)) meta.beaten.push(ui.rival.id);
+    // Only the ladder recruits: a win there adds the rival to your record, and its pack to your network.
+    if (won && ui.rival && !ui.free) {
+      // Beating Control, the last rival, plays the epilogue at Final report: its recruits toast waits
+      // until the card has gone (flushRecruits), rather than running on over the card.
+      const ending = ui.rival.id === RIVALS[RIVALS.length - 1].id;
+      if (!meta.beaten.includes(ui.rival.id)) {
+        const before = network(meta.beaten);
+        meta.beaten = RIVALS.map((r) => r.id).filter((id) => id === ui.rival.id || meta.beaten.includes(id));
+        const recruits = recruitsText(before, network(meta.beaten));
+        if (recruits && ending) ui.recruits = recruits;
+        else if (recruits) toast(recruits, 6000);
+      }
+      if (ending) ui.epilogue = true;
+    }
     saveMeta();
     const top = RIVALS.reduce((best, r, i) => (meta.beaten.includes(r.id) ? i + 1 : best), 0);
     if (top) recordBest(SLUG, top, `Beat ${RIVALS[top - 1].name}`);
@@ -1012,6 +1323,21 @@ function jitter(text, seed = 7) {
     .join(' ');
 }
 
+/**
+ * Text typed out a key at a time (style.css .typed): each character shows `per` ms after the one
+ * before, from `delay` ms. Words never break across lines, and the whole line is there at once for
+ * screen readers (and under reduced motion, for everyone).
+ */
+function typedHTML(text, { delay = 0, per = 12 } = {}) {
+  let k = 0;
+  const words = text.split(' ').map((word) => {
+    const keys = [...word].map((ch) => `<i style="--t:${delay + k++ * per}ms">${esc(ch)}</i>`).join('');
+    k++; // the space
+    return `<span class="word">${keys}</span>`;
+  });
+  return `<span class="typed" aria-hidden="true">${words.join(' ')}</span><span class="vh">${esc(text)}</span>`;
+}
+
 const ICON = {
   sound: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/><path d="M16 8.5c1.3 1 2 2.2 2 3.5s-.7 2.5-2 3.5M18.5 6c2 1.6 3 3.6 3 6s-1 4.4-3 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   music: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17.5V5l11-2v12.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="6.5" cy="17.5" rx="3.2" ry="2.6" fill="currentColor"/><ellipse cx="17.5" cy="15.5" rx="3.2" ry="2.6" fill="currentColor"/></svg>',
@@ -1033,14 +1359,16 @@ function renderTop() {
 function titleHTML() {
   const resume = saved.get('match', null);
   const canResume = resume && resume.table?.state?.phase !== 'match-over';
-  const resumeLabel = canResume ? (resume.mode === 'pass' ? 'Continue pass and play' : `Continue against ${RIVALS.find((r) => r.id === resume.rival)?.name || 'the computer'}`) : '';
+  const against = RIVALS.find((r) => r.id === resume?.rival)?.name || 'the computer';
+  const resumeLabel = canResume ? (resume.mode === 'pass' ? 'Continue pass and play' : resume.free ? `Continue free play against ${against}` : `Continue against ${against}`) : '';
+  const net = network(meta.beaten);
   const intro = !ui.introDone;
   ui.introDone = true;
   return `<div class="title-screen${intro ? ' intro' : ''}">
     <div class="poster">
       <div class="bars" aria-hidden="true"><i></i><i></i><i></i></div>
       <h1 class="logo" aria-label="Dead Drop">${jitter('Dead', 11)}<br>${jitter('Drop', 5)}</h1>
-      <p class="tagline">A spy card duel for two. Drop agents in secret, flip together, call the bluff.</p>
+      <p class="tagline">Winter, 1963. Run a network of agents against rival services: drop in secret, flip together, call the bluff.</p>
       <div class="spy" aria-hidden="true">${spySVG()}</div>
     </div>
     <nav class="menu" aria-label="Play">
@@ -1053,25 +1381,102 @@ function titleHTML() {
         <span class="join-row"><input id="code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="8" placeholder="K7QX2M" /><button class="slip small" type="submit">Join</button></span>
       </form>
       <p class="codename">You are <b>${esc(meta.codename)}</b> <button class="link" data-action="rename">Change codename</button></p>
+      <p class="network">Network: <b>${net.agents.length}</b> of ${AGENTS.length} agents · <b>${net.cities.length}</b> of ${CITIES.length} cities</p>
     </nav>
   </div>`;
 }
 
+/** The first rival whose win grows the network past Classic (the Magpie): free play opens with it. */
+const FIRST_PACK = RIVALS.find((r) => r.pack.agents.length || r.pack.cities.length);
+/** The network has grown past Classic, so free play (Mixed from it) has something to mix. */
+const freeOpen = () => {
+  const net = network(meta.beaten);
+  return net.agents.length > DECK.length || net.cities.length > CLASSIC_CITIES.length;
+};
+/** Who brings agent or city `id` to the ladder (`kind`: agents | cities), or undefined for Classic. */
+const recruiter = (kind, id) => RIVALS.find((r) => r.pack[kind].includes(id));
+
+/** A pack's agents and cities as small silhouettes with their names (on a rival's row). */
+function packHTML(pack) {
+  const agents = pack.agents.map((id) => `<span class="mini mini-agent"><span class="art">${agentSVG(id)}</span>${esc(AGENT[id].name)}</span>`);
+  const cities = pack.cities.map((id) => `<span class="mini mini-city"><span class="art">${citySVG(id)}</span>${esc(CITY[id].name)}</span>`);
+  return `<span class="pack">${[...agents, ...cities].join('')}</span>`;
+}
+
+/** A segmented switch: [id, label, disabled] options, the chosen one pressed. */
+function switchHTML(action, options, chosen, label) {
+  return `<div class="seg-switch" role="group" aria-label="${esc(label)}">${options
+    .map(([id, name, off]) => `<button class="seg" data-action="${action}" data-choice="${id}" aria-pressed="${id === chosen}"${off ? ' disabled' : ''}>${esc(name)}</button>`)
+    .join('')}</div>`;
+}
+
 function rivalsHTML() {
+  const open = freeOpen();
+  if (!open) ui.rivalsTab = 'ladder';
+  const free = ui.rivalsTab === 'free';
   const next = RIVALS.findIndex((r) => !meta.beaten.includes(r.id));
+  const note = free
+    ? 'Any rival you’ve beaten, or Agent Wren, on a Mixed roster from your network, with no twist. Wins here recruit nobody.'
+    : open
+      ? 'Beat each rival in turn. Every win recruits their agents and cities into your network.'
+      : `Beat each rival in turn. Every win recruits their agents and cities into your network. Free play opens once you beat ${FIRST_PACK.name}.`;
+  const row = (r, i) => {
+    const beaten = meta.beaten.includes(r.id);
+    if (free) {
+      return `<li><button class="rival free" data-action="rival" data-id="${r.id}" data-free="1">
+          <span class="rank">${i + 1}</span><span class="who"><b>${esc(r.name)}</b><span class="blurb">Mixed: your network · no twist</span></span>
+          <span class="state">Play</span></button></li>`;
+    }
+    const isOpen = i === 0 || meta.beaten.includes(RIVALS[i - 1].id);
+    const met = beaten || meta.met?.rivals?.includes(r.id);
+    const twist = twistText(r.id);
+    const hasPack = r.pack.agents.length || r.pack.cities.length;
+    const extra = !isOpen
+      ? ''
+      : `${twist ? `<span class="twist"><i>Twist</i> ${esc(twist)}</span>` : ''}${
+          !hasPack
+            ? `<span class="brings">Plays Classic: the original ${DECK.length} agents and ${CLASSIC_CITIES.length} cities.</span>`
+            : met
+              ? packHTML(r.pack)
+              : `<span class="brings">Brings ${counted(r.pack.agents.length, 'new agent')} and ${counted(r.pack.cities.length, 'new city', 'new cities')}.</span>`
+        }`;
+    return `<li><button class="rival${beaten ? ' beaten' : ''}${i === next ? ' next' : ''}" data-action="rival" data-id="${r.id}" ${isOpen ? '' : 'disabled'}>
+          <span class="rank">${i + 1}</span><span class="who"><b>${esc(r.name)}</b><span class="blurb">${esc(isOpen ? r.blurb : `Beat ${RIVALS[i - 1].name} to unlock.`)}</span>${extra}</span>
+          <span class="state">${beaten ? 'Beaten' : isOpen ? 'Play' : 'Locked'}</span></button></li>`;
+  };
+  const rows = RIVALS.map((r, i) => [r, i]).filter(([r, i]) => !free || i === 0 || meta.beaten.includes(r.id));
+  const ending = meta.beaten.includes(RIVALS[RIVALS.length - 1].id);
   return `<div class="rivals-screen">
-    <h2 class="cut-h">${jitter('Choose your rival', 2)}</h2>
+    <h2 class="cut-h">${jitter('Rival services', 2)}</h2>
+    <div class="rivals-head">
+      ${switchHTML('rivals-tab', [['ladder', 'Ladder', false], ['free', 'Free play', !open]], ui.rivalsTab, 'Ladder or free play')}
+      <p class="seg-note">${esc(note)}</p>
+    </div>
     <ol class="rivals">
-      ${RIVALS.map((r, i) => {
-        const beaten = meta.beaten.includes(r.id);
-        const open = i === 0 || meta.beaten.includes(RIVALS[i - 1].id);
-        return `<li><button class="rival${beaten ? ' beaten' : ''}${i === next ? ' next' : ''}" data-action="rival" data-id="${r.id}" ${open ? '' : 'disabled'}>
-          <span class="rank">${i + 1}</span><span class="who"><b>${esc(r.name)}</b><span>${esc(open ? r.blurb : `Beat ${RIVALS[i - 1].name} to unlock.`)}</span></span>
-          <span class="state">${beaten ? 'Beaten' : open ? 'Play' : 'Locked'}</span></button></li>`;
-      }).join('')}
+      ${rows.map(([r, i]) => row(r, i)).join('')}
     </ol>
+    ${ending ? '<p class="epilogue-link"><button class="link" data-action="epilogue">Read the epilogue</button></p>' : ''}
     <button class="slip quiet" data-action="title">Back</button>
   </div>`;
+}
+
+/**
+ * The host's table can still change its roster: nobody has joined, and nothing has been played on it
+ * (a host reload in the lobby resumes an untouched table, which may change too).
+ */
+function lobbyOpen() {
+  const S = table?.state;
+  return ui.mode === 'host' && !!S && !ui.net?.session?.guest && S.phase === 'plan' && S.roundNo === 0 && S.round.turn === 1 && !S.round.plans.some(Boolean);
+}
+
+/** The host's roster switch (Classic first, the default), until a guest joins. */
+function lobbyRosterHTML() {
+  const mixed = !!table.setup.mixed;
+  return `<div class="roster-pick">
+      <span class="lbl">Roster</span>
+      ${switchHTML('host-roster', [['classic', 'Classic', false], ['mixed', 'Mixed', false]], mixed ? 'mixed' : 'classic', 'Roster')}
+      <p class="seg-note">${mixed ? `Mixed: ${ROSTER.size} agents drawn from all ${AGENTS.length}, and all ${CITIES.length} cities.` : `Classic: the original ${DECK.length} agents and ${CLASSIC_CITIES.length} cities. Best for a first match.`}</p>
+    </div>`;
 }
 
 function inviteLink() {
@@ -1089,6 +1494,7 @@ function lobbyHTML() {
     return `<div class="lobby">
       <h2 class="cut-h">${jitter('Play a friend', 4)}</h2>
       <p>Send your rival this link. The game starts as soon as they open it.</p>
+      ${lobbyOpen() ? lobbyRosterHTML() : ''}
       <div class="invite">
         <input readonly value="${esc(inviteLink())}" aria-label="Invite link" />
         <button class="slip primary small" data-action="copy-link">Copy link</button>
@@ -1135,18 +1541,65 @@ function coverHTML() {
   </div>`;
 }
 
+/** The city id at index `ci` of the view's round. */
+const cityId = (v, ci) => v.round.cities[ci]?.id;
+
+/** An Accomplice is selected and its city offers partner drops: the hand asks for a partner (or Drop alone). */
+function partnerPrompt(v) {
+  if (!ui.selected || ui.target === null || myPlan(v) || v.phase !== 'plan') return false;
+  return v.round.legal.some((d) => d.uid === ui.selected && d.city === ui.target && d.partner);
+}
+
+/** Casablanca is the target: the drop's face is a choice (Face up / Face down, key V). */
+function faceChoice(v) {
+  return !!ui.selected && ui.target !== null && !myPlan(v) && v.phase === 'plan' && cityId(v, ui.target) === 'casablanca';
+}
+
+/** The face chosen for Casablanca: ui.down, or else the agent's own face (a Sleeper drops face down). */
+function planDown(v) {
+  const sel = v.round.hand.find((c) => c.uid === ui.selected);
+  return ui.down ?? !!(sel && AGENT[sel.kind].faceDown);
+}
+
+/** The partner card to send with the drop, or null (none chosen, or Drop alone). */
+const partnerUid = (v) => (partnerPrompt(v) && ui.partner && ui.partner !== 'alone' ? ui.partner : null);
+
+/** The seat wiretapping me this turn (it hears the city I lock in), or null. */
+function listener(v) {
+  const t = (v.round.taps || []).find((x) => x.on === me() && x.by !== me());
+  return t ? t.by : null;
+}
+
 function statusText(v) {
   const R = v.round;
   const rival = foe(v);
   if (v.phase !== 'plan') return '';
+  // Pass and play with no hand uncovered (behind the intro cards, say): the table is nobody's, so the
+  // line names the operation and whose turn is next, as the cover will, never a seat's pass.
+  if (ui.mode === 'pass' && ui.seat === null) {
+    const next = table && passActor();
+    return `Operation ${operation(v.matchId, v.roundNo).name}.${next ? ` Pass the device to ${label(next.seat, v)}.` : ''}`;
+  }
   if (R.pending && R.pending.by === me()) return `Waiting for ${label(rival, v)} to answer your escalation…`;
   if (!R.legal.length) return `Nowhere to drop this turn: you pass.${R.rivalLocked ? '' : ` ${label(rival, v)} is choosing…`}`;
-  if (myPlan(v)) return R.rivalLocked ? 'Both locked in.' : `Locked in. ${label(rival, v)} is choosing…`;
+  const ear = listener(v);
+  if (myPlan(v)) return R.rivalLocked ? 'Both locked in.' : ear !== null ? `Locked in. ${label(ear, v)} has heard your city, and is choosing…` : `Locked in. ${label(rival, v)} is choosing…`;
   const sel = R.hand.find((c) => c.uid === ui.selected);
   const rivalNote = R.rivalLocked ? ` ${label(rival, v)} has locked in.` : '';
-  if (sel && ui.target !== null) return `Lock in your ${AGENT[sel.kind].name} for ${cityName(v, ui.target)}.${rivalNote}`;
-  if (sel) return `${AGENT[sel.kind].name}: ${AGENT[sel.kind].text} Now pick a city.${rivalNote}`;
-  return `Pick an agent from your hand.${rivalNote}`;
+  const listening = ear !== null ? ` ${label(ear, v)} is listening: they’ll hear which city you pick.` : '';
+  // My own wiretap: what it has heard so far.
+  const heard = (R.tapped || []).find((t) => t.seat !== me());
+  const tapNote = heard ? (heard.city === null ? ` Your tap on ${label(heard.seat, v)} is live.` : ` Your tap: ${label(heard.seat, v)} picked ${cityName(v, heard.city)}.`) : '';
+  const notes = `${listening}${tapNote}${rivalNote}`;
+  if (sel && ui.target !== null) {
+    if (partnerPrompt(v) && ui.partner === null) return `Pick a partner to drop face down with your ${AGENT[sel.kind].name}, or drop it alone.${notes}`;
+    const mate = R.hand.find((c) => c.uid === partnerUid(v));
+    const company = mate ? ` and ${AGENT[mate.kind].name} (face down)` : partnerPrompt(v) ? ' alone' : '';
+    const face = faceChoice(v) ? `, ${planDown(v) ? 'face down' : 'face up'}` : '';
+    return `Lock in your ${AGENT[sel.kind].name}${company} for ${cityName(v, ui.target)}${face}.${notes}`;
+  }
+  if (sel) return `${AGENT[sel.kind].name}: ${AGENT[sel.kind].text} Now pick a city.${notes}`;
+  return `Pick an agent from your hand.${notes}`;
 }
 
 /** Gentle teaching lines for the first couple of matches. */
@@ -1172,10 +1625,7 @@ function inspectText(v) {
   const all = [...v.round.cities.flatMap((c) => c.sides.flat()), ...v.round.hand];
   const cv = all.find((c) => c.uid === ui.inspect);
   if (!cv) return '';
-  if (!cv.kind) {
-    const vienna = cv.city !== null && v.round.cities[cv.city].id === 'vienna';
-    return vienna ? 'Face-down agent in Vienna: it could be anything.' : `Face-down agent: a Sleeper (power ${AGENT.sleeper.power}) or a Tripwire (springs on the next agent to arrive).`;
-  }
+  if (!cv.kind) return faceDownText(v, cv);
   const a = AGENT[cv.kind];
   const extra = [];
   if (cv.power !== null && cv.power !== a.power) extra.push(`power ${cv.power} right now`);
@@ -1183,6 +1633,8 @@ function inspectText(v) {
   if (cv.id0 && cv.id0 !== cv.kind) extra.push('an Impostor in disguise');
   // Everyone in Havana switches sides, so there "turned" says nothing new.
   if (cv.city !== null && cv.origin !== cv.owner && v.round.cities[cv.city].id !== 'havana') extra.push('a turned asset');
+  if (cv.partner) extra.push('dropped as an Accomplice’s partner');
+  if (cv.placed) extra.push('placed before the round began');
   return `${a.name} (${a.power}): ${a.text}${extra.length ? ` Now: ${extra.join(', ')}.` : ''}`;
 }
 
@@ -1197,6 +1649,72 @@ function marksHTML(v, seat) {
   const got = v.strips[seat];
   const reel = v.reel > 0 ? `<span class="reel" role="img" aria-label="${got} of ${v.reel} film strips" title="Film strips: ${got} of ${v.reel}. ${reelSentence(v.reel)}.">${Array.from({ length: v.reel }, (_, i) => `<i class="fr${i < got ? ' got' : ''}"></i>`).join('')}</span>` : '';
   return `<span class="marks">${tokens}${reel}</span>`;
+}
+
+/** The twist `seat` plays under (a ladder rival's), in words from the match's own twist; null for none. */
+const twistOf = (v, seat) => (ui.mode === 'solo' && ui.rival && v.twist && v.twist.seat === seat ? twistText(ui.rival.id, v.twist) : null);
+
+/**
+ * Card counting: what this round's views have shown `viewer` of the cards on the table, kept in
+ * ui.sighted (reset each round). A card sent home comes back under a new uid, so sightings are
+ * counted by kind: for each deck (origin) and kind, the most one view has shown at once. A twist's
+ * placed card is face down, but its kind is announced, so it counts as seen.
+ */
+function feedSightings(v) {
+  if (!v || !Number.isInteger(v.seat) || v.seat < 0) return;
+  const key = `${v.matchId}:${v.roundNo}`;
+  if (ui.sighted?.key !== key) ui.sighted = { key, seen: new Map() };
+  const here = new Map();
+  const add = (origin, id0) => {
+    const k = `${v.seat}:${origin}:${id0}`;
+    here.set(k, (here.get(k) || 0) + 1);
+  };
+  const shown = new Set();
+  for (const s of sightings(v)) {
+    shown.add(s.uid);
+    add(s.origin, s.id0);
+  }
+  const placed = v.twist?.id === 'placed' ? v.twist.kind : null;
+  if (placed) for (const c of v.round.cities) for (const side of c.sides) for (const cv of side) if (cv.placed && !cv.kind && !shown.has(cv.uid)) add(cv.origin, placed);
+  for (const [k, n] of here) if (n > (ui.sighted.seen.get(k) || 0)) ui.sighted.seen.set(k, n);
+}
+
+/** The agents of `seat`'s deck list `viewer` hasn't seen this round, in list order (the unseen strip). */
+function unseenOf(v, seat, viewer) {
+  const seen = [];
+  if (ui.sighted?.key === `${v.matchId}:${v.roundNo}`) {
+    for (const [k, n] of ui.sighted.seen) {
+      const [who, origin, id0] = k.split(':');
+      if (Number(who) === viewer && Number(origin) === seat) for (let i = 0; i < n; i++) seen.push(id0);
+    }
+  }
+  return unseen(deckList(v, seat), seen);
+}
+
+/** A rival's tools under its name: its twist as a stamped chip (a tap reads it out), and the unseen strip's toggle. */
+function intelHTML(v, seat, viewer) {
+  const twist = twistOf(v, seat);
+  const chip = twist ? `<button class="twist-chip" data-action="twist" data-seat="${seat}" aria-label="Twist: ${esc(twist)}" title="${esc(twist)}">Twist</button>` : '';
+  const open = ui.unseenOpen === seat;
+  const k = unseenOf(v, seat, viewer).length;
+  // The button is the 40px target; its paper tab is the face inside it. The open strip hangs from the
+  // scorebar (its containing block), over the board.
+  return `<span class="intel">${chip}<button class="unseen-btn${open ? ' open' : ''}" data-action="unseen" data-seat="${seat}" aria-expanded="${open}" aria-controls="unseen-${seat}" title="${esc(label(seat, v))}’s agents you haven’t seen this round (U)"><span class="face">Unseen <b>${k}</b><i aria-hidden="true">▾</i><kbd>U</kbd></span></button>${unseenPanelHTML(v, seat, viewer)}</span>`;
+}
+
+/** The open unseen strip: the agents `viewer` hasn't seen of `seat`'s deck list this round, and its hand and deck counts. It hangs over the board. */
+function unseenPanelHTML(v, seat, viewer) {
+  if (ui.unseenOpen !== seat) return '';
+  const ids = unseenOf(v, seat, viewer);
+  const R = v.round;
+  const name = label(seat, v);
+  const items = ids.map((id) => `<li class="mini mini-agent"><span class="art">${agentSVG(id)}</span>${esc(AGENT[id].name)}</li>`).join('');
+  const enter = ui.unseenEnter;
+  ui.unseenEnter = false;
+  return `<div class="unseen-panel own-${seat}${enter ? ' enter' : ''}" id="unseen-${seat}" role="region" aria-label="${esc(name)}: agents you haven’t seen this round">
+      <p class="unseen-head"><b>Not seen this round</b><span>Hand ${R.handCounts[seat]} · Deck ${R.deckCounts[seat]}</span></p>
+      ${ids.length ? `<ul class="unseen-list">${items}</ul>` : `<p class="unseen-none">You’ve seen every agent ${esc(name)} holds this round.</p>`}
+    </div>`;
 }
 
 function scorebarHTML(v, bottom) {
@@ -1225,7 +1743,7 @@ function scorebarHTML(v, bottom) {
     return `<span class="first-flip${moved ? ' moved' : ''}" role="img" aria-label="First flip: ${esc(name)}" title="First flip: ${esc(whose)} flip tricks go first this turn">1st</span>`;
   };
   return `<div class="scorebar">
-    <div class="side s-${top}"><span class="tag"><span class="who">${esc(label(top, v))}</span>${token(top)}</span>${marksHTML(v, top)}<b class="score" data-score="${top}">${v.scores[top]}</b></div>
+    <div class="side s-${top} has-intel"><span class="tag"><span class="who">${esc(label(top, v))}</span>${token(top)}</span>${marksHTML(v, top)}<b class="score" data-score="${top}">${v.scores[top]}</b>${intelHTML(v, top, bottom)}</div>
     <div class="mid">
       <span class="stake${stake > 1 ? ' hot' : ''}" title="Points this round is worth">${pot}Stake <b>${stake}</b>${stakeNote}</span>
       <span class="turn">${v.phase === 'plan' ? `Turn ${R.turn} of ${TURNS}` : `Round ${v.roundNo + 1}`} · first to ${v.target}</span>
@@ -1237,17 +1755,32 @@ function scorebarHTML(v, bottom) {
 function controlsHTML(v) {
   const R = v.round;
   if (v.phase !== 'plan' || ui.mode === 'pass' && ui.seat === null) return `<div class="controls"><p class="status">${esc(statusText(v))}</p></div>`;
-  // Escalating spends a token: with none left the button stays disabled and says so.
+  // Escalating spends a token: with none left the button stays disabled and says so. A round escalates
+  // once (a Blackmailer's flip counts), so after that it is disabled and says that instead.
   const left = v.tokens[me()];
-  const canEsc = left > 0 && !R.escalated.some(Boolean) && !R.pending;
-  const escLabel = left > 0 ? `Escalate: ${left} token${left === 1 ? '' : 's'} left` : 'Escalate: no tokens left';
-  const sel = ui.selected && ui.target !== null;
+  const already = R.escalated.some(Boolean);
+  const canEsc = left > 0 && !already && !R.pending;
+  const escLabel = already ? 'Escalated this round' : left > 0 ? `Escalate: ${left} token${left === 1 ? '' : 's'} left` : 'Escalate: no tokens left';
+  // An Accomplice's drop waits for its partner (or Drop alone) before it can lock in.
+  const ask = partnerPrompt(v);
+  const sel = ui.selected && ui.target !== null && (!ask || ui.partner !== null);
   const lockBtn = myPlan(v)
     ? `<button class="slip" data-action="unlock" ${R.rivalLocked || !R.plan ? 'disabled' : ''}>Take back<kbd>Esc</kbd></button>`
     : `<button class="slip primary${sel ? ' ready' : ''}" data-action="lock" ${sel ? '' : 'disabled'}>Lock in<kbd>Enter</kbd></button>`;
+  // The choices this drop asks for: Casablanca's face (both faces on one slip, the chosen one inked)
+  // and the Accomplice's Drop alone.
+  const choice = [];
+  if (faceChoice(v)) {
+    const down = planDown(v);
+    choice.push(
+      `<button class="slip quiet face" data-action="face" aria-pressed="${down}" aria-label="Face down" title="Face up or face down (V)"><span class="up${down ? '' : ' on'}">Face up</span><span class="dn${down ? ' on' : ''}">Face down</span><kbd>V</kbd></button>`,
+    );
+  }
+  if (ask) choice.push(`<button class="slip quiet alone" data-action="alone" aria-pressed="${ui.partner === 'alone'}">Drop alone</button>`);
   return `<div class="controls">
     <p class="status">${esc(statusText(v))}</p>
     <div class="btns">
+      ${choice.length ? `<span class="choice">${choice.join('')}</span>` : ''}
       <button class="slip esc${left > 0 ? '' : ' out'}" data-action="escalate" aria-label="${escLabel}" title="${escLabel}" ${canEsc ? '' : 'disabled'}><span>Escalate</span><small class="left">${left} left</small><kbd>E</kbd></button>
       <button class="slip" data-action="fold">Fold<kbd>F</kbd></button>
       ${lockBtn}
@@ -1259,8 +1792,20 @@ function handHTML(v, disabled) {
   const R = v.round;
   if (ui.mode === 'pass' && ui.seat === null) return '<div class="hand empty" id="hand"></div>';
   const legalUids = new Set(R.legal.map((d) => d.uid));
-  return `<div class="hand" id="hand" style="--n:${R.hand.length}" data-n="${R.hand.length}">${R.hand
-    .map((cv, i) => cardHTML(cv, i, { selected: ui.selected === cv.uid, disabled: disabled || !!myPlan(v) || !legalUids.has(cv.uid) || v.phase !== 'plan' }))
+  // While an Accomplice asks for a partner, the cards that can go with it are tapped to choose one.
+  const mates = !disabled && partnerPrompt(v) ? new Set(R.legal.filter((d) => d.uid === ui.selected && d.city === ui.target && d.partner).map((d) => d.partner)) : null;
+  // Cards a rival has seen (Control's twist), with who saw them.
+  const seen = new Map((R.exposed || []).filter((e) => e.by !== me()).map((e) => [e.uid, label(e.by, v)]));
+  return `<div class="hand${mates ? ' asking' : ''}" id="hand" style="--n:${R.hand.length}" data-n="${R.hand.length}">${R.hand
+    .map((cv, i) =>
+      cardHTML(cv, i, {
+        selected: ui.selected === cv.uid,
+        disabled: disabled || !!myPlan(v) || !legalUids.has(cv.uid) || v.phase !== 'plan',
+        candidate: !!mates?.has(cv.uid),
+        mate: !!mates?.has(cv.uid) && ui.partner === cv.uid,
+        seenBy: seen.get(cv.uid) ?? null,
+      }),
+    )
     .join('')}</div>`;
 }
 
@@ -1279,12 +1824,34 @@ function resultHTML(v, bottom) {
   // the pot; a dead heat rolls the stake and the pot into the next round's pot.
   if (res.folded !== null) lines.push(esc(`${label(res.winner, v)} ${ui.mode !== 'pass' && res.winner === me() ? 'score' : 'scores'} ${res.points} (the stake${res.points > res.stake ? ' and the pot' : ''}).`));
   else {
+    const verb = (seat, word) => (ui.mode !== 'pass' && seat === me() ? word : `${word}s`);
     R.cities.forEach((c, ci) => {
       const w = res.cityWinners[ci];
       const t = res.totals[ci];
-      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} <small>${t[bottom]} to ${t[foe(v, bottom)]}</small></span>`);
+      // Reykjavik is held on heads, so its line counts agents.
+      const n = (s) => c.sides[s].length;
+      const power = `${t[bottom]} to ${t[foe(v, bottom)]}`;
+      // (A tie on heads goes to the higher total, so then both show.)
+      const heads = n(bottom) === n(foe(v, bottom)) ? `${counted(n(bottom), 'agent')} each, ${power}` : `${counted(n(bottom), 'agent')} to ${inWords(n(foe(v, bottom)))}`;
+      const score = c.id === 'reykjavik' ? heads : power;
+      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} <small>${score}</small></span>`);
     });
-    if (res.winner !== null) lines.push(`<span class="pts">+${res.points} to ${esc(label(res.winner, v))} <small>stake ${res.stake}, doubled on the final flip${res.pot > 0 ? `, plus a pot of ${res.pot}` : ''}</small></span>`);
+    // Geneva's tie went to whoever was behind on points.
+    const gi = R.cities.findIndex((c) => c.id === 'geneva');
+    const gw = gi >= 0 ? res.cityWinners[gi] : null;
+    if (gw !== null && allSeats(v).some((s) => s !== gw && R.cities[gi].sides[s].length && res.totals[gi][s] === res.totals[gi][gw])) {
+      lines.push(`<span class="pts">Geneva: tied at ${res.totals[gi][gw]}, so it goes to ${esc(labelLower(gw, v))}, behind in the match.</span>`);
+    }
+    // A round tied on cities that Zurich decided.
+    const zi = R.cities.findIndex((c) => c.id === 'zurich');
+    if (res.winner !== null && zi >= 0 && res.cityWinners[zi] === res.winner) {
+      const held = (s) => res.cityWinners.filter((w) => w === s).length;
+      if (allSeats(v).some((s) => s !== res.winner && held(s) === held(res.winner))) lines.push(`<span class="pts">Tied on cities: Zurich decides, and ${esc(labelLower(res.winner, v))} ${verb(res.winner, 'hold')} it.</span>`);
+    }
+    // Macau: the round's winner held it, and scores the stake once more per time (in the points above).
+    const macau = res.macau ?? null;
+    const extra = macau !== null ? res.stake * CITY.macau.times : 0;
+    if (res.winner !== null) lines.push(`<span class="pts">+${res.points} to ${esc(label(res.winner, v))} <small>stake ${res.stake}, doubled on the final flip${res.pot > 0 ? `, plus a pot of ${res.pot}` : ''}${extra ? `, plus ${extra} for Macau` : ''}</small></span>`);
     else {
       // The match can end on a dead heat (Monaco's +1, or the reel): then nothing rolls on.
       const points = `${res.carry} point${res.carry === 1 ? '' : 's'}`;
@@ -1292,6 +1859,7 @@ function resultHTML(v, bottom) {
       lines.push(`<span class="pts">Nobody scores.${esc(carry)}</span>`);
     }
     if (res.monaco !== null && res.monaco !== undefined) lines.push(`<span class="pts">+1 Monaco bonus to ${esc(label(res.monaco, v))}</span>`);
+    if (macau !== null) lines.push(`<span class="pts">+${extra} Macau: ${esc(label(macau, v))} won the round holding it</span>`);
   }
   // The Microfilm: a frame in the taker's colour beside who took a strip, or the canister (the
   // film stays in it) beside why nobody did.
@@ -1318,10 +1886,13 @@ function resultHTML(v, bottom) {
     <div class="btns">${peekBtn}${btn}</div>
   </div>`;
   }
+  // The rival's remark on the round, said in the ticker as the result came up: the panel covers the ticker, so it says it too.
+  const said = ui.remark?.key === `${v.matchId}:${v.roundNo}` ? ui.remark.text : null;
   return `<div class="result${enter ? ' enter' : ''}" role="dialog" aria-label="Round result">
     <h2>${jitter(head, v.roundNo + 3)}</h2>
     <div class="lines">${lines.map((l) => `<p>${l}</p>`).join('')}</div>
     <p class="tally">${esc(label(bottom, v))} ${v.scores[bottom]} · ${v.scores[foe(v, bottom)]} ${esc(label(foe(v, bottom), v))}</p>
+    ${said ? `<p class="remark">${esc(said)}</p>` : ''}
     <div class="btns">${peekBtn}${btn}</div>
   </div>`;
 }
@@ -1348,19 +1919,33 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
   const b = bottom ?? (ui.mode === 'pass' ? (ui.seat ?? 0) : me());
   const R = v.round;
   const busy = revealing || still;
+  feedSightings(v);
   const choosing = !!ui.selected && !myPlan(v) && v.phase === 'plan' && !busy;
   const legalCities = choosing ? R.legal.filter((d) => d.uid === ui.selected).map((d) => d.city) : [];
+  // The drop being chosen, or locked in, as ghosts in its city: face down where it will land face down
+  // (Casablanca as chosen), and an Accomplice's partner beside it.
   let ghost = null;
   if (!busy && v.phase === 'plan') {
     const mine = myPlan(v);
-    const planned = mine && !mine.pass ? mine : ui.selected && ui.target !== null ? { uid: ui.selected, city: ui.target } : null;
+    const planned = mine && !mine.pass ? mine : ui.selected && ui.target !== null ? { uid: ui.selected, city: ui.target, partner: partnerUid(v), down: faceChoice(v) ? planDown(v) : undefined } : null;
     const cv = planned && R.hand.find((c) => c.uid === planned.uid);
-    if (cv) ghost = { city: planned.city, cv: { ...cv, owner: b, power: AGENT[cv.kind].power, locked: !!mine } };
+    if (cv) {
+      const id = cityId(v, planned.city);
+      const ghostOf = (c, more) => ({ ...c, owner: b, power: AGENT[c.kind].power, locked: !!mine, ...more });
+      const cvs = [ghostOf(cv, { faceDown: id === 'casablanca' ? !!planned.down : id === 'vienna' || !!AGENT[cv.kind].faceDown })];
+      const mate = planned.partner && R.hand.find((c) => c.uid === planned.partner);
+      if (mate) cvs.push(ghostOf(mate, { faceDown: true, partner: true }));
+      ghost = { city: planned.city, cvs };
+    }
   }
+  // A wiretap's slip comes in once, when the mark's city is first heard.
+  const tapKey = busy ? null : (R.tapped || []).filter((t) => t.city !== null).map((t) => `${t.seat}@${t.city}`).join(',') || null;
+  const tapFresh = !!tapKey && `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}` !== ui.tapShown;
+  if (tapKey) ui.tapShown = `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}`;
   const settled = v.phase !== 'plan' && R.result && R.result.cityWinners;
   const cities = R.cities
     .map((_, ci) => {
-      let html = cityHTML(v, ci, b, { ghost, choosing, legalCities });
+      let html = cityHTML(v, ci, b, { ghost, choosing, legalCities, tapFresh });
       if (settled) {
         const w = R.result.cityWinners[ci];
         html = html.replace('class="city ', `class="city ${w === null ? 'won-none' : w === b ? 'won-me' : 'won-them'} `);
@@ -1370,12 +1955,15 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
     .join('');
   const colours = seatColours(v);
   const caption = busy ? ui.caption : ui.caption || inspectText(v) || hintText(v);
+  // A line said just before this render types out again on the new ticker.
+  const typing = !!caption && ui.typeNext === caption;
+  ui.typeNext = null;
   syncNight();
   $('#screen').innerHTML = `<div class="play ${colours.map((c, s) => `c${s}-${c}`).join(' ')}${revealing ? ' revealing' : ''}" data-bottom="${b}">
     ${peerBannerHTML()}
     ${scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
-    <p class="ticker" id="ticker" role="status">${esc(caption)}</p>
+    <p class="ticker${typing ? ' typing' : ''}" id="ticker" role="status">${esc(caption)}</p>
     ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : still ? '<div class="controls"><p class="status"></p></div>' : controlsHTML(v)}
     ${handHTML(hand, busy)}
     ${!busy && v.phase !== 'plan' ? resultHTML(v, b) : ''}
@@ -1408,11 +1996,12 @@ function overHTML() {
         const said = `${label(h.strip, v)} took a strip of film from ${CITY[h.cities[ci]].name}`;
         return `<i class="fr got own-${h.strip}" role="img" aria-label="${esc(said)}" title="${esc(said)}"></i>`;
       };
-      return `<li class="w-${h.winner === null ? 'none' : `${h.winner === bottom ? 'me' : 'them'} own-${h.winner}`}"><span class="n">${i + 1}</span><span class="cities">${h.cities.map((c, ci) => `${esc(CITY[c].name)}${frame(ci)}`).join(', ')}</span><span class="how">${esc(how)}</span><b>${h.winner === null ? '—' : `+${h.points}`} ${esc(who)}</b></li>`;
+      return `<li class="w-${h.winner === null ? 'none' : `${h.winner === bottom ? 'me' : 'them'} own-${h.winner}`}"><span class="n">${i + 1}</span><span class="cities"><span class="op">${esc(operation(v.matchId, i).name)}</span>${h.cities.map((c, ci) => `${esc(CITY[c].name)}${frame(ci)}`).join(', ')}</span><span class="how">${esc(how)}</span><b>${h.winner === null ? '—' : `+${h.points}`} ${esc(who)}</b></li>`;
     })
     .join('');
   const ri = ui.rival ? RIVALS.findIndex((r) => r.id === ui.rival.id) : -1;
-  const nextRival = ui.mode === 'solo' && won && ri >= 0 && ri < RIVALS.length - 1 ? RIVALS[ri + 1] : null;
+  // The ladder goes on to the next rival; free play doesn't climb it.
+  const nextRival = ui.mode === 'solo' && !ui.free && won && ri >= 0 && ri < RIVALS.length - 1 ? RIVALS[ri + 1] : null;
   const online = ui.mode === 'host' || ui.mode === 'guest';
   const rematchWait = online && v.rematch[me()] && rivals(v).some((s) => !v.rematch[s]);
   const rivalWants = online && rivals(v).some((s) => v.rematch[s]) && !v.rematch[me()];
@@ -1424,7 +2013,7 @@ function overHTML() {
       <p class="sub">${esc(sub)}</p>
       <p class="final"><span>${esc(label(bottom, v))}</span><span class="score-film"><b>${v.scores[bottom]}</b>${reel(bottom)}</span><i>to</i><span class="score-film"><b>${v.scores[foe(v, bottom)]}</b>${reel(foe(v, bottom))}</span><span>${esc(label(foe(v, bottom), v))}</span></p>
       <ol class="rounds">${rounds}</ol>
-      ${ui.mode === 'solo' && won && ri === RIVALS.length - 1 ? '<p class="sub">You beat Control. There is nobody left to fool.</p>' : ''}
+      ${ui.mode === 'solo' && !ui.free && won && ri === RIVALS.length - 1 ? '<p class="sub">You beat Control. There is nobody left to fool.</p>' : ''}
     </div>
     <div class="actions">
       ${nextRival ? `<button class="slip primary" data-action="rival" data-id="${nextRival.id}">Next rival: ${esc(nextRival.name)}</button>` : ''}
@@ -1452,9 +2041,11 @@ function helpRules() {
   const reel = v ? v.reel : RULES.reel;
   const target = v ? v.target : TARGET;
   return [
+    'You run a station in the winter of 1963. Each round is an operation: a package passes through three dead drops, and holding two of the three gets it.',
     'Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.',
     'After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.',
-    'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire.',
+    'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire and the Decoy.',
+    `Every match deals the same roster of ${ROSTER.size} agents to everyone: the Classic ${DECK.length}, or a Mixed draw. The Agents tab lists tonight’s, with every agent’s fine print.`,
     `Each player has ${counted(RULES.tokens, 'escalation token')} for the whole match. Escalate (once per round, by whoever calls it first) to spend one and double the stake: your rival must fold or play on. You can fold any time; whoever wins the round takes the stake and everything in the pot. If the round reaches the final flip, the stake doubles again.`,
     'A dead heat scores nothing: the stake and the pot roll over into the next round.',
     ...(reel > 0
@@ -1475,6 +2066,8 @@ const HELP_KEYS = [
   [['F'], 'folds'],
   [['Space'], 'speeds up a reveal, twice skips it'],
   [['B'], 'shows the board behind a result'],
+  [['V'], 'drops face up or face down, in Casablanca'],
+  [['U'], 'lists the rival’s agents you haven’t seen'],
   [['←', '→'], 'switch tabs here'],
   [['M'], 'sound'],
   [['?'], 'help'],
@@ -1486,9 +2079,44 @@ function helpTabs() {
   return HELP_TABS.filter(([id]) => id !== 'keys' || !touch);
 }
 
+/**
+ * Help's Agents or Cities tab (`kind`: agents | cities) in sections: during a match, tonight's (the
+ * view's roster or city pool, in order), then the rest of your network, then what isn't recruited yet;
+ * off the table, your network and the rest. Empty sections are left out.
+ */
+function helpSections(kind) {
+  const v = ['play', 'cover', 'over'].includes(ui.screen) ? view() : null;
+  const tonight = v ? (kind === 'agents' ? v.roster : v.cityPool) : null;
+  const all = kind === 'agents' ? AGENTS.map((a) => a.id) : CITIES.map((c) => c.id);
+  const net = network(meta.beaten)[kind];
+  const out = tonight ? [{ title: kind === 'agents' ? 'Tonight’s roster' : 'Tonight’s cities', ids: tonight }] : [];
+  out.push({ title: tonight ? 'In your network' : 'Your network', ids: net.filter((id) => !tonight?.includes(id)) });
+  out.push({ title: 'Not yet recruited', ids: all.filter((id) => !net.includes(id) && !tonight?.includes(id)), locked: true });
+  return out.filter((sec) => sec.ids.length);
+}
+
+/** "Beat The Magpie to recruit." for an agent or city outside your network. */
+const recruitLine = (kind, id) => `<span class="recruit">Beat ${esc(recruiter(kind, id)?.name ?? 'a rival')} to recruit.</span>`;
+const noteHTML = (note) => (note ? `<span class="note">${esc(note)}</span>` : '');
+
+function agentItemHTML(id, locked) {
+  const a = AGENT[id];
+  const txt = locked ? `<b>${esc(a.name)}</b>${recruitLine('agents', id)}` : `<b>${esc(a.name)} <i>${a.power}</i></b><span>${esc(a.text)}</span>${noteHTML(a.note)}`;
+  return `<li${locked ? ' class="locked"' : ''}><span class="art">${agentSVG(id)}</span><span class="txt">${txt}</span></li>`;
+}
+
+function cityItemHTML(id, locked) {
+  const c = CITY[id];
+  return `<li${locked ? ' class="locked"' : ''}><b>${esc(c.name)}</b> ${locked ? recruitLine('cities', id) : `${esc(c.rule)}${noteHTML(c.note)}`}</li>`;
+}
+
 function helpBodyHTML(tab) {
-  if (tab === 'agents') return `<ul class="agent-list">${AGENTS.map((a) => `<li><span class="art">${agentSVG(a.id)}</span><b>${esc(a.name)} <i>${a.power}</i></b><span>${esc(a.text)}</span></li>`).join('')}</ul>`;
-  if (tab === 'cities') return `<ul class="city-list">${CITIES.map((c) => `<li><b>${esc(c.name)}</b> ${esc(c.rule)}${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</li>`).join('')}</ul>`;
+  if (tab === 'agents' || tab === 'cities') {
+    const item = tab === 'agents' ? agentItemHTML : cityItemHTML;
+    return helpSections(tab)
+      .map((sec) => `<section class="help-sec${sec.locked ? ' locked' : ''}"><h3>${esc(sec.title)}</h3><ul class="${tab === 'agents' ? 'agent-list' : 'city-list'}">${sec.ids.map((id) => item(id, !!sec.locked)).join('')}</ul></section>`)
+      .join('');
+  }
   if (tab === 'keys') return `<ul class="key-list">${HELP_KEYS.map(([keys, text]) => `<li><span class="keys">${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')}</span> <span>${esc(text)}</span></li>`).join('')}</ul>`;
   return `<ol class="rules">${helpRules().map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`;
 }
@@ -1528,9 +2156,23 @@ function stepHelpTab(dir) {
   showHelpTab(ids[(i + dir + ids.length) % ids.length]);
 }
 
+/** Pass and play's roster sheet, from the title: Classic (the default) or Mixed from everything. */
+function passSheetHTML() {
+  return `<div class="modal" data-action="close-modal"><div class="sheet small pass-sheet" role="dialog" aria-label="Pass and play" data-stop>
+      <h2>${jitter('Pass and play', 3)}</h2>
+      <p>Two spymasters, one device: hand it over between turns. Both of you play the same roster of ${ROSTER.size} agents.</p>
+      <div class="picks">
+        <button class="slip primary" data-action="pass-start" data-choice="classic"><span>Classic</span><small>The original ${DECK.length} agents and ${CLASSIC_CITIES.length} cities. Best for a first match.</small></button>
+        <button class="slip" data-action="pass-start" data-choice="mixed"><span>Mixed: all ${AGENTS.length} agents and cities</span><small>Each match draws ${ROSTER.size} of the ${AGENTS.length} agents.</small></button>
+      </div>
+      <div class="btns"><button class="slip quiet" data-action="close-modal">Back<kbd>Esc</kbd></button></div>
+    </div></div>`;
+}
+
 function modalHTML() {
   const v = view();
   if (ui.modal === 'help') return helpHTML();
+  if (ui.modal === 'pass') return passSheetHTML();
   if (!v) return '';
   const rival = foe(v);
   if (ui.modal === 'fold') {
@@ -1602,7 +2244,8 @@ function render() {
     // A reveal or a fold's exit draws the table itself until it is done.
     if (!ui.animating && !ui.holdBoard) renderPlay();
   }
-  const m = ui.screen === 'play' || ui.modal === 'help' ? modalHTML() : '';
+  // The cover has Leave too, so its quit modal shows there as well.
+  const m = ui.screen === 'play' || ui.screen === 'cover' || ui.modal === 'help' || ui.modal === 'pass' ? modalHTML() : '';
   // Leave an unchanged modal alone, so a rival's move doesn't scroll the help sheet back up.
   if (m !== modalShown) $('#modal-root').innerHTML = modalShown = m;
   // A new screen, a modal or a reveal ends a drag in progress (the card stays selected).
@@ -1633,11 +2276,11 @@ function pick(uid) {
   if (!v || v.phase !== 'plan' || myPlan(v) || ui.animating) return;
   if (!v.round.legal.some((d) => d.uid === uid)) return;
   ui.inspect = null;
-  if (ui.selected === uid) {
-    ui.selected = null;
-    ui.target = null;
-  } else {
+  if (ui.selected === uid) clearPick();
+  else {
     ui.selected = uid;
+    ui.partner = null;
+    ui.down = null;
     const cities = v.round.legal.filter((d) => d.uid === uid).map((d) => d.city);
     if (ui.target !== null && !cities.includes(ui.target)) ui.target = null;
     if (cities.length === 1) ui.target = cities[0];
@@ -1650,19 +2293,59 @@ function chooseCity(ci) {
   const v = view();
   if (!v || !ui.selected || myPlan(v) || ui.animating) return;
   if (!v.round.legal.some((d) => d.uid === ui.selected && d.city === ci)) return;
+  // Another city: the partner and the face are asked afresh.
+  if (ui.target !== ci) {
+    ui.partner = null;
+    ui.down = null;
+  }
   ui.target = ci;
   audio.place();
+  render();
+}
+
+/** While an Accomplice asks for a partner: choose this card to go with it, face down (again: no partner chosen). */
+function choosePartner(uid) {
+  const v = view();
+  if (!v || ui.animating || !partnerPrompt(v)) return;
+  if (!v.round.legal.some((d) => d.uid === ui.selected && d.city === ui.target && d.partner === uid)) return;
+  ui.partner = ui.partner === uid ? null : uid;
+  ui.inspect = null;
+  audio.pick();
+  render();
+}
+
+/** Drop alone: the Accomplice goes without a partner (again: no choice made yet). */
+function dropAlone() {
+  const v = view();
+  if (!v || ui.animating || !partnerPrompt(v)) return;
+  ui.partner = ui.partner === 'alone' ? null : 'alone';
+  audio.place();
+  render();
+}
+
+/** Casablanca: turn the drop face up or face down (V). */
+function toggleFace() {
+  const v = view();
+  if (!v || ui.animating || !faceChoice(v)) return;
+  ui.down = !planDown(v);
+  audio.flip();
   render();
 }
 
 function lockIn() {
   const v = view();
   if (!v || v.phase !== 'plan' || myPlan(v) || !ui.selected || ui.target === null) return;
+  if (partnerPrompt(v) && ui.partner === null) return; // a partner, or Drop alone, first
   const plan = { a: 'lock', uid: ui.selected, city: ui.target };
+  const mate = partnerUid(v);
+  if (mate) plan.partner = mate;
+  if (faceChoice(v)) plan.down = planDown(v);
   audio.lock();
-  ui.selected = null;
-  ui.target = null;
-  if (ui.mode === 'guest') ui.sentPlan = { uid: plan.uid, city: plan.city, round: v.roundNo, turn: v.round.turn };
+  clearPick();
+  if (ui.mode === 'guest') {
+    const { a, ...drop } = plan;
+    ui.sentPlan = { ...drop, round: v.roundNo, turn: v.round.turn };
+  }
   act(plan);
   if (ui.mode === 'guest') render();
 }
@@ -1705,6 +2388,7 @@ function markDrag() {
 /** The press has moved far enough: select the card (unless it is already) and lift a ghost of it. */
 function startDrag() {
   const { uid } = press;
+  closeUnseen();
   if (ui.selected === uid) audio.pick();
   else pick(uid);
   const card = ui.selected === uid && handCard(uid);
@@ -1760,7 +2444,8 @@ function cancelDrag() {
 document.addEventListener('pointerdown', (ev) => {
   // Mid-drag, another press (a second finger, say) leaves the drag alone.
   if (ui.drag || !ev.isPrimary || ev.button !== 0) return;
-  const card = ev.target.closest?.('.hand .card:not([disabled])');
+  // A card offered as an Accomplice's partner is tapped, not dragged.
+  const card = ev.target.closest?.('.hand .card[data-action=pick]:not([disabled])');
   if (!card || !canDrag()) return;
   const r = card.getBoundingClientRect();
   press = { uid: card.dataset.uid, id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top };
@@ -1830,12 +2515,52 @@ function togglePeek() {
   if (panel && !reducedMotion()) panel.animate([{ opacity: 0, translate: ui.peek ? '0 24px' : '0 -12px' }, { opacity: 1, translate: '0 0' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
 }
 
+/** U, or its button: open the unseen strip for `seat` (the rival across the table), or close it. Planning only. */
+function toggleUnseen(seat = foe()) {
+  const v = view();
+  if (ui.screen !== 'play' || !v || v.phase !== 'plan' || ui.animating || ui.holdBoard) return;
+  ui.unseenOpen = ui.unseenOpen === seat ? null : seat;
+  ui.unseenEnter = ui.unseenOpen !== null;
+  const refocus = document.activeElement?.dataset?.action === 'unseen';
+  audio.place();
+  render();
+  if (refocus) $(`#screen [data-action=unseen][data-seat="${seat}"]`)?.focus({ preventScroll: true });
+}
+
+/**
+ * Close the unseen strip (an outside tap, Escape). It comes off the screen in place, so it goes even
+ * while a reveal draws the table itself. Returns whether it was open.
+ */
+function closeUnseen() {
+  if (ui.unseenOpen === null) return false;
+  ui.unseenOpen = null;
+  $('#screen .unseen-panel')?.remove();
+  for (const b of document.querySelectorAll('#screen [data-action=unseen]')) {
+    b.setAttribute('aria-expanded', 'false');
+    b.classList.remove('open');
+  }
+  return true;
+}
+
 const actions = {
   rivals: () => {
     ui.screen = 'rivals';
     render();
   },
-  rival: (el) => startSolo(el.dataset.id),
+  rival: (el) => startSolo(el.dataset.id, { free: el.dataset.free === '1' }),
+  'rivals-tab': (el) => {
+    const tab = el.dataset.choice === 'free' && freeOpen() ? 'free' : 'ladder';
+    if (tab === ui.rivalsTab) return;
+    ui.rivalsTab = tab;
+    audio.place();
+    render();
+    $(`#screen [data-action=rivals-tab][data-choice=${tab}]`)?.focus({ preventScroll: true });
+  },
+  // "Read the epilogue" plays C's last cable again.
+  epilogue: () => {
+    audio.place();
+    epilogueCard();
+  },
   continue: () => {
     const m = saved.get('match', null);
     if (!m) return;
@@ -1845,11 +2570,23 @@ const actions = {
       toast(OLD_SAVE_TOAST);
       return;
     }
-    if (m.mode === 'pass') startPass(m.table);
-    else startSolo(m.rival, m.table);
+    if (m.mode === 'pass') startPass({ resume: m.table });
+    else startSolo(m.rival, { free: m.free === true, resume: m.table });
   },
   host: () => startHost(),
-  pass: () => startPass(),
+  pass: () => {
+    ui.modal = 'pass';
+    render();
+  },
+  'pass-start': (el) => startPass({ setup: el.dataset.choice === 'mixed' ? MIXED_ALL : CLASSIC_SETUP }),
+  // The host's lobby: deal again with the other roster, while nobody has joined.
+  'host-roster': (el) => {
+    const mixed = el.dataset.choice === 'mixed';
+    if (!lobbyOpen() || !!table.setup.mixed === mixed) return;
+    table.restart(mixed ? MIXED_ALL : CLASSIC_SETUP);
+    audio.place();
+    $(`#screen [data-action=host-roster][data-choice=${el.dataset.choice}]`)?.focus({ preventScroll: true });
+  },
   title: () => {
     leaveMatch({ keepSave: true });
     resetMatchUi();
@@ -1903,6 +2640,9 @@ const actions = {
     render();
   },
   pick: (el) => pick(el.dataset.uid),
+  partner: (el) => choosePartner(el.dataset.uid),
+  alone: dropAlone,
+  face: toggleFace,
   city: (el) => chooseCity(Number(el.dataset.city)),
   inspect: (el) => {
     if (ui.animating) return;
@@ -1940,9 +2680,17 @@ const actions = {
     act({ a: 'next' });
     render();
   },
-  final: () => {
+  final: async () => {
+    // A ladder win over Control: the epilogue plays first, once, then the dossier.
+    if (ui.epilogue) {
+      ui.epilogue = false;
+      const id = view()?.matchId;
+      await epilogueCard();
+      if (ui.screen !== 'play' || view()?.matchId !== id) return;
+    }
     ui.screen = 'over';
     render();
+    flushRecruits();
   },
   // Every mode: the new match id reaches onUpdate(), which clears the dossier for the table.
   rematch: () => {
@@ -1951,6 +2699,17 @@ const actions = {
   },
   'reveal-tap': tapReveal,
   peek: togglePeek,
+  // The twist chip reads the rival's twist into the ticker.
+  twist: (el) => {
+    const v = view();
+    const text = v && twistOf(v, Number(el.dataset.seat));
+    if (!text) return;
+    ui.inspect = null;
+    audio.place();
+    say(text);
+    render();
+  },
+  unseen: (el) => toggleUnseen(Number(el.dataset.seat)),
 };
 
 document.addEventListener('click', (ev) => {
@@ -1961,6 +2720,8 @@ document.addEventListener('click', (ev) => {
     if (performance.now() - ui.card.at >= REVEAL_GUARD_MS) skipCard();
     return;
   }
+  // An open unseen strip closes on a tap anywhere outside it, and the tap goes on to do what it does.
+  if (ui.unseenOpen !== null && !ev.target.closest('.unseen-panel, [data-action=unseen]')) closeUnseen();
   // During a reveal a click is a tap on it (speed up, then skip), except in the header and
   // inside the help sheet.
   if (ui.animating && !ev.target.closest('.top') && !(ui.modal === 'help' && ev.target.closest('#modal-root'))) {
@@ -2018,6 +2779,12 @@ document.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     return actions['close-modal']();
   }
+  // An open unseen strip takes Escape and U first (a sheet takes Escape before it).
+  if (ui.unseenOpen !== null && !ui.modal && (k === 'Escape' || k === 'u' || k === 'U')) {
+    ev.preventDefault();
+    closeUnseen();
+    return;
+  }
   // During a reveal, Space, Enter and Escape tap it (speed up, then skip). A key held down
   // taps once, and with the help sheet open they belong to the sheet.
   if (ui.animating) {
@@ -2038,7 +2805,7 @@ document.addEventListener('keydown', (ev) => {
   if (ui.modal) {
     if (k === 'Escape') {
       ev.preventDefault();
-      if (ui.modal === 'help' || ui.modal === 'fold' || ui.modal === 'quit') actions['close-modal']();
+      if (ui.modal === 'help' || ui.modal === 'fold' || ui.modal === 'quit' || ui.modal === 'pass') actions['close-modal']();
     }
     if (ui.modal === 'fold' && (k === 'f' || k === 'F' || k === 'Enter')) actions['confirm-fold']();
     return;
@@ -2051,6 +2818,8 @@ document.addEventListener('keydown', (ev) => {
   const v = view();
   if (!v) return;
   const R = v.round;
+  // U opens the strip, even under the escalation prompt (what the rival may hold bears on the answer).
+  if (k === 'u' || k === 'U') return toggleUnseen();
   if (v.phase === 'plan' && R.pending && R.pending.by !== me() && (ui.mode !== 'pass' || ui.seat === foe(v, R.pending.by))) {
     // A key held down through the escalation flash doesn't answer the prompt when the flash goes
     // (nor press its focused Play on).
@@ -2076,17 +2845,21 @@ document.addEventListener('keydown', (ev) => {
     if (k === 'b' || k === 'B') togglePeek();
     return;
   }
-  if (/^[1-9]$/.test(k) && R.hand[Number(k) - 1]) return pick(R.hand[Number(k) - 1].uid);
+  if (/^[1-9]$/.test(k) && R.hand[Number(k) - 1]) {
+    // While an Accomplice asks for a partner, another card's number chooses it as the partner.
+    const uid = R.hand[Number(k) - 1].uid;
+    return partnerPrompt(v) && uid !== ui.selected ? choosePartner(uid) : pick(uid);
+  }
   const ci = { a: 0, s: 1, d: 2, A: 0, S: 1, D: 2 }[k];
   if (ci !== undefined) return chooseCity(ci);
+  if (k === 'v' || k === 'V') return toggleFace();
   if (k === 'Enter') {
     ev.preventDefault();
     return lockIn();
   }
   if (k === 'Escape' || k === 'Backspace') {
     if (R.plan) return actions.unlock();
-    ui.selected = null;
-    ui.target = null;
+    clearPick();
     ui.inspect = null;
     return render();
   }
@@ -2138,9 +2911,11 @@ route();
 
 /**
  * Both seats make a drop for `turns` turns, straight through the table: no animation, and the
- * screen jumps to the result. The computer rival sits back down afterwards.
+ * screen jumps to the result. The computer rival sits back down afterwards, if it was seated (a
+ * staged table keeps it held).
  */
 function quickTurns(turns, rng = Math.random) {
+  const seated = !!bot;
   bot?.stop();
   unwatch?.();
   for (let t = 0; t < turns && table.state.phase === 'plan'; t++) {
@@ -2156,7 +2931,57 @@ function quickTurns(turns, rng = Math.random) {
   watch(table);
   ui.shownSeq = table.turnSeq;
   ui.view = latestView();
-  if (ui.mode === 'solo') bot = attachBot(table, 1, ui.rival, { hold: () => ui.updating });
+  if (ui.mode === 'solo' && seated) bot = attachBot(table, 1, ui.rival, { hold: botHold });
+  render();
+}
+
+/**
+ * A solo table set up for a check. It starts through startSolo's own path (with no round card), then
+ * deals again, at the same table, from the setup that match plays: `rival`'s ladder setup, or free
+ * play against them; `roster` replaces its draw with exactly those agents, and `cities` are round 1's
+ * (and join the pool). The kinds in `hand` move to the front of seat 0's hand from its deck, and those
+ * in `rivalHand` to the rival's; each hand keeps its size. The rival is held: it makes no move of its
+ * own until the check asks (rivalLocks, rivalEscalates, rivalFolds), even after quickTurns or
+ * toFinalTurn.
+ */
+function stage({ rival = 'wren', free = false, roster = null, cities = null, hand = [], rivalHand = [] } = {}) {
+  const skip = ui.alwaysSkip;
+  ui.alwaysSkip = true;
+  try {
+    startSolo(rival, { free });
+  } finally {
+    ui.alwaysSkip = skip;
+  }
+  bot?.stop();
+  bot = null;
+  const add = (list, ids) => [...list, ...ids.filter((id) => !list.includes(id))];
+  let setup = free ? freeSetup(meta.beaten) : ladderSetup(ui.rival.id);
+  if (roster) setup = { ...setup, mixed: false, agents: [...roster], must: [] };
+  else if (setup.mixed) setup = { ...setup, agents: add(setup.agents, [...hand, ...rivalHand]), must: add(setup.must, [...hand, ...rivalHand]) };
+  if (cities) setup = { ...setup, cities: add(setup.cities, cities) };
+  const dealt = createTable({ names: table.names, setup, cities: cities ?? undefined });
+  table.setup = dealt.setup;
+  table.state = dealt.state;
+  const R = table.state.round;
+  const deal = (seat, kinds) => {
+    if (!kinds.length) return;
+    const size = R.hands[seat].length;
+    const pool = [...R.hands[seat], ...R.decks[seat]];
+    const picked = kinds.map((kind) => {
+      const uid = pool.find((u) => R.cards[u].kind === kind);
+      if (!uid) throw new Error(`stage: no ${kind} among seat ${seat}'s cards (roster: ${table.state.roster.join(', ')})`);
+      pool.splice(pool.indexOf(uid), 1);
+      return uid;
+    });
+    const all = [...picked, ...pool];
+    const n = Math.max(size, picked.length);
+    R.hands[seat] = all.slice(0, n);
+    R.decks[seat] = all.slice(n);
+  };
+  deal(0, hand);
+  deal(1, rivalHand);
+  ui.shownSeq = table.turnSeq;
+  ui.view = latestView();
   render();
 }
 
@@ -2181,8 +3006,19 @@ markReady({
     return ui.view;
   },
   meta,
-  startSolo: (id = 'wren') => startSolo(id),
-  startPass: () => startPass(),
+  startSolo: (id = 'wren', opts = {}) => startSolo(id, opts),
+  stage,
+  startPass: (opts = {}) => startPass(opts),
+  /** Set the rivals you have beaten on the ladder (and save), as ladder wins would: for shots of the network and the ladder. */
+  beat(ids = []) {
+    meta.beaten = RIVALS.map((r) => r.id).filter((id) => ids.includes(id));
+    saveMeta();
+    render();
+  },
+  /** Hold the computer rival (true) as a card does, or let it go (false): it makes no move while held. */
+  holdRival(on = true) {
+    ui.holdRival = !!on;
+  },
   startHost: (code) => startHost({ code }),
   startGuest: (code) => startGuest(code),
   quickTurns,
@@ -2205,14 +3041,16 @@ markReady({
     onUpdate();
   },
   /**
-   * The computer rival locks in its first legal drop now, through the table as its own lock does,
-   * so a step that inspects the table can't be raced by its fold or escalation. Call it while the
-   * rival is held (a card or reveal up), or it may already be thinking.
+   * The computer rival locks in its first legal drop now (outside city `avoid`, if it can), through
+   * the table as its own lock does, so a step that inspects the table can't be raced by its fold or
+   * escalation. Call it while the rival is held (a card or reveal up, or a staged table), or it may
+   * already be thinking.
    */
-  rivalLocks() {
+  rivalLocks({ avoid = null } = {}) {
     if (ui.mode !== 'solo' || !table) return false;
     const v = table.view(1);
-    const d = v.round.legal[0];
+    // Away from city `avoid` if it can (so it can't spring on, or jam, the drop a check is making there).
+    const d = v.round.legal.find((x) => x.city !== avoid) ?? v.round.legal[0];
     return v.phase === 'plan' && !v.round.plan && !!d && table.act(1, { a: 'lock', uid: d.uid, city: d.city });
   },
   /** The computer rival escalates now, through the table as its own escalation does (the flash and prompt follow). */
@@ -2238,6 +3076,14 @@ markReady({
     pace({ speed: 1e-4 });
     return true;
   },
+  /**
+   * Hold the next reveal still the moment a trick of `kind` has played (its agent still lit, what it
+   * did on the board), as holdReveal would; a tap or Space then speeds it up and skips it, as in play.
+   * Set before the turn resolves; the hold happens once, and a new match forgets it.
+   */
+  holdAt(kind) {
+    ui.holdAt = kind;
+  },
   /** Skip every reveal and title card from now on, for the rest of the session (or play them again). */
   skipAnimations: (on = true) => {
     ui.alwaysSkip = on;
@@ -2245,7 +3091,8 @@ markReady({
     if (on) ui.card?.skip();
   },
   prepareThumbnail() {
-    // No round card in the thumbnail: the table is built with every animation skipped.
+    // No intro or round card in the thumbnail: the table is built with every animation skipped (so
+    // nothing is met, either).
     const skip = ui.alwaysSkip;
     ui.alwaysSkip = true;
     try {
@@ -2253,7 +3100,10 @@ markReady({
       const rng = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       startSolo('countess');
       bot?.stop();
-      table.state = createTable({ seed: 'thumb-7', cities: ['vienna', 'istanbul', 'monaco'] }).state;
+      // The Countess's own ladder table (a Mixed roster, her twist chip in the scorebar), from a seed
+      // whose first turns leave new agents face up on both sides: my Courier, an Accomplice each in
+      // Rome, and her Blackmailer.
+      table.state = createTable({ seed: 'thumb-14', cities: ['istanbul', 'rome', 'monaco'], setup: ladderSetup('countess'), twistSeat: 1 }).state;
       table.names = [meta.codename, 'The Countess'];
       quickTurns(3, rng);
       bot?.stop();
@@ -2266,7 +3116,7 @@ markReady({
       ui.view = table.view(0);
       ui.selected = ui.view.round.legal[0]?.uid ?? null;
       ui.target = ui.view.round.legal[0]?.city ?? null;
-      ui.caption = 'Double Agent slips across to Istanbul.';
+      ui.caption = REMARKS.countess.start[1]; // "The Countess adjusts her pearls."
       ui.initShown = ui.view.round.initiative; // the token at rest, not mid-flip
       render();
     } finally {

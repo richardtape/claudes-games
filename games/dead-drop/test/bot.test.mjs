@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as E from '../js/engine.js';
-import { determinize, think, stakeCall, filmWeightFor } from '../js/bot.js';
+import { determinize, think, stakeCall, filmWeightFor, couldBe, constraints, candidates, quickDrop, estimateLocked } from '../js/bot.js';
 import { DECK, RIVALS, RULES, STAKES, TARGET } from '../js/data.js';
+import { drawRoster } from '../js/roster.js';
 import { createRng } from '../../../shared/rng.js';
-import { play, withPatch } from './helpers.mjs';
+import { play, withPatch, ALL_AGENTS, ALL_CITIES, mixed, setHand } from './helpers.mjs';
 
 /** Random legal play for a few turns, to get varied mid-round positions. */
 function midRound(seed, turns) {
@@ -222,4 +223,116 @@ test('the film weighs decisive when any seat is one strip from the reel, and nev
   assert.equal(weight([0, 2], 3), STAKES.filmDecisive, 'a rival one strip away');
   assert.equal(weight([2, 0], 3), STAKES.filmDecisive, 'this seat one strip away');
   assert.equal(weight([0, 0], 0), STAKES.filmWeight, 'reel 0: no Microfilm');
+});
+
+test('determinize on Mixed rosters fills face-down cards only with what they can be', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const s = E.newMatch({ seed, roster: drawRoster(ALL_AGENTS, createRng(seed)), pool: ALL_CITIES });
+    const rng = createRng(seed);
+    for (let t = 0; t < 4 && s.phase === 'plan'; t++) {
+      for (let seat = 0; seat < 2; seat++) {
+        const legal = E.legalDrops(s, seat);
+        E.lock(s, seat, legal.length ? rng.pick(legal) : { pass: true });
+      }
+      E.resolveTurn(s);
+    }
+    if (s.phase !== 'plan') continue;
+    const view = E.viewFor(s, 0);
+    const d = determinize(view, createRng(seed + 99));
+    for (const city of view.round.cities)
+      for (const cv of city.sides[1])
+        if (!cv.kind) assert.ok(couldBe(cv, city.id, view)(d.round.cards[cv.uid].kind), `seed ${seed}: ${d.round.cards[cv.uid].kind} in ${city.id}${cv.partner ? ' as a partner' : ''}`);
+    for (let o = 0; o < 2; o++) assert.deepEqual(Object.values(d.round.cards).filter((c) => c.origin === o).map((c) => c.id0).sort(), E.deckList(view, o).slice().sort());
+  }
+});
+
+test('couldBe: natural face-down kinds, anything in Vienna, Casablanca or as a partner, the twist’s kind when placed', () => {
+  const view = { roster: ALL_AGENTS, twist: { seat: 1, id: 'placed', kind: 'sleeper' } };
+  const kinds = (cv, city) => ALL_AGENTS.filter(couldBe(cv, city, view));
+  assert.deepEqual(kinds({}, 'monaco'), ['sleeper', 'tripwire', 'decoy']);
+  assert.equal(kinds({}, 'casablanca').length, 20);
+  assert.equal(kinds({ partner: true }, 'monaco').length, 20);
+  assert.deepEqual(kinds({ placed: true }, 'monaco'), ['sleeper']);
+});
+
+test('Control’s seen card is known to its determinize; a tapped city binds the mark’s playout drop', () => {
+  const s = E.newMatch({ seed: 6, twist: { seat: 1, id: 'seen', count: 1 } });
+  const { uid } = s.round.exposed[0];
+  const d = determinize(E.viewFor(s, 1), createRng(1));
+  assert.deepEqual([d.round.hands[0].includes(uid), d.round.cards[uid].kind], [true, s.round.cards[uid].kind]);
+  const t = E.newMatch({ seed: 5, twist: { seat: 1, id: 'tap', from: 1 } });
+  E.lock(t, 0, E.legalDrops(t, 0).find((x) => x.city === 2));
+  assert.deepEqual(constraints(E.viewFor(t, 1)), { 0: 2 });
+  for (let i = 0; i < 20; i++) assert.equal(quickDrop(t, 0, createRng(i), 2).city, 2);
+});
+
+// The brief's two partners per city became one: the think-time bar's fallback 1 (task 9 report).
+test('candidates trim partner drops to the strongest partner per city', () => {
+  const s = mixed(['monaco', 'zurich', 'hongkong']);
+  const [, heavy] = setHand(s, 0, ['accomplice', 'heavy', 'sleeper', 'veteran', 'lookout', 'tripwire']);
+  const view = E.viewFor(s, 0);
+  const c = candidates(view);
+  for (let ci = 0; ci < 3; ci++) assert.deepEqual(c.filter((d) => d.partner && d.city === ci).map((d) => d.partner), [heavy]);
+  assert.equal(c.filter((d) => !d.partner).length, view.round.legal.filter((d) => !d.partner).length);
+});
+
+test('candidates keep Casablanca’s face-down drops for natural face-down agents and strong ones only', () => {
+  const s = mixed(['casablanca', 'monaco', 'berlin']);
+  const uids = setHand(s, 0, ['lookout', 'heavy', 'decoy', 'handler']);
+  const view = E.viewFor(s, 0);
+  const c = candidates(view);
+  assert.deepEqual(c.filter((d) => d.down === true).map((d) => d.uid), [uids[1], uids[2]]);
+  assert.equal(c.filter((d) => d.down === false).length, 4);
+  assert.equal(c.length, view.round.legal.length - 2);
+  // No partner and no face-down drop: the legal list itself.
+  const t = mixed(['monaco', 'zurich', 'hongkong']);
+  setHand(t, 0, ['heavy', 'sleeper', 'lookout', 'tripwire']);
+  const plain = E.viewFor(t, 0);
+  assert.equal(candidates(plain), plain.round.legal);
+});
+
+test('quickDrop drops an Accomplice alone or with its strongest partner, and face down in Casablanca only what drops face down by nature', () => {
+  const s = mixed(['casablanca', 'monaco', 'berlin']);
+  const [accomplice, heavy] = setHand(s, 0, ['accomplice', 'heavy', 'sleeper', 'lookout']);
+  const seen = new Set();
+  for (let i = 0; i < 400; i++) {
+    const d = quickDrop(s, 0, createRng(i));
+    if (d.partner) assert.deepEqual([d.uid, d.partner], [accomplice, heavy]);
+    if (d.down) assert.equal(s.round.cards[d.uid].kind, 'sleeper');
+    seen.add(`${d.partner ? 'partner' : ''}${d.down ? 'down' : ''}`);
+  }
+  assert.deepEqual([...seen].sort(), ['', 'down', 'partner']);
+});
+
+test('think’s drop keeps the top candidate’s partner and face, and locks as given; Classic drops stay { uid, city }', () => {
+  const s = mixed(['casablanca', 'monaco', 'berlin']);
+  setHand(s, 0, ['accomplice', 'heavy', 'sleeper', 'decoy']);
+  const view = E.viewFor(s, 0);
+  const keys = new Set();
+  for (let i = 0; i < 6; i++) {
+    const { drop, ranked } = think(view, { samples: 2, rng: createRng(i) });
+    const top = ranked[0];
+    assert.deepEqual(drop, Object.fromEntries(['uid', 'city', 'partner', 'down'].filter((k) => k in top).map((k) => [k, top[k]])));
+    assert.ok(E.lock(structuredClone(s), 0, drop));
+    for (const k of Object.keys(drop)) keys.add(k);
+  }
+  assert.ok(keys.has('down'), [...keys].join());
+  const classic = think(E.viewFor(E.newMatch({ seed: 3 }), 0), { samples: 2, rng: createRng(1) }).drop;
+  assert.deepEqual(Object.keys(classic), ['uid', 'city']);
+});
+
+test('think and estimateLocked play a wiretapped mark’s locked city into their playouts', () => {
+  const t = E.newMatch({ seed: 5, twist: { seat: 1, id: 'tap', from: 1 } });
+  E.lock(t, 0, E.legalDrops(t, 0).find((x) => x.city === 2));
+  const view = E.viewFor(t, 1);
+  assert.deepEqual(constraints(view), { 0: 2 });
+  // The same position before the mark's lock reaches the wiretapper: no constraint, so any difference
+  // below comes from the bind alone (same seeds, same everything else).
+  const unheard = structuredClone(view);
+  unheard.round.tapped[0].city = null;
+  const values = (v) => think(v, { samples: 4, rng: createRng(7) }).ranked.map((r) => `${r.uid}@${r.city}:${r.value}:${r.film}`);
+  assert.deepEqual(values(view), values(view), 'deterministic for a seed');
+  assert.notDeepEqual(values(view), values(unheard), 'think’s playouts');
+  const locked = (v) => [1, 2, 3, 4, 5].map((seed) => estimateLocked(v, 8, createRng(seed)));
+  assert.notDeepEqual(locked(view), locked(unheard), 'rescore’s playouts');
 });
