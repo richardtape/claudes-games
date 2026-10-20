@@ -139,7 +139,7 @@ export function createAudio(sfx, slug) {
     if (holdBand) holdUntil = at + Math.max(...notes.map((n) => n.t + n.dur));
   }
 
-  return {
+  const api = {
     /** Switch the piece ('title' | 'lobby' | 'table' | null): from its first bar, at its tempo. The same piece again is a no-op while it plays. */
     scene(name) {
       if (name !== sceneName) {
@@ -201,6 +201,12 @@ export function createAudio(sfx, slug) {
     defeat: () => cue(CUES.defeat, { holdBand: true }),
     pick: () => sfx.tone({ freq: 740, to: 880, type: 'triangle', dur: 0.06, vol: 0.12 }),
     place: () => sfx.noise({ dur: 0.08, freq: 1800, type: 'bandpass', q: 1.2, vol: 0.2 }),
+    /** An emote: a paper slip flicked onto the table, a quick snap rising through the paper, then its light landing. */
+    emote() {
+      sfx.noise({ dur: 0.06, freq: 2400, to: 5600, type: 'bandpass', q: 1.6, vol: 0.22 });
+      sfx.noise({ dur: 0.03, freq: 1300, type: 'bandpass', q: 2.2, vol: 0.16, delay: 0.07 });
+      sfx.tone({ freq: 620, to: 560, type: 'triangle', dur: 0.03, vol: 0.03, delay: 0.07 });
+    },
     lock: () => {
       sfx.tone({ freq: 220, type: 'square', dur: 0.05, vol: 0.08 });
       sfx.noise({ dur: 0.06, freq: 900, vol: 0.25, delay: 0.02 });
@@ -272,6 +278,12 @@ export function createAudio(sfx, slug) {
       for (const d of [0, 0.22, 0.9, 1.12]) sfx.tone({ freq: 60, to: 40, type: 'sine', dur: 0.18, vol: 0.4, delay: delay + d });
     },
     tick: (i = 0) => sfx.tone({ freq: 1400 + i * 40, type: 'square', dur: 0.02, vol: 0.04 }),
+    /** The turn clock's last seconds (`s` left, 5 to 1): a stopwatch's tick, a little higher and harder each second. */
+    countdown(s = 5) {
+      const up = 5 - Math.max(1, Math.min(5, s));
+      sfx.noise({ dur: 0.02, freq: 2600 + up * 250, type: 'bandpass', q: 3, vol: 0.28 + up * 0.04 });
+      sfx.tone({ freq: 1180 + up * 90, type: 'square', dur: 0.025, vol: 0.045 + up * 0.01, attack: 0.001 });
+    },
     nobody: () => sfx.tone({ freq: 196, to: 185, type: 'triangle', dur: 0.3, vol: 0.1 }),
     roundWon: () => sfx.arp([note(-5), note(-1), note(2), note(7)], { step: 0.09, type: 'square', vol: 0.09, dur: 0.25 }),
     roundLost: () => sfx.arp([note(2), note(-2), note(-5), note(-9)], { step: 0.12, type: 'triangle', vol: 0.12, dur: 0.3 }),
@@ -282,4 +294,18 @@ export function createAudio(sfx, slug) {
       sfx.tone({ freq: 990, type: 'triangle', dur: 0.09, vol: 0.08, delay: 0.26 });
     },
   };
+  // Every effect counts its calls (`effects`, by name), for checks: a skipped reveal plays no tally ticks.
+  // The music's own controls (scene, level, hush and the rest) aren't effects.
+  const effects = {};
+  const controls = new Set(['scene', 'pause', 'resume', 'level', 'hush', 'toggleMusic']);
+  for (const [name, d] of Object.entries(Object.getOwnPropertyDescriptors(api))) {
+    if (typeof d.value !== 'function' || controls.has(name)) continue;
+    effects[name] = 0;
+    api[name] = function (...args) {
+      effects[name]++;
+      return d.value.apply(this, args);
+    };
+  }
+  api.effects = effects;
+  return api;
 }

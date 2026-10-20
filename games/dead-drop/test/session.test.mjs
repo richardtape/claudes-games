@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createTable, attachBot, hostSession, guestSession, restoreTable, canRestore, PROTOCOL } from '../js/session.js';
+import { createHash } from 'node:crypto';
+import { createTable, attachBot, attachClock, hostSession, guestSession, restoreTable, canRestore, PROTOCOL } from '../js/session.js';
 import { createMemoryPair, createMemoryHub } from '../../../shared/net.js';
 import { createLobby, seatOf } from '../js/lobby.js';
-import { RIVALS, DECK, TWISTS, RULES, samplesFor } from '../js/data.js';
+import { CODENAMES, RIVALS, TWISTS, RULES, samplesFor } from '../js/data.js';
+import { migrateMeta } from '../js/meta.js';
 import { CLASSIC_SETUP, MIXED_ALL, ladderSetup } from '../js/roster.js';
 import { createRng } from '../../../shared/rng.js';
 import * as E from '../js/engine.js';
-import { give } from './helpers.mjs';
+import { give, mixed } from './helpers.mjs';
 
 const until = async (cond, ms = 4000) => {
   const t0 = Date.now();
@@ -35,6 +37,8 @@ const fakeRoom = (peers = []) => ({
 });
 const lobbyFor = () => createLobby({ host: { name: 'Agent Fox', token: 'h'.repeat(16) } });
 const makeTable = (S, extra = {}) => createTable({ seed: 1, seats: S.seats, names: S.names, ...extra });
+/** A browser's token for one room, worked out here from the spec (SHA-256 of `token:code`, its first 16 hex). */
+const perRoom = (token, code) => createHash('sha256').update(`${token}:${code}`).digest('hex').slice(0, 16);
 const hello = (room, id, i, v = PROTOCOL) => room.handlers.hello({ v, name: ['Agent Owl', 'Agent Pike', 'Agent Lynx', 'Agent Moth', 'Agent Hare', 'Agent Kite', 'Agent Puma', 'Agent Crane', 'Agent Ibis'][i], token: String(i).repeat(16) }, id);
 
 test('host and guest play a turn over the network; the guest sees only its own view', async () => {
@@ -42,7 +46,7 @@ test('host and guest play a turn over the network; the guest sees only its own v
   const statuses = [];
   const host = hostSession({ room: a, lobby: lobbyFor(), makeTable: (S) => createTable({ seed: 9, cities: ['berlin', 'monaco', 'tangier'], names: S.names }), onStatus: (s) => statuses.push(s) });
   let view = null;
-  const guest = guestSession({ room: b, name: 'Agent Lynx', token: '1'.repeat(16), onView: (v) => (view = v) });
+  const guest = guestSession({ room: b, code: 'ROOMAA', name: 'Agent Lynx', token: '1'.repeat(16), onView: (v) => (view = v) });
   connect();
   await until(() => statuses.includes('joined') && guest.seat === 1);
   await sleep(10);
@@ -87,6 +91,7 @@ test('a third browser watches a two-seat table; a seat freed before the start is
   room.peers.add('g1');
   hello(room, 'g1', 1);
   assert.deepEqual(statuses, ['joined', 'left', 'joined']);
+  assert.deepEqual([h.lobby.seats[1].name, h.lobby.seats[1].token], ['Agent Pike', '1'.repeat(16)], 'a new token at the freed seat is a new player, who joined (not g0 coming back)');
   h.start();
   room.peers.add('g2');
   hello(room, 'g2', 2);
@@ -113,12 +118,17 @@ test('a third browser watches a two-seat table; a seat freed before the start is
   h.close();
 });
 
-test('a hello needs a proper token; a second tab of the host’s browser (its token) gets a guest seat, never the host’s', () => {
+test('the host announces itself; a hello needs a proper token, a knock (none) gets the announcement; a second tab of the host’s browser (its token) gets a guest seat, never the host’s', () => {
   const token = 'abcdef0123456789';
   const room = fakeRoom(['x', 'tab', 'tab2']);
   const h = hostSession({ room, lobby: createLobby({ host: { name: 'Agent Fox', token }, size: 2 }), makeTable, now: () => 0 });
-  for (const bad of [undefined, '', 'tok', 'ABCDEF0123456789', '0123456789abcdef0', 7]) room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: bad }, 'x');
+  assert.deepEqual(room.sent.map((m) => [m.type, m.data, m.to]), ['x', 'tab', 'tab2'].map((id) => ['host', { v: PROTOCOL }, id]), 'the host announces itself to every peer here');
+  room.sent.length = 0;
+  for (const bad of [null, '', 'tok', 'ABCDEF0123456789', '0123456789abcdef0', 7]) room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token: bad }, 'x');
   assert.deepEqual(room.sent, [], 'a hello without a 16-hex token is ignored');
+  room.handlers.hello({ v: PROTOCOL }, 'x');
+  assert.deepEqual(room.sent, [{ type: 'host', data: { v: PROTOCOL }, to: 'x' }], 'a knock is answered with the announcement');
+  room.sent.length = 0;
   room.handlers.hello({ v: PROTOCOL, name: 'Agent Owl', token }, 'tab');
   assert.equal(room.sent.find((m) => m.type === 'welcome' && m.to === 'tab').data.seat, 1);
   assert.equal(seatOf(h.lobby, token), 0, 'the host keeps its seat');
@@ -189,7 +199,7 @@ test('leaving says bye: the other side hears it once, not as a lost connection',
   const hostStatus = [];
   const guestStatus = [];
   const host = hostSession({ room: a, lobby: lobbyFor(), makeTable, onStatus: (s) => hostStatus.push(s) });
-  const guest = guestSession({ room: b, name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {}, onStatus: (s) => guestStatus.push(s) });
+  const guest = guestSession({ room: b, code: 'ROOMAA', name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {}, onStatus: (s) => guestStatus.push(s) });
   connect();
   await until(() => hostStatus.includes('joined') && guestStatus.includes('joined'));
   host.start();
@@ -231,9 +241,10 @@ test('bye resolves at once, sending nothing, when there is no peer left to tell'
   await host.bye();
   // Guest: no host yet, then a host who has gone.
   const groom = stuckRoom([]);
-  const guest = guestSession({ room: groom, name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {} });
+  const guest = guestSession({ room: groom, code: 'ROOMAA', name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {} });
   await guest.bye();
   groom.peers.add('h');
+  groom.handlers.host({ v: PROTOCOL }, 'h');
   groom.handlers.welcome({ name: 'Agent Fox' }, 'h');
   groom.peers.delete('h');
   await guest.bye();
@@ -246,7 +257,7 @@ test('a guest that heard bye reports a later real disconnect once the host is we
   const { a, b, connect } = createMemoryPair();
   const guestStatus = [];
   const host = hostSession({ room: a, lobby: lobbyFor(), makeTable });
-  const guest = guestSession({ room: b, name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {}, onStatus: (s, n) => guestStatus.push([s, n]) });
+  const guest = guestSession({ room: b, code: 'ROOMAA', name: 'Agent Lynx', token: '1'.repeat(16), onView: () => {}, onStatus: (s, n) => guestStatus.push([s, n]) });
   connect();
   await until(() => guestStatus.length === 1);
   await host.bye();
@@ -341,25 +352,41 @@ test('an action from a seat outside the table changes nothing', () => {
   }
 });
 
-test('protocol 4: a 2b-ii guest is turned away with the version message', () => {
-  assert.equal(PROTOCOL, 4);
+test('protocol 5: a Part A (v4) guest is turned away with the version message, and a v5 guest hears it from a v4 host, sending it no token', async () => {
+  assert.equal(PROTOCOL, 5);
   const sent = [];
   const room = { peers: new Set(['g']), handlers: {}, on(t, cb) { this.handlers[t] = cb; }, send(t, d, id) { sent.push([t, d, id]); }, leave() {} };
   const h = hostSession({ room, lobby: lobbyFor(), makeTable, now: () => 0 });
-  room.handlers.hello({ v: 3, name: 'Agent Fox', token: '0123456789abcdef' }, 'g');
-  assert.deepEqual(sent, [['nope', { why: 'version' }, 'g']]);
+  room.handlers.hello({ v: 4, name: 'Agent Fox', token: '0123456789abcdef' }, 'g');
+  assert.deepEqual(sent, [['host', { v: 5 }, 'g'], ['nope', { why: 'version' }, 'g']]);
   h.close();
+  // A v4 host (as Part A built it) never announces itself, but answers any hello of another version with nope.
+  const { a, b, connect } = createMemoryPair();
+  const heard = [];
+  a.on('hello', (d, id) => (heard.push(d), d?.v !== 4 && a.send('nope', { why: 'version' }, id)));
+  const statuses = [];
+  const g = guestSession({ room: b, code: 'ROOMAA', name: 'Agent Owl', token: '0123456789abcdef', onView: () => {}, onStatus: (s) => statuses.push(s) });
+  connect();
+  await until(() => statuses.length);
+  await sleep(10);
+  assert.deepEqual([statuses, heard], [['version'], [{ v: 5 }]], 'its knock carried no token');
+  g.close();
+  // A host of another version that does announce itself: the version message too.
+  const room2 = fakeRoom(['h']);
+  const st2 = [];
+  const g2 = guestSession({ room: room2, code: 'ROOMAA', name: 'Agent Owl', token: '0123456789abcdef', onView: () => {}, onStatus: (s) => st2.push(s) });
+  room2.handlers.host({ v: 6 }, 'h');
+  await sleep(5);
+  assert.deepEqual([st2, room2.sent.filter((m) => 'token' in m.data)], [['version'], []]);
+  g2.close();
 });
 
-test('tables carry their setup through saves, restarts and rematches', () => {
+test('tables carry their setup through saves and rematches', () => {
   const t = createTable({ setup: MIXED_ALL });
   assert.equal(t.state.seed, null);
   assert.equal(t.state.roster.length, 12);
   const copy = restoreTable(JSON.parse(JSON.stringify(t.toJSON())));
   assert.deepEqual([copy.setup, copy.state.roster], [MIXED_ALL, t.state.roster]);
-  const id = t.matchId;
-  t.restart(CLASSIC_SETUP);
-  assert.deepEqual([t.state.roster, t.matchId !== id], [DECK, true]);
   const r = createTable({ setup: ladderSetup('heron') });
   r.state.phase = 'match-over';
   r.act(0, { a: 'rematch' });
@@ -367,17 +394,11 @@ test('tables carry their setup through saves, restarts and rematches', () => {
   assert.deepEqual([r.state.twist, r.state.roster.includes('bodyguard')], [{ ...TWISTS.heron, seat: 1 }, true]);
 });
 
-test('a 2b-i save restores as Classic; a restart keeps listeners and tells them', () => {
+test('a 2b-i save restores as Classic', () => {
   const v2 = JSON.parse(readFileSync(new URL('./golden/v2-table.json', import.meta.url), 'utf8'));
   assert.equal('setup' in v2, false);
   assert.equal(restoreTable(v2).setup, CLASSIC_SETUP);
-  const t = createTable({ seed: 'lobby' });
-  let heard = 0;
-  t.onChange(() => heard++);
-  const seed = t.state.seed;
-  t.restart(MIXED_ALL);
-  assert.deepEqual([heard, t.setup, t.state.seed !== seed, t.state.roster.length], [1, MIXED_ALL, true, 12]);
-  assert.deepEqual(t.toJSON().setup, MIXED_ALL);
+  assert.deepEqual(createTable({ setup: MIXED_ALL }).toJSON().setup, MIXED_ALL);
 });
 
 test('a lock action passes a partner and a face to the engine, and nothing else', () => {
@@ -491,7 +512,7 @@ test('a wiretapping bot stops waiting for its mark to answer an escalation it ow
   }
 });
 
-test('real tables are unseeded; rematches and restarts too; a saved one restores', () => {
+test('real tables are unseeded; rematches too; a saved one restores', () => {
   const t = createTable();
   assert.equal(t.state.seed, null);
   assert.equal(t.state.rng.length, 4);
@@ -501,8 +522,6 @@ test('real tables are unseeded; rematches and restarts too; a saved one restores
   t.state.phase = 'match-over';
   t.act(0, { a: 'rematch' });
   t.act(1, { a: 'rematch' });
-  assert.equal(t.state.seed, null);
-  t.restart(CLASSIC_SETUP);
   assert.equal(t.state.seed, null);
   assert.equal(createTable({ seed: 5 }).state.seed, '5', 'tests and sims still seed');
 });
@@ -528,12 +547,12 @@ test('bots at three and four seats think with capped samples', () => {
   assert.deepEqual([samplesFor(RIVALS[4], 2), samplesFor(RIVALS[4], 3), samplesFor(RIVALS[4], 4), samplesFor(RIVALS[0], 4)], [80, 24, 12, 6]);
 });
 
-test('protocol 4: a v3 guest is turned away; three guests sit, the rest watch, the ninth is refused', () => {
-  assert.equal(PROTOCOL, 4);
+test('protocol 5: a v4 guest is turned away; three guests sit, the rest watch, the ninth is refused', () => {
+  assert.equal(PROTOCOL, 5);
   const room = fakeRoom();
   const h = hostSession({ room, lobby: lobbyFor(), makeTable, now: () => 0 });
   room.peers.add('old');
-  hello(room, 'old', 0, 3);
+  hello(room, 'old', 0, 4);
   assert.deepEqual(room.sent.filter((m) => m.to === 'old').map((m) => [m.type, m.data.why]), [['nope', 'version']]);
   for (let i = 0; i < 8; i++) {
     room.peers.add(`g${i}`);
@@ -713,8 +732,9 @@ test('a guest takes its seat from the welcome: -1 to watch, 1 when missing or no
   for (const [seat, want] of [[2, 2], [3, 3], [-1, -1], [undefined, 1], [4, 1], [-2, 1], ['2', 1], [1.5, 1]]) {
     const room = fakeRoom(['h']);
     const statuses = [];
-    const g = guestSession({ room, name: 'Agent Owl', token: '1'.repeat(16), onView: () => {}, onStatus: (s) => statuses.push(s) });
+    const g = guestSession({ room, code: 'ROOMAA', name: 'Agent Owl', token: '1'.repeat(16), onView: () => {}, onStatus: (s) => statuses.push(s) });
     assert.equal(g.seat, null);
+    room.handlers.host({ v: PROTOCOL }, 'h');
     room.handlers.welcome({ name: 'Agent Fox', seat }, 'h');
     assert.deepEqual([g.seat, statuses], [want, [want === -1 ? 'watching' : 'joined']], `welcome seat ${String(seat)}`);
     g.close();
@@ -724,7 +744,8 @@ test('a guest takes its seat from the welcome: -1 to watch, 1 when missing or no
 test('a guest takes its seat from each lobby the host sends, once welcomed and only from the host', () => {
   const room = fakeRoom(['h']);
   const lobbies = [];
-  const g = guestSession({ room, name: 'Agent Owl', token: '1'.repeat(16), onView: () => {}, onLobby: (l) => lobbies.push(l) });
+  const g = guestSession({ room, code: 'ROOMAA', name: 'Agent Owl', token: '1'.repeat(16), onView: () => {}, onLobby: (l) => lobbies.push(l) });
+  room.handlers.host({ v: PROTOCOL }, 'h');
   room.handlers.lobby({ size: 4, seats: [], seat: 3 }, 'h');
   assert.deepEqual([g.seat, lobbies.length], [null, 0], 'nothing from the host before its welcome');
   room.handlers.welcome({ name: 'Agent Fox', seat: 3 }, 'h');
@@ -751,7 +772,7 @@ test('three browsers play a turn over the hub; nobody sees another hand', async 
   const { rooms, connect } = createMemoryHub(3);
   const h = hostSession({ room: rooms[0], lobby: lobbyFor(), makeTable: (S) => makeTable(S, { seed: 9 }) });
   const views = [null, null];
-  const guests = [1, 2].map((i) => guestSession({ room: rooms[i], name: ['Agent Owl', 'Agent Pike'][i - 1], token: String(i).repeat(16), onView: (v) => (views[i - 1] = v), onLobby: () => {} }));
+  const guests = [1, 2].map((i) => guestSession({ room: rooms[i], code: 'ROOMAA', name: ['Agent Owl', 'Agent Pike'][i - 1], token: String(i).repeat(16), onView: (v) => (views[i - 1] = v), onLobby: () => {} }));
   connect();
   await until(() => h.lobby.seats.filter((s) => s.kind === 'guest').length === 2);
   const t = h.start();
@@ -762,5 +783,379 @@ test('three browsers play a turn over the hub; nobody sees another hand', async 
   await until(() => views[0].round.turn === 2 && views[1].round.turn === 2);
   for (const v of views) assert.ok(v.round.hand.every((c) => c.owner === v.seat));
   guests.forEach((g) => g.close());
+  h.close();
+});
+
+test('the clock locks a random drop for a human who runs out, answers play on, and presses Next', () => {
+  let now = 0;
+  const t = createTable({ seed: 3, seats: 3, timer: 10000 });
+  const c = attachClock(t, { timer: 10000, now: () => now, rng: createRng(1), humans: () => [0, 1, 2] }); // nobody is a bot here
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 10000 });
+  t.act(2, { a: 'lock', ...t.view(2).round.legal[0] });
+  now = 11000;
+  c.tick();
+  assert.equal(t.state.round.plans[0], null, 'inside the grace');
+  now = 11500;
+  c.tick();
+  // (The brief read plans[0] && plans[1] here, but the turn resolves at once and turn 2 deals fresh plans:
+  // turn 1's drop events carry what the clock locked.)
+  assert.ok([0, 1].every((s) => t.state.round.events.some((e) => e.t === 'drop' && e.seat === s)), 'seats 0 and 1 got a drop each');
+  assert.equal(t.state.round.turn, 2);
+  assert.equal(t.view(0).clock.kind, 'drop');
+  assert.ok(t.act(2, { a: 'escalate' }));
+  assert.equal(t.view(0).clock.kind, 'answer');
+  now = 30000;
+  c.tick();
+  assert.deepEqual(t.state.round.called.answers.slice(0, 2), ['on', 'on'], 'the two seats owed an answer played on');
+  t.state.phase = 'round-over';
+  t.touch();
+  assert.equal(t.view(1).clock.kind, 'next');
+  now = 30000 + 20000;
+  c.tick();
+  assert.deepEqual([t.state.roundNo, t.ready], [1, [false, false, false]], 'every human pressed Next, so the round moved on');
+  c.stop();
+});
+
+test('a lock that lands as the clock expires is not doubled', () => {
+  let now = 0;
+  const t = createTable({ seed: 8, timer: 10000 });
+  const c = attachClock(t, { timer: 10000, now: () => now, rng: createRng(2), humans: () => [0, 1] });
+  const d = t.view(0).round.legal[0];
+  t.act(0, { a: 'lock', ...d });
+  now = 11500;
+  c.tick();
+  assert.deepEqual(t.state.history.length, 0);
+  assert.equal(t.state.round.turn, 2);
+  assert.ok(t.state.round.events.some((e) => e.t === 'drop' && e.seat === 0 && e.uid === d.uid), 'the player’s own drop, not a random one');
+  c.stop();
+});
+
+test('the clock counts on through locks, waits while held, times only its humans, arms at uncover only when asked, and goes with stop()', () => {
+  let now = 0;
+  let held = false;
+  const t = createTable({ seed: 5, seats: 3, timer: 30000 });
+  const c = attachClock(t, { timer: 30000, now: () => now, rng: createRng(3), humans: () => [0], hold: () => held });
+  now = 4000;
+  c.tick();
+  t.act(1, { a: 'lock', ...t.view(1).round.legal[0] });
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 26000 }, 'a seat locking in does not arm the drop again');
+  held = true;
+  now = 9000;
+  c.tick();
+  now = 14000;
+  c.tick();
+  held = false;
+  now = 15000;
+  c.tick();
+  assert.equal(t.view(0).clock.left, 25000, 'the 10 s held did not count');
+  now = 40000 + 1500;
+  c.tick();
+  assert.ok(t.state.round.plans[0], 'the human ran out: a random drop');
+  assert.equal(t.state.round.plans[2], null, 'a seat that is not one of its humans is never timed');
+  assert.equal(t.view(0).clock, null, 'run out, and not armed again for the same turn');
+  t.act(2, { a: 'lock', ...t.view(2).round.legal[0] });
+  assert.equal(t.state.round.turn, 2);
+  assert.deepEqual(t.state.round.plans, [null, null, null], 'nothing was locked into the next turn');
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 30000 }, 'a new turn, a new clock');
+  t.state.phase = 'match-over';
+  t.touch();
+  assert.equal(t.view(0).clock, null, 'no clock once the match is over');
+  c.stop();
+  assert.equal(t.clock, null);
+  assert.equal(t.view(0).clock, null);
+
+  // Pass and play: nothing arms on a change; the clock runs for the seat that has the device.
+  const p = createTable({ seed: 6, seats: 3, timer: 10000 });
+  let at = [];
+  const pc = attachClock(p, { timer: 10000, now: () => now, rng: createRng(4), humans: () => at, armOn: 'uncover' });
+  assert.equal(p.view(0).clock, null, 'nothing armed until a player takes the device');
+  p.act(0, { a: 'lock', ...p.view(0).round.legal[0] });
+  assert.equal(p.view(0).clock, null);
+  at = [1];
+  pc.arm('drop');
+  assert.deepEqual(p.view(1).clock, { kind: 'drop', left: 10000 });
+  now += 11500;
+  pc.tick();
+  assert.ok(p.state.round.plans[1] && !p.state.round.plans[2], 'a random drop for the seat at the device only');
+  pc.stop();
+});
+
+test('online, the host’s clock times its players, never a computer rival or a stand-in; close() stops it', (ctx) => {
+  let now = 0;
+  const room = fakeRoom();
+  const lobby = lobbyFor();
+  const expiring = [];
+  const h = hostSession({ room, lobby, makeTable: (S) => makeTable(S, { seed: 12, timer: lobby.timer }), now: () => now, hold: () => true, onExpire: (k) => expiring.push(k) });
+  ctx.after(() => h.close()); // held bots wait for ever: a failed assertion must still close the session
+  room.peers.add('g0');
+  hello(room, 'g0', 0);
+  h.setLobby({ size: 4, timer: 30000, fill: true });
+  assert.equal(h.clock, null, 'no clock before the start');
+  const t = h.start();
+  assert.ok(h.clock);
+  assert.deepEqual(room.sent.filter((m) => m.type === 'view' && m.to === 'g0').at(-1).data.clock, { kind: 'drop', left: 30000 }, 'the guest’s view carries the clock');
+  assert.ok(h.clock.expire());
+  assert.deepEqual(expiring, ['drop']);
+  assert.ok(t.state.round.plans[0] && t.state.round.plans[1], 'the host and the guest ran out: random drops');
+  assert.deepEqual([t.state.round.plans[2], t.state.round.plans[3]], [null, null], 'the computer rivals are never timed');
+  for (const s of [2, 3]) t.act(s, { a: 'lock', ...t.view(s).round.legal[0] });
+  assert.equal(t.state.round.turn, 2);
+  assert.deepEqual(room.sent.filter((m) => m.type === 'view' && m.to === 'g0').at(-1).data.clock, { kind: 'drop', left: 30000 }, 'the clock arms for the new turn before the views go out');
+  now = 30000;
+  h.tick();
+  assert.deepEqual(t.standIn, [false, true, false, false]);
+  assert.ok(h.clock.expire());
+  assert.ok(t.state.round.plans[0]);
+  assert.equal(t.state.round.plans[1], null, 'a stand-in is never timed');
+  h.close();
+  assert.equal(t.view(0).clock, null, 'close() stops the clock');
+});
+
+test('a clock that resolves the turn as it runs out locks nothing into the next turn; it arms before earlier listeners read a view', () => {
+  let now = 0;
+  const t = createTable({ seed: 3, seats: 3, timer: 10000 });
+  const seen = [];
+  t.onChange(() => seen.push(t.view(0).clock)); // like the UI's, subscribed before the clock
+  const c = attachClock(t, { timer: 10000, now: () => now, rng: createRng(1), humans: () => [0, 1, 2] });
+  t.act(2, { a: 'lock', ...t.view(2).round.legal[0] });
+  now = 2000;
+  assert.ok(c.expire());
+  assert.equal(t.state.round.turn, 2);
+  assert.deepEqual(t.state.round.plans, [null, null, null], 'seat 2 had locked turn 1: the clock left turn 2 alone');
+  assert.deepEqual(seen.at(-1), { kind: 'drop', left: 10000 }, 'the listener saw the new turn’s clock');
+  c.stop();
+});
+
+test('pass and play: an escalator planning on while its call waits still runs out of time on its drop', () => {
+  let now = 0;
+  const t = createTable({ seed: 9, seats: 3, timer: 10000 });
+  const c = attachClock(t, { timer: 10000, now: () => now, rng: createRng(5), humans: () => [0], armOn: 'uncover' });
+  c.arm('drop');
+  assert.ok(t.act(0, { a: 'escalate' }));
+  assert.equal(t.view(0).clock.kind, 'drop', 'uncover mode: the call arms nothing by itself');
+  now = 11500;
+  c.tick();
+  assert.ok(t.state.round.plans[0], 'a random drop for the escalator');
+  assert.ok(t.state.round.pending, 'the call still waits for its answers');
+  c.stop();
+});
+
+test('a call that settles gives the turn’s drop back the time it had left; a new turn gets a full clock', () => {
+  let now = 0;
+  const t = createTable({ seed: 5, seats: 3, timer: 30000 });
+  const c = attachClock(t, { timer: 30000, now: () => now, rng: createRng(6), humans: () => [0] });
+  now = 12000;
+  c.tick();
+  assert.ok(t.act(1, { a: 'escalate' }));
+  assert.deepEqual(t.view(0).clock, { kind: 'answer', left: 30000 }, 'the call has its own clock');
+  now = 20000;
+  c.tick();
+  assert.ok(t.act(0, { a: 'respond', accept: true }));
+  assert.ok(t.act(2, { a: 'respond', accept: true }));
+  assert.equal(t.state.round.pending, null, 'the call settled');
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 18000 }, 'the drop has the 18 s it had left when the call came, not a fresh 30 s');
+  now = 25000;
+  c.tick();
+  for (const s of [0, 1, 2]) t.act(s, { a: 'lock', ...t.view(s).round.legal[0] });
+  assert.equal(t.state.round.turn, 2);
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 30000 }, 'the next turn starts on a full clock');
+  c.stop();
+});
+
+test('a call that opens as a turn resolves (a Blackmailer’s flip) gives the new turn a full drop clock, not the last turn’s leftover', () => {
+  assert.equal(RULES.blackmailer, 'answer', 'the flip opens a call under the answer rule');
+  let now = 0;
+  const t = createTable({ seed: 5, seats: 3, timer: 30000 });
+  // Every agent in the roster, on three cities where nothing silences the flip or moves the card.
+  t.state = mixed(['moscow', 'istanbul', 'lisbon'], { seats: 3 });
+  const c = attachClock(t, { timer: 30000, now: () => now, rng: createRng(7), humans: () => [0] });
+  now = 27000; // turn 1's drop clock has 3 s left as the turn resolves
+  c.tick();
+  const bm = give(t.state, 1, 'blackmailer');
+  assert.ok(t.act(1, { a: 'lock', uid: bm, city: 0 }));
+  for (const s of [0, 2]) assert.ok(t.act(s, { a: 'lock', uid: give(t.state, s, 'heavy'), city: 2 }));
+  assert.equal(t.state.round.turn, 2);
+  assert.equal(t.state.round.pending?.by, 1, 'the Blackmailer’s flip opened a call');
+  assert.deepEqual(t.view(0).clock, { kind: 'answer', left: 30000 });
+  now = 28000;
+  c.tick();
+  for (const s of t.state.round.pending.from) assert.ok(t.act(s, { a: 'respond', accept: true }));
+  assert.equal(t.state.round.pending, null, 'the call settled');
+  assert.deepEqual(t.view(0).clock, { kind: 'drop', left: 30000 }, 'turn 2’s drop runs from a full clock');
+  c.stop();
+});
+
+
+test('a guest knocks with no token, says hello only to a peer that announced itself as host, latches the first welcome, and turns to a new host only once the old one has gone', async () => {
+  const room = fakeRoom(['g', 'h']);
+  const statuses = [];
+  const g = guestSession({ room, code: 'ROOMCC', name: 'Agent Owl', token: '0123456789abcdef', onView: () => {}, onStatus: (s) => statuses.push(s) });
+  assert.deepEqual(room.sent.map((m) => [m.type, m.to, 'token' in m.data]), [['hello', 'g', false], ['hello', 'h', false]], 'it knocks at every peer, with no token');
+  room.sent.length = 0;
+  room.handlers.welcome({ name: 'Agent Fox', seat: 1 }, 'h');
+  assert.equal(g.seat, null, 'no welcome from a peer it never said hello to');
+  room.handlers.host({ v: PROTOCOL }, 'h');
+  room.handlers.host({ v: PROTOCOL }, 'h');
+  await sleep(5); // the hello waits for the room's token
+  assert.deepEqual(room.sent.map((m) => [m.type, m.to, m.data.token]), [['hello', 'h', perRoom('0123456789abcdef', 'ROOMCC')]], 'one hello, to the host, with the token for this room');
+  room.handlers.welcome({ name: 'Agent Fox', seat: 1 }, 'h');
+  assert.deepEqual([g.seat, statuses], [1, ['joined']]);
+  // Another peer says it is the host while h is still here: no knock, no hello, and its welcome and nope change nothing.
+  room.peers.add('x');
+  room.onPeerJoin('x');
+  room.handlers.host({ v: PROTOCOL }, 'x');
+  room.handlers.welcome({ name: 'Agent Pike', seat: 3 }, 'x');
+  room.handlers.nope({ why: 'full' }, 'x');
+  room.handlers.host({ v: 9 }, 'x');
+  await sleep(5);
+  assert.deepEqual([g.seat, statuses, room.sent.filter((m) => m.to === 'x')], [1, ['joined'], []], 'nothing to or from a second host while the first is here');
+  // h goes (a host reload): x announced itself meanwhile, so the guest says hello to it now.
+  room.peers.delete('h');
+  room.onPeerLeave('h');
+  await sleep(5);
+  assert.deepEqual(room.sent.filter((m) => m.to === 'x').map((m) => m.type), ['hello']);
+  room.handlers.welcome({ name: 'Agent Fox', seat: 2 }, 'x');
+  assert.deepEqual([g.seat, statuses], [2, ['joined', 'left', 'joined']]);
+  // The host's line drops and comes back under the same id: the guest says hello again.
+  room.peers.delete('x');
+  room.onPeerLeave('x');
+  room.peers.add('x');
+  room.onPeerJoin('x');
+  room.handlers.host({ v: PROTOCOL }, 'x');
+  await sleep(5);
+  assert.deepEqual(room.sent.filter((m) => m.to === 'x' && m.type === 'hello').map((m) => 'token' in m.data), [true, true], 'hello again (no knock: its host is back) to the host back under its id');
+  g.close();
+});
+
+/** Wrap every room of `hub` (and each added later through `add`) to record what it hears: every message as JSON, and each token by room. */
+function tapHub(hub) {
+  const heard = new Map(); // room id → [{ type, from, token }]
+  const wire = []; // every message any room heard, as JSON
+  const tap = (room) => {
+    const deliver = room._deliver;
+    heard.set(room.selfId, []);
+    room._deliver = (type, data, from) => {
+      wire.push(`${type} ${JSON.stringify(data ?? null)}`);
+      if (data && typeof data === 'object' && 'token' in data) heard.get(room.selfId).push({ type, from, token: data.token });
+      deliver(type, data, from);
+    };
+  };
+  hub.rooms.forEach(tap);
+  return {
+    heard,
+    wire,
+    add() {
+      const room = hub.add();
+      tap(room);
+      return room;
+    },
+  };
+}
+
+test('PROTOCOL 5: a guest’s token goes only to the host, worked out for the room: a late spectator, a guest reload and a host reload hear none, and a captured or pre-fix token claims no seat elsewhere', async () => {
+  assert.equal(PROTOCOL, 5);
+  const CODE = 'ROOMAA';
+  const raw = { host: 'a1b2c3d4e5f60718', owl: '0123456789abcdef', pike: 'fedcba9876543210', lynx: '0f1e2d3c4b5a6978' };
+  const hub = createMemoryHub(3);
+  const T = tapHub(hub);
+  const views = {};
+  const join = (room, who, name) => guestSession({ room, code: CODE, name, token: raw[who], onView: (v) => (views[who] = v) });
+  const h = hostSession({ room: hub.rooms[0], lobby: createLobby({ host: { name: 'Agent Fox', token: perRoom(raw.host, CODE) }, size: 3 }), makeTable: (S) => makeTable(S, { seed: 9 }) });
+  const guests = [join(hub.rooms[1], 'owl', 'Agent Owl'), join(hub.rooms[2], 'pike', 'Agent Pike')];
+  hub.connect();
+  await until(() => h.lobby.seats.filter((s) => s.kind === 'guest').length === 2);
+  assert.deepEqual([seatOf(h.lobby, perRoom(raw.owl, CODE)), seatOf(h.lobby, perRoom(raw.pike, CODE))], [1, 2], 'the host seats each guest by its token for this room');
+  h.start();
+  await until(() => views.owl && views.pike);
+
+  // A spectator opens the link mid-match: the guests already seated say nothing to it.
+  guests.push(join(T.add(), 'lynx', 'Agent Lynx'));
+  hub.connect();
+  await until(() => views.lynx?.seat === -1);
+
+  // Owl reloads: a new room, the same token, the same seat.
+  guests[0].close();
+  delete views.owl;
+  guests.push(join(T.add(), 'owl', 'Agent Owl'));
+  hub.connect();
+  await until(() => views.owl?.seat === 1 && h.table.here[1]);
+
+  // The host reloads, and its new room (announcing itself) arrives before the old one's leave is seen:
+  // every guest waits for the host it knows to go, then says hello to the new one.
+  const saved = JSON.parse(JSON.stringify(h.toJSON()));
+  const room2 = T.add();
+  const h2 = hostSession({ room: room2, lobby: saved.lobby, table: restoreTable(saved.table), makeTable });
+  hub.connect();
+  await sleep(20);
+  assert.deepEqual(T.heard.get(room2.selfId), [], 'no hello for a second host while the first is still here');
+  h.close();
+  await until(() => h2.table.here.every(Boolean) && T.heard.get(room2.selfId).length >= 3);
+  assert.deepEqual(h2.table.standIn, [false, false, false]);
+
+  const hosts = new Set([hub.rooms[0].selfId, room2.selfId]);
+  for (const [id, list] of T.heard) if (!hosts.has(id)) assert.deepEqual(list, [], `${id} (not a host) heard a token`);
+  const fromRoom = new Set(['owl', 'pike', 'lynx'].map((w) => perRoom(raw[w], CODE)));
+  for (const id of hosts) for (const x of T.heard.get(id)) assert.ok(x.type === 'hello' && fromRoom.has(x.token), `${id} heard ${JSON.stringify(x)}: only this room's tokens, in a hello`);
+  for (const [who, r] of Object.entries(raw)) assert.ok(!T.wire.some((m) => m.includes(r)), `${who}'s own token never went on the wire`);
+
+  // Room B: a token captured in room A (what its host heard from Owl) claims no seat there, nor does Owl's
+  // token from before the fix, sent raw by Part A's builds: Owl's browser has rotated it since.
+  const captured = T.heard.get(hub.rooms[0].selfId).find((x) => x.from === hub.rooms[1].selfId).token;
+  const owlMeta = migrateMeta({ v: 2, codename: 'Agent Owl', token: raw.owl }, { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Fox', token: '9999aaaa9999aaaa' } });
+  assert.notEqual(owlMeta.token, raw.owl, 'a profile from before the fix gets a new token');
+  const hubB = createMemoryHub(3);
+  const B = 'ROOMBB';
+  const hB = hostSession({ room: hubB.rooms[0], lobby: createLobby({ host: { name: 'Agent Fox', token: perRoom(raw.host, B) }, size: 2 }), makeTable });
+  let owlView = null;
+  const owlB = guestSession({ room: hubB.rooms[1], code: B, name: 'Agent Owl', token: owlMeta.token, onView: (v) => (owlView = v) });
+  const thief = hubB.rooms[2];
+  const welcomes = [];
+  let thiefView = null;
+  thief.on('welcome', (d) => welcomes.push(d.seat));
+  thief.on('view', (v) => (thiefView = v));
+  hubB.connect();
+  await until(() => seatOf(hB.lobby, perRoom(owlMeta.token, B)) === 1);
+  hB.start();
+  await until(() => owlView);
+  for (const token of [captured, raw.owl, perRoom(raw.owl, B)]) thief.send('hello', { v: PROTOCOL, name: 'Agent Owl', token }, hubB.rooms[0].selfId);
+  await until(() => welcomes.length === 3);
+  assert.deepEqual(welcomes, [-1, -1, -1], 'each stolen token only watches');
+  assert.equal(thiefView.seat, -1);
+  assert.deepEqual(thiefView.round.hand, []);
+  assert.deepEqual(hB.table.here, [true, true], 'Owl keeps its seat');
+  [...guests, owlB].forEach((g) => g.close());
+  [h2, hB].forEach((x) => x.close());
+});
+
+test('a lock stamped with a turn that has resolved is dropped, never played into the next turn; a lock without a stamp is taken as now', () => {
+  const t = createTable({ seed: 9 });
+  const stamp = { round: t.state.roundNo, turn: t.state.round.turn };
+  assert.ok(t.act(0, { a: 'lock', ...t.view(0).round.legal[0], ...stamp }), 'a lock for this turn locks');
+  assert.ok(t.act(1, { a: 'lock', ...t.view(1).round.legal[0] }));
+  assert.equal(t.state.round.turn, 2, 'the turn resolved');
+  // Seat 1's lock for turn 1, sent again (or a guest's clock running out just after the host's), arrives late.
+  const late = { a: 'lock', ...t.view(1).round.legal[0], ...stamp };
+  assert.equal(t.act(1, late), false);
+  assert.equal(t.state.round.plans[1], null, 'nothing locked into turn 2');
+  // The stand-in (or the host's clock) has locked seat 1's turn-2 drop; a late lock doesn't replace it.
+  const now = t.view(1).round.legal.at(-1);
+  assert.ok(t.act(1, { a: 'lock', ...now }));
+  const plan = { ...t.state.round.plans[1] };
+  const seq = t.seq;
+  assert.equal(t.act(1, { ...late, uid: t.view(1).round.legal[0].uid }), false);
+  assert.equal(t.act(1, { a: 'unlock', ...stamp }), false, 'nor does a late take-back');
+  assert.equal(t.act(1, { a: 'lock', ...now, round: t.state.roundNo + 1, turn: 2 }), false, 'a stamp of another round is no stamp of this one');
+  assert.deepEqual([t.state.round.plans[1], t.seq], [plan, seq]);
+  // Over the wire: a guest's late lock reaches the table as an action like any other.
+  const room = fakeRoom(['g0']);
+  const h = hostSession({ room, lobby: lobbyFor(), makeTable: (S) => makeTable(S, { seed: 9 }), now: () => 0 });
+  hello(room, 'g0', 0);
+  const T = h.start();
+  const old = { round: T.state.roundNo, turn: T.state.round.turn };
+  T.act(0, { a: 'lock', ...T.view(0).round.legal[0] });
+  room.handlers.act({ a: 'lock', ...T.view(1).round.legal[0], ...old }, 'g0');
+  assert.equal(T.state.round.turn, 2);
+  room.handlers.act({ a: 'lock', ...T.view(1).round.legal[0], ...old }, 'g0');
+  assert.equal(T.state.round.plans[1], null, 'the guest’s late lock for turn 1 is not its turn-2 drop');
   h.close();
 });

@@ -40,17 +40,27 @@ test('a win with no match id still counts (an old view), and an old meta starts 
 });
 
 import { CODENAMES, RIVALS } from '../js/data.js';
-import { META_VERSION, meet, migrateMeta } from '../js/meta.js';
+import { META_VERSION, TOKEN_VERSION, meet, migrateMeta } from '../js/meta.js';
 
 test('migrateMeta keeps the codename, token, rivals beaten and counts, cleans the rest and stamps v2', () => {
   const opts = { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Owl', token: 'ffffffffffffffff' } };
-  const v1 = { v: 1, codename: 'Agent Fox', beaten: ['wren', 'magpie'], token: '0123456789abcdef', matches: 7, onlineWins: 2, counted: ['abcd1234'], wonIds: ['zzzz9999'], later: { x: 1 } };
-  assert.equal(META_VERSION, 2);
+  const v1 = { v: 1, codename: 'Agent Fox', beaten: ['wren', 'magpie'], token: '0123456789abcdef', tokenV: 1, matches: 7, onlineWins: 2, counted: ['abcd1234'], wonIds: ['zzzz9999'], later: { x: 1 } };
+  assert.deepEqual([META_VERSION, TOKEN_VERSION], [2, 1]);
   const met = { agents: [], cities: [], rivals: [] };
   assert.deepEqual(migrateMeta(v1, opts), { ...v1, v: 2, met });
-  const clean = { v: 2, codename: 'Agent Owl', beaten: [], token: 'ffffffffffffffff', matches: 0, onlineWins: 0, counted: [], wonIds: [], met };
+  const clean = { v: 2, codename: 'Agent Owl', beaten: [], token: 'ffffffffffffffff', tokenV: 1, matches: 0, onlineWins: 0, counted: [], wonIds: [], met };
   assert.deepEqual(migrateMeta({}, opts), clean);
-  assert.deepEqual(migrateMeta({ codename: '<b>Hi</b>', beaten: ['magpie', 'nobody', 'wren', 'wren'], token: 'short', matches: -3, onlineWins: 'x', counted: 'no', wonIds: [1] }, opts), { ...clean, beaten: ['wren', 'magpie'] });
+  assert.deepEqual(migrateMeta({ codename: '<b>Hi</b>', beaten: ['magpie', 'nobody', 'wren', 'wren'], token: 'short', tokenV: 1, matches: -3, onlineWins: 'x', counted: 'no', wonIds: [1] }, opts), { ...clean, beaten: ['wren', 'magpie'] });
+});
+
+test('a token from before PROTOCOL 5 (no tokenV) is replaced once: the new one is kept from then on', () => {
+  const opts = { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Owl', token: 'ffffffffffffffff' } };
+  const before = { v: 2, codename: 'Agent Fox', token: '0123456789abcdef', matches: 3 };
+  const once = migrateMeta(before, opts);
+  assert.deepEqual([once.token, once.tokenV, once.codename, once.matches], ['ffffffffffffffff', 1, 'Agent Fox', 3]);
+  const again = migrateMeta(JSON.parse(JSON.stringify(once)), { ...opts, fresh: { codename: 'Agent Owl', token: 'eeeeeeeeeeeeeeee' } });
+  assert.equal(again.token, 'ffffffffffffffff', 'rotated once, not on every load');
+  assert.equal(migrateMeta({ ...once, tokenV: 0 }, { ...opts, fresh: { codename: 'Agent Owl', token: 'dddddddddddddddd' } }).token, 'dddddddddddddddd', 'any other issue is replaced too');
 });
 
 const metOpts = { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Owl', token: 'ffffffffffffffff' } };

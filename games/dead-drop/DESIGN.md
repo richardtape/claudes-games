@@ -466,10 +466,9 @@ seats; solo at a Table against two or three computer rivals; or pass and play on
 rules are the engine's at N seats (Seats and the engine) and the stakes are the same at every size;
 what changes is the target and the pace, the screens and the session. Two seats keep their screens:
 the scorebar, the full-size rival row and the two-player prompts. The numbered decisions cited here
-are Phase 3's plan's (`docs/superpowers/plans/2026-10-19-dead-drop-phase-3.md`). Still to come, in
-Part B: the turn timer (the lobby stores the choice and every view carries it, but nothing is timed
-yet), emotes on screen (the session relays them; there is no button or slip yet) and the phone-first
-polish.
+are Phase 3's plan's (`docs/superpowers/plans/2026-10-19-dead-drop-phase-3.md`). Milestone A built
+the table; Part B added the turn timer, emotes on screen and the phone-first polish (The turn timer,
+Emotes and The phone at 320 and 390, below).
 
 ### The lobby and Start
 
@@ -480,7 +479,8 @@ polish.
   friends can arrive while the host decides; a size below the seats taken is disabled), Timer Off |
   30 s | Blitz 10 s, and Roster Classic | Mixed (all 20 agents and cities). "Fill empty seats with
   computer rivals" puts a rival in every open seat, the ladder's in order from Agent Wren whatever
-  the host has unlocked; "Clear computer rivals" takes them out.
+  the host has unlocked; "Clear computer rivals" takes them out. The one button offers Fill whenever a
+  seat is open, so a table grown after a fill can be topped up, and Clear once none is.
 - **Start** is enabled once two seats are taken ("Start with N" while some are open) and plays with
   the taken seats only: empty seats close, so a room of four with three people plays three. Nothing
   starts by itself, two players included, so the host may still change the roster or the timer after
@@ -490,29 +490,47 @@ polish.
   while the card plays.
 - **Pure state.** The lobby is plain JSON in `js/lobby.js` (`createLobby`, `sit`, `away`, `resize`,
   `setTimer`, `setSetup`, `fill`, `unfill`, `start`, `publicLobby`), kept by the host's session.
-  `start` turns the taken seats into the table's seats, names and bots; `publicLobby`, the only form
-  that goes on the wire, never carries a token.
-- **The host's save.** `host-CODE` holds `{ lobby, table, at }` from Start on (a lobby is never saved
-  before it). A host who reloads mid-match goes straight back to the table, and each guest's hello
-  takes their seat back.
+  `start` turns the taken seats into the table's seats, names and bots. `publicLobby` is the only form
+  of the lobby that goes on the wire, and it never carries a token; the one token on the wire is each
+  guest's token for the room, in its hello to the host alone (Seats and tokens).
+- **The host's save.** `host-CODE` holds `{ lobby, table, at, roomTokens }` from Start on (a lobby is
+  never saved before it). A host who reloads mid-match goes straight back to the table, and each
+  guest's hello takes their seat back. Saves older than 6 h are cleared on every visit (`route()`). A
+  save without `roomTokens` (from before PROTOCOL 5) holds guests' own tokens, which no longer match:
+  its guest seats go to the first newcomers.
 
 ### Seats and tokens
 
-- **Tokens.** Every browser has a token (16 hex characters). The lobby seats guests in the order they
-  say hello, and the same token always gets the same seat back, at every table size, before the start
-  and after it.
+- **Tokens.** Every browser has a token (16 hex characters, `meta.token`), which never leaves it. In
+  each room it uses its token for the room instead: `roomToken(token, code)`, the first 16 hex of
+  SHA-256 over `token:code`. Guests send that in their hello, and the lobby keys every seat by it, the
+  host's own included, so a token seen in one room claims nothing in another. The lobby seats guests in
+  the order they say hello, and the same token always gets the same seat back, at every table size,
+  before the start and after it. Part A's guests sent their own token to every peer, so every profile
+  from before the fix gets a new token once (`meta.tokenV`, `TOKEN_VERSION` in `js/meta.js`): a token
+  heard then matches nothing now.
 - **Renumbering at Start.** Start closes the empty seats, so seats renumber (host, open, Owl, Pike
   plays as host, Owl, Pike). The session looks a peer's seat up by its token on every message
   (`seatOf`) and keeps the stand-in clock by token, so views, actions and emotes follow the player,
   and a guest's screen takes its seat from each view rather than from the welcome.
-- **Two tabs of one browser** share a token. A hello carrying the host's own token sits under
-  `tab:<token>`, which no real token can match, so a second tab of the host's browser gets a guest
-  seat (the check's duo plays this way), never the host's hand.
-- **PROTOCOL 4** (Decision 6). Host to guest: `welcome { name, seat, lobby }` (seat −1 for a
+- **Two tabs of one browser** share a token, and so a token for the room. A hello carrying the host's
+  own sits under `tab:<token>`, which no real token can match, so a second tab of the host's browser
+  gets a guest seat (the check's duo plays this way), never the host's hand.
+- **PROTOCOL 5** (Decision 6; 4 until Phase 3's final fixes). With three or more browsers every peer
+  hears every other, and Part A's guests said hello, token and all, to each of them, so any guest or a
+  late spectator collected the others' tokens and could take their seats. Now the host announces
+  itself, `host { v }`, to each peer as it arrives and to a knock (a hello with no token). A guest
+  knocks at each peer while it has no host, says hello only to a peer that announced itself, and takes
+  the first welcome's sender as its host; while that host is here, a welcome, nope or announcement
+  from anyone else is ignored. When it goes (a host reload), the guest says hello to whoever announced
+  themselves meanwhile. Host to guest: `host { v }`, `welcome { name, seat, lobby }` (seat −1 for a
   spectator), `lobby`, `view`, `emote { seat, i }`, `nope { why }`, `bye`. Guest to host:
-  `hello { v, name, token }`, `act`, `ping`, `emote { i }`, `bye`. A v3 browser in a v4 room, or the
-  reverse, gets the "different version" message on both sides. A hello without a proper token is
-  ignored.
+  `hello { v }` (a knock), `hello { v, name, token }`, `act`, `ping`, `emote { i }`, `bye`. A drop
+  (`act` lock or unlock) carries the `round` and `turn` it was made for, and the table drops one that
+  arrives after that turn resolved (a guest's clock running out just after the host's, a woken phone's
+  queued lock) instead of playing it into the next turn. A v4 guest in a v5 room is answered `nope
+  { why: 'version' }`; a v5 guest's knock in a v4 room gets the same from the old host, so both see
+  the "different version" message. A hello with a token that isn't 16 hex is ignored.
 
 ### Stand-ins
 
@@ -533,7 +551,9 @@ polish.
   covering." (after a goodbye, "Agent Fox left the table. The station is covering."), and "Agent Fox
   is back." on the return. Once a seat is covered, at three seats and more the tag's line dot says
   so; at two, with no tags, the banner says "Agent Fox's line went dead. The station is covering."
-  until they're back.
+  until they're back. The banner has its own row between the header and the table (`#banner`,
+  `role="status"`) and is written only when its words change, so a screen reader hears it once, and a
+  tap on its link during a reveal isn't taken as a skip.
 
 ### Spectators
 
@@ -543,11 +563,17 @@ polish.
   watch (`MAX_SPECTATORS`); past that the host answers `nope { why: 'full' }` ("That table is full
   and has all the spectators it can take."). A spectator never takes a bot's seat, and one who
   arrived before Start isn't moved into a seat that frees.
-- The screen: "Watching Agent Fox, Agent Owl and Agent Pike's table.", no hand and no controls, seat
-  0 at the bottom and every tag a button, in fixed seat colours. Help and Leave work, the result
-  reads "Waiting for…" where Next round would be, the dossier has no rematch, no victory or defeat cue
-  plays, and a watched match isn't counted as played: no dead buttons. The watcher's toast is "You're
-  watching {host}'s table."; the players' is "{name} is watching."
+- The screen: "Watching: Agent Fox, Agent Owl and Agent Pike." (then who is still choosing, once
+  someone has locked in), no hand and no controls, seat 0 at the bottom and every tag a button named for
+  its seat (no "You"), in fixed seat colours. Help and Leave work, the result reads "Waiting for…" where
+  Next round would be, the dossier has no rematch, and a watched match isn't counted as played: no dead
+  buttons. The watcher's toast is "You're watching {host}'s table."; the players' is "{name} is
+  watching."
+- **Neutral** (Part B). A spectator sees the match from nobody's side: no round sting and no victory or
+  defeat cue, every won city and every city line of the result in its winner's own colour (never the
+  "me" and "them" colours, at two seats too), and each city's flourish in its full voice rather than the
+  rival's octave-down one. The fuse runs dimmed, since a spectator owes nothing, and emote slips show,
+  but there is no Emote button.
 
 ### On the table
 
@@ -565,7 +591,7 @@ polish.
   by seat. A rival's tag opens its file: score, tokens, strips, its mark ("Their rival's drop this
   round"), the unseen list and counts (Card counting) and, online, its line. Sheets close on an outside
   tap or Escape, when a reveal starts and when a card or flash comes, and the escalation prompt wins
-  over them.
+  over them. On a phone they come up from the bottom edge (The phone at 320 and 390).
 - **Colours and patterns** (Decision 9). You are always red; rivals take teal, cobalt (#2c4f9e) and
   plum (#6b2a5a) in table order after you, each with a pattern so colour is never the only cue:
   solid, a 45° hatch, dots and a cross-hatch, on chip bands, tags, lanes and badges (chip bands only
@@ -613,6 +639,130 @@ its copy counts the players ("Three spymasters…"). Seats are Red, Teal, Cobalt
 colours whoever is looking. The cover hides each player's choice as before, skips a folded seat, and
 names who mustn't look ("Teal and Cobalt, no peeking."); after an escalation it covers each seat
 asked in turn.
+
+### The turn timer
+
+Decision 7. Off, 30 s or Blitz 10 s (`TIMERS`), picked in the lobby online, on the Table tab ("Blitz
+10 s to drop each turn. Against the computer only you are timed.") and on the pass sheet. The timer is
+saved with the table, so Continue keeps it.
+
+- **The host's clock.** The clock is pure state in `js/clock.js` (`createClock`, `arm`, `clear`, `left`,
+  `expired`, `viewOf`): it is handed the time on every call and sets no timers.
+  `attachClock(table, { timer, now, humans, armOn, hold, onExpire })` in `js/session.js` runs it on the
+  table that runs the rules (the host's online; the device's own at the Table and in pass and play),
+  ticking every 250 ms, and every view the table sends carries `clock: { kind, left }`, or null with no
+  timer. It lives on the table object (`table.clock`), not in the engine's state or `viewFor`, so seeded
+  matches and the goldens never see it. A guest counts down from the latest view's `left` since that
+  view arrived.
+  PROTOCOL stayed 4 for Part B: `view.clock` is additive, so a Part A guest in a Part B room (Pages
+  caches files for about ten minutes after a deploy) played untimed with no fuse rather than being
+  turned away. The final fixes moved it to 5 for the new handshake (Seats and tokens).
+- **One clock per decision.** A call waiting for answers arms 'answer', planning arms 'drop', a round's
+  result arms 'next', and the match's end clears it. A drop and an answer get the timer's length, Next
+  20 s (`NEXT_MS`). Each arm is keyed by its decision (`kind:matchId:roundNo:turnSeq`), so a lock never
+  restarts the clock; only a turn resolving, a round starting or a call settling does. A call made
+  mid-turn parks the drop's time left while the answers run on the full timer, and the settled call
+  gives it back (a call 12 s into a 30 s turn leaves the drop its 18 s); a call that opens as a turn
+  resolves (a Blackmailer's flip) gives the new turn a full drop. Leaving stops the host's clock at once,
+  before the goodbye.
+- **Who is timed.** People only. Online, the host's and the guests' seats that no stand-in covers, read
+  live: never a computer rival or a stand-in. At the Table, only you. In pass and play, the seat holding
+  the device, from the moment its hand is uncovered (`armOn: 'uncover'`): its drop, or its answer when it
+  owes one; the cover clears the clock, and the result arms Next once a round for the table. Timing
+  every seat would have run out the clock on players who hadn't had the device yet.
+- **When it runs out.** Online, at the deadline plus a 1.5 s grace for the line's latency (`GRACE_MS`;
+  Next has none), the clock acts for every human who hasn't: the card and city a player picked lock in
+  ("Time's up: your drop is locked in."), otherwise the station locks a random legal drop ("Time's up:
+  the station picks your drop."); an unanswered escalation plays on ("Time's up: you play on."); Next is
+  pressed for everyone not ready. A guest's own browser locks a complete pick (card, city, and a partner
+  or Drop alone) at its local zero; a guest who has picked nothing gets the host's random drop after
+  the grace, with no toast (the drop just appears). The host's own seat runs out with the grace too. The
+  Table and pass and play run out at their own zero, with no grace (10 to 14 ms after zero in the
+  check). Expiry stops the moment the decision changes, so a lock that resolves the turn never locks
+  anyone into the next one.
+- **The fuse.** A lit fuse burns across the top of your hand, as wide as the cards and behind a lifted
+  one: an ink cord edged to read at night, the unburnt fuse in mustard, and a spark at the burning end
+  that flickers by opacity only. It turns red for the last five seconds (`HOT_MS`), with a stopwatch tick
+  each second (`audio.countdown`, a little higher and harder each time: an effect, so it mutes with
+  them; only while you still have to act, and never in a hidden tab). The answer's fuse sits under the
+  escalation prompt's heading, Next's under the result's (and on See the board's strip). Every render
+  draws it from the time left, so it never restarts mid-countdown; it dims, its spark gone, once you have
+  locked, answered or pressed Next. It is a `role="timer"` ("12 s to lock in"). Under reduced motion it
+  stands still and shows the seconds on a slip at the cord's end, updated once a second.
+- **The Table holds its clock** while a reveal or a card is up, so Blitz's 10 s aren't spent watching
+  the reveal or reading the round card, and an intro card can't run out turn 1; the fuse stands still
+  meanwhile (`held`). `__game.holdClock(on)` holds it for a check.
+- **Known trade-offs.** Online, Blitz loses time to reveals and cards: the host's clock runs from the
+  moment a turn resolves while everyone watches the reveal (Speed up and Skip win it back; a reveal
+  allowance is a possible Phase 4 change). A host tab hidden for more than five minutes runs its timers
+  about once a minute (Chrome's throttling), so a clock can run out up to a minute late.
+
+### Emotes
+
+Decision 8. Online, a seated player can say one of six fixed lines: "Bluffing?", "Touché", "Well
+played", "Not a chance", "Bon voyage" and "Hmm." (`EMOTES` in `js/data.js`). The wire carries only the
+index (`emote { i }` from a guest, `emote { seat, i }` from the host), so there is no free text, and the
+host refuses a bad index or a seat outside the table.
+
+- **The button.** Emote, a cut-paper speech slip in the header between Leave and Help, for the host and
+  the guests on the play screen, the result included. There is none at the Table or in pass and play
+  (nobody to send to), none for a spectator, and none on the match-over dossier, which has no tags. It
+  deals a row over the controls: the six lines as paper slips, then Hide emotes; right-aligned on
+  desktop, full width on a phone (two lines at 390px, every target 40px or more). The tool is inked red
+  while the row is open, a colour change only. A tap outside closes the row and goes on to do what it
+  does, as with the unseen strip; Escape closes it and puts focus back on Emote. On a phone, online, the
+  header gives up the game's name to make room for the tool.
+- **The slip.** The host relays each emote to the whole table and its spectators, the sender included,
+  and every screen hangs a paper slip 10px under the sender's tag (at two seats, under their side of the
+  scorebar), its tail pointing at the tag, kept inside the window: the sender's colour and pattern down
+  its left edge, the line in League Gothic, tilted, with a hard paper shadow. It flicks in (no scale),
+  stays 2.5 s (`EMOTE_MS`) and lifts away in 160 ms; under reduced motion it just appears and goes. One
+  slip per seat: a new emote replaces that seat's slip and its time. The slips sit in their own layer
+  outside the table (`#emote-root`, pointer-events none), so a redraw never restarts one and a slip never
+  takes a tap meant for a tag. A screen reader hears "Agent Owl: Well played" ("You: …" for yours).
+- **One every three seconds.** The host takes one emote a seat every 3 s (`EMOTE_GAP_MS`), its own
+  included, and drops a second within that time: it shows nowhere. The flick (a short rising paper snap
+  and a landing tick, `audio.emote`, an effect) plays as each slip lands, the sender's own included, so a
+  dropped press is silent; never in a hidden tab.
+- **Hide emotes**, in the row and on the last line of Help's Rules (which also explains Emote), hides the
+  other players' slips at once and is saved through `store`, so it survives a reload. Your own slip still
+  shows, so you see what you said. Hidden emotes still arrive (`ui.emotes`) but aren't drawn.
+- **Bots and stand-ins never emote**, and a spectator sees every slip but can't send one.
+
+### The phone at 320 and 390
+
+- **Four tags.** At 390px four tags hold the longest codename, "Agent Marten", in every seat in full:
+  the tag bar ends at 382 of 390, Lock in at 545 and the hand at 719 of 844. When any full name doesn't
+  fit its tag (`fitTags()`, after every render, on a resize and once the web font loads), every tag drops
+  its title the same way (Agent, The, Mr, Mrs, Ms, Dr), so "Agent Wren", "Agent Wren II" and "Agent Wren
+  III" read "Wren", "Wren II" and "Wren III". A fixed 7ch would have cut "Wren III" to "Wren I…" and
+  every codename to "Agent…". A name still too long ends in an ellipsis; the full name stays in the tag's
+  label and in its file. The plan's fallback, initials, wasn't needed.
+- **320px.** Under 360px the game's name gives way in the header (online, the Arcade link shrinks to its
+  arrow, 40px square), a city's sockets and chips go to 29×42, plates and totals a size down and the
+  controls' slips to 19px. A four-seat table with "Agent Marten" in every seat fits 320×568 (the tags end
+  at 314 of 320, Lock in at 552 of 568, the hand below the fold), and so does a two-seat one; before,
+  the board and the header ran to 364px at any table size.
+- **The hand from `--n`.** Under 360px each card is `min(82px, (100vw − 12px − (n − 1) × 3px) / n)` wide
+  for a hand of n, with a smaller power, picture and name, and a print for five and for six or seven
+  cards: five and seven cards both fit 320px (5 to 315px), with nothing spilling out of a card. The drag
+  ghost copies its card's padding and the computed size, line height and letter spacing of its power,
+  name and text, so it matches the card it left at every size.
+- **Bottom sheets.** At 600px and below, the city dossier and a rival's file come up from the bottom
+  edge: full width, at most 70% of the window's height (`70dvh`, with `70vh` before it as the fallback),
+  only the top edge cut (in px), sliding up (not under reduced motion), the body scrolling, and a
+  full-width Close at least 48px tall at the foot, in the thumb's reach, rather than a × in a corner. At
+  390px the city dossier is 591px tall with a 52px Close; at 320px both sheets are 398px.
+- **Start stays in reach.** On the Table tab, Start sits in a bar that sticks to the window's foot (on
+  the table's own ground and grain, fading in over what scrolls behind) until the form's end comes up,
+  so it is on screen with three rungs or all five: 739–789 of 800 on desktop, 782–834 of 844 on a phone.
+- **Night at four seats.** The tags stay ink with paper type, and the lanes stand at 60% opacity while
+  the plates stay at full (it used to be a brightness filter on the chips), so the final flip plays in
+  the spotlights as it does at two seats.
+- **Checked** in the phone smoke: `narrowTable` goes to 320×568 (and back to 390×844 in a `finally`) for
+  `phoneFits`, the tags, five and seven cards (`__game.give(n, seat)` deals them from the deck straight
+  into the hand, at the Table and in pass and play only) and the ghost; both sheets are measured at 390
+  and 320.
 
 ### The deal RNG
 
@@ -690,14 +840,36 @@ follow-up, not built.
 ### Checking the table
 
 `npm run check -- dead-drop` runs `table(pages, ctx)` from `smoke.mjs` after the duo: four pages of one
-browser (a host, two guests and a watcher, `tablePages.local`) joined over BroadcastChannel play the ten
-steps of a three-seat match (lobby and Start, hands and no leaked identities, the spectator, an escalation
-with two answers, an emote and its rate limit, a closed page covered by a stand-in and its seat back, a
-reload by token and a host reload, a leave covered at once, a rematch). `npm run verify-live` plays the
-same with three separate browsers through the public relays. Local-only knobs make it deterministic: with
-`?net=local` a URL may carry `token=<16 hex>`, `name=<codename>` and `ping=<ms>` (in memory, never saved),
-and `__game.standInMs(ms)` shortens the stand-in wait; `__game.net` reports `{ role, code, seat }` and
-`__game.emote(i)` sends an emote. None of them touch the real transport.
+browser (a host, two guests and a watcher, `tablePages.local`) joined over BroadcastChannel play the
+eleven steps of a three-seat match on a 30 s timer (lobby and Start, hands and no leaked identities, the
+spectator, an escalation with two answers, emotes and their limit, a closed page covered by a stand-in
+and its seat back, a reload by token and a host reload, a leave covered at once, a rematch, the clock
+running out). `npm run verify-live` plays the same with three separate browsers through the public
+relays. Local-only knobs make it deterministic: with `?net=local` a URL may carry `token=<16 hex>`,
+`name=<codename>` and `ping=<ms>` (in memory, never saved), and `__game.standInMs(ms)` shortens the
+stand-in wait; `__game.net` reports `{ role, code, seat }`, `__game.emote(i)` sends an emote,
+`__game.clock` (`{ expire(), kind }`, or null with no timer) runs the turn clock out at once through its
+own path, and `__game.holdClock(on)` holds it. None of them touch the real transport.
+
+- **The timer.** The host picks Timer 30 s in the lobby. After Start every page shows a drop fuse and
+  every view carries `clock.left` (above 0, at most 30000), and only the host has `__game.clock`. The
+  host holds its clock for the steady steps, and again after its reload, which comes back with the timer
+  and a clock. Step 11, in the rematch: seat 2 locks its own drop, the host has picked nothing, and
+  `__game.clock.expire()` resolves the turn: the host gets a random legal drop, seat 2's own stands, and
+  the stand-in, never timed, locks by itself.
+- **Emotes** (step 6), all through the Emote button. Seat 1 presses Well played, and within a second (5 s
+  live) its slip hangs under seat 1's tag on every page, the watcher's included, and takes no tap. A
+  second press within 3 s is dropped by the host: nothing draws there and `ui.emotes` is unchanged. Then
+  the host hides emotes, and seat 1's next, once 3 s have passed on the host's clock, lands in
+  `ui.emotes` and draws nothing, while seat 2 shows it. The flicks are counted (one per slip shown, none
+  for the dropped press), and locally seat 2 measures the row at 390×844. The watcher has no Emote
+  button (step 4), and Hide emotes survives the host's reload (step 8).
+- **The default smoke's timer steps** (desktop and phone) cover the Table and pass and play: a ladder
+  match has no fuse and no clock; a Blitz Table at three seats burns its fuse (measured with `phoneFits`
+  on a phone); `expire()` locks the picked drop, then a random one; the answer's fuse sits on the prompt
+  and Next's on the result and on See the board's strip; the Table's own zero locks the picked drop;
+  reduced motion counts the seconds; Continue keeps the timer; and pass and play's fuse burns only once a
+  hand is uncovered, with Next for the table.
 
 ## Ways to play
 
@@ -707,14 +879,15 @@ and `__game.standInMs(ms)` shortens the stand-in wait; `__game.net` reports `{ r
   three and four).
 - **Online, two to four:** the host opens a table and shares a link or QR code; friends join on their
   own phones, computer rivals can fill the empty seats, and the host presses Start. The host's browser
-  runs the rules (`shared/net.js` over Trystero). Invite-only, codenames from a list, no chat. A line
-  that goes dead gets a stand-in until the player comes back by their token, and anyone who arrives
-  after the start watches. Every match carries an id, so Rematch brings everyone back to a fresh
-  table and the matches-played count takes each match once, however often a player reloads. Leaving
-  says goodbye: the others see "Agent X left the table". The host picks the roster in the lobby
-  (Classic by default).
-- **Pass and play:** one device for two to four; a sheet picks the players and Classic or Mixed, and
-  a cover screen hides each player's choice (a wiretapped mark plays before its wiretapper).
+  runs the rules (`shared/net.js` over Trystero). Invite-only, codenames from a list, no chat: six set
+  emotes instead, and an optional turn timer the host picks in the lobby. A line that goes dead gets a
+  stand-in until the player comes back by their token, and anyone who arrives after the start watches.
+  Every match carries an id, so Rematch brings everyone back to a fresh table and the matches-played
+  count takes each match once, however often a player reloads. Leaving says goodbye: the others see
+  "Agent X left the table". The host picks the roster in the lobby (Classic by default).
+- **Pass and play:** one device for two to four; a sheet picks the players, Classic or Mixed and the
+  timer, and a cover screen hides each player's choice (a wiretapped mark plays before its
+  wiretapper).
 - Online, the Table and pass and play have the roster card, the cable, New stamps and the unseen
   counts, but no twist chip or remarks.
 
@@ -938,6 +1111,15 @@ the city plays its flourish, and the stake (doubled, plus any pot) slides to the
 score. If the loser held the film city, a strip of film then flies from its canister into
 their reel.
 
+**The answers at a full table** (Phase 3). At three seats and more an escalation asks everyone still
+in, and the answers come back together on one card: over bars in the escalator's colour "Answers"
+slams down, "To Teal's escalation" (or "To your escalation"), and one paper slip per seat asked is
+dealt in on the slam, in table order after the escalator: "Agent Fox plays on." in the seat's colour,
+"Agent Owl aborts." stamped red. It holds 1.5 s, and a tap or a key skips it. Then each aborting seat's
+agents lift, tilt and fade off the board in turn while the ticker says "Agent Owl pulls out of the
+round.", their tags read Out, the stake goes into the pot, and the others play on for it. An answered
+Blackmailer's call plays the same card.
+
 ## Seats and the engine (Phases 2a to 3: two to four play)
 
 The rules engine, the bots, the table, the simulator and, since Phase 3, every screen play 2, 3 or
@@ -991,8 +1173,9 @@ the screens). Each rule reduces to the two-player one at two seats:
   re-issuing alone wasn't enough, because the uids were `a0.0`–`a0.11` in deck order, so a
   re-issued `a0.12` would have said "this is the card the Getaway sent home". A fresh uid looks
   like every other uid a rival has never seen.
-- **Versions.** The saved state is `v: 2` and the network `PROTOCOL` is 4 (3 in Phase 2b-ii; 4 since
-  Phase 3's lobby, spectators and stand-ins): a 2b-i guest would crash on agents it doesn't know, so
+- **Versions.** The saved state is `v: 2` and the network `PROTOCOL` is 5 (3 in Phase 2b-ii; 4 for
+  Phase 3's lobby, spectators and stand-ins; 5 since its final fixes: the host announces itself and
+  guests say hello to it alone, Seats and tokens): a 2b-i guest would crash on agents it doesn't know, so
   it gets the "different version" message, as a v1 peer does, and a 2b-ii browser and a Phase 3 room
   turn each other away the same way. Phase 3 adds nothing to a seeded match's state or views; a real
   table's `rng` is four numbers and its `seed` null (The deal RNG), and a table's save adds
@@ -1009,8 +1192,8 @@ the screens). Each rule reduces to the two-player one at two seats:
   deals every match of the table, rematches included, from `table.setup` through `matchOptions` (a
   Mixed roster is drawn from `createRng('<seed>:setup')`, so a Classic table's deals are unchanged),
   and the table saves its setup (a missing or malformed one restores as Classic).
-  `table.restart(setup)` re-deals an untouched table; 2b-ii's lobby used it for the roster switch,
-  and since Phase 3 the lobby keeps the setup and the table is dealt at Start. The `lock` action
+  2b-ii's lobby re-dealt an untouched table for the roster switch through `table.restart(setup)`;
+  since Phase 3 the lobby keeps the setup and the table is dealt at Start, and `restart` is gone. The `lock` action
   passes `{ uid, city }` plus a string `partner` and a boolean `down`, and nothing else, to the
   engine. Real tables used to seed the 32-bit deal RNG from crypto (`randomSeed()`, 16 hex
   characters, instead of `Date.now()`); since Phase 3 they pass `seed: null` and deal from 128 bits

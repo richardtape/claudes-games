@@ -9,7 +9,7 @@
 //
 // Only call joinRoom when the player chooses to play online: the Trystero import and relay
 // connections are network traffic (and console noise when a relay is down).
-// createMemoryPair() gives two connected rooms for node:test, createMemoryHub(n) any number.
+// createMemoryPair() gives two connected rooms for node:test, createMemoryHub(n) any number (and add() more).
 
 export const TRYSTERO_URL = 'https://cdn.jsdelivr.net/npm/trystero@0.26.0/+esm';
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
@@ -122,13 +122,15 @@ export function createMemoryPair() {
  * `n` rooms (`peer-0` … `peer-${n-1}`) wired to each other, delivering asynchronously like
  * createMemoryPair. `send(type, data, to)` reaches that peer only, or every other room without `to`;
  * `leave()` tells every other room (onPeerLeave), and a room that has left sends and hears nothing.
- * For tests of three or more players.
+ * `add()` brings in another room later (a reload, a late arrival: `peer-${n}` and on), which meets the
+ * others at the next connect(). For tests of three or more players.
  */
 export function createMemoryHub(n) {
-  const rooms = Array.from({ length: n }, (_, i) => makeRoom(`peer-${i}`));
+  const rooms = [];
   const gone = new Set();
   const later = (fn) => setTimeout(fn, 0);
-  for (const from of rooms) {
+  const add = () => {
+    const from = makeRoom(`peer-${rooms.length}`);
     from.send = (type, data, to) => {
       if (gone.has(from)) return;
       const copy = JSON.stringify(data ?? null);
@@ -142,11 +144,14 @@ export function createMemoryHub(n) {
       gone.add(from);
       later(() => rooms.forEach((room) => room !== from && !gone.has(room) && room._leave(from.selfId)));
     };
-  }
-  /** Call after every room has set its handlers. */
+    rooms.push(from);
+    return from;
+  };
+  for (let i = 0; i < n; i++) add();
+  /** Call after every room has set its handlers (again after add(): rooms already met are left as they are). */
   const connect = () =>
     later(() => {
       for (const a of rooms) for (const b of rooms) if (a !== b && !gone.has(a) && !gone.has(b)) a._join(b.selfId);
     });
-  return { rooms, connect };
+  return { rooms, connect, add };
 }

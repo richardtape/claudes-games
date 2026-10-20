@@ -30,6 +30,13 @@ export function countWin(meta, matchId) {
 }
 
 export const META_VERSION = 2;
+/**
+ * The token's issue (`meta.tokenV`). 1: issued since PROTOCOL 5, when guests began sending a token worked
+ * out per room and never their own. A profile without it may have sent its token to everyone in a room
+ * (Phase 3 Part A guests hello'd every peer, and a two-player room's third browser heard the hello), so
+ * migrateMeta gives it a new one, once.
+ */
+export const TOKEN_VERSION = 1;
 
 const AGENT_IDS = AGENTS.map((a) => a.id);
 const CITY_IDS = CITIES.map((c) => c.id);
@@ -41,14 +48,17 @@ const ids = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string' && 
  * Bring a saved profile up to date. Fields it doesn't know are kept as they are (later phases
  * add their own); the known ones are cleaned, falling back to `fresh` where unusable. `met` (Phase
  * 2b-ii, from meet()) keeps the known `agents`, `cities` and `rivals` in each of its lists, once each.
+ * A token from before TOKEN_VERSION is replaced by `fresh.token`, once (the game saves the result).
  */
 export function migrateMeta(raw, { codenames, rivals, fresh, agents = AGENT_IDS, cities = CITY_IDS }) {
   const m = isObject(raw) ? raw : {};
+  const current = m.tokenV === TOKEN_VERSION && typeof m.token === 'string' && /^[0-9a-f]{16}$/.test(m.token);
   return {
     ...m,
     v: META_VERSION,
     codename: codenames.includes(m.codename) ? m.codename : fresh.codename,
-    token: typeof m.token === 'string' && /^[0-9a-f]{16}$/.test(m.token) ? m.token : fresh.token,
+    token: current ? m.token : fresh.token,
+    tokenV: TOKEN_VERSION,
     beaten: Array.isArray(m.beaten) ? rivals.filter((id) => m.beaten.includes(id)) : [],
     matches: count(m.matches),
     onlineWins: count(m.onlineWins),

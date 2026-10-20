@@ -27,6 +27,19 @@ export function store(slug) {
         localStorage.removeItem(k(key));
       } catch {}
     },
+    /** Every key this game has saved (without the prefix), e.g. to prune old saves; [] when storage is unavailable. */
+    keys() {
+      try {
+        const out = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key?.startsWith(k(''))) out.push(key.slice(k('').length));
+        }
+        return out;
+      } catch {
+        return [];
+      }
+    },
   };
 }
 

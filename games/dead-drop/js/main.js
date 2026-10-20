@@ -4,9 +4,10 @@ import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, s
 import { createSfx } from '../../../shared/sfx.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
-import { AGENT, AGENTS, CITIES, CITY, CLASSIC_CITIES, CODENAMES, DECK, MAX_SEATS, MIN_SEATS, RIVALS, ROSTER, RULES, SEAT_COLOURS, SEAT_NAMES, TARGET, TIMERS, TURNS } from './data.js';
+import { AGENT, AGENTS, CITIES, CITY, CLASSIC_CITIES, CODENAMES, DECK, EMOTES, MAX_SEATS, MIN_SEATS, RIVALS, ROSTER, RULES, SEAT_COLOURS, SEAT_NAMES, TARGET, TIMERS, TURNS } from './data.js';
 import { deckList, rivalsOf, seatCount, turnOrder } from './engine.js';
-import { attachBot, createTable, guestSession, hostSession, restoreTable, canRestore } from './session.js';
+import { attachBot, attachClock, createTable, guestSession, hostSession, restoreTable, canRestore, roomToken } from './session.js';
+import { NEXT_MS, viewOf } from './clock.js';
 import { canStart, createLobby, fill as fillSeats, publicLobby, resize, setSetup, setTimer, taken, unfill } from './lobby.js';
 import {
   canisterHTML,
@@ -135,6 +136,11 @@ const ui = {
   tablePicks: null, // the Table tab: the rival id chosen for each rival seat (null: the defaults, tableDefaults)
   tableRoster: 'classic', // the Table tab: classic | mixed (from your network)
   passSeats: 2, // pass and play's sheet: how many players (2-4)
+  tableTimer: 0, // the Table tab: the turn timer in ms (TIMERS: 0 off, 30 s, Blitz 10 s)
+  passTimer: 0, // pass and play's sheet: the turn timer in ms
+  clockHeld: false, // __game.holdClock(): the turn clock waits (a check's steady table)
+  passClock: null, // pass and play: the decision the turn clock was last armed for, `${seat}:${kind}:${matchId}:${roundNo}:${turnSeq}`
+  remoteAt: 0, // guest: performance.now() when the latest view (ui.remote) arrived, from which its clock counts down
   lobby: null, // online, before the start: the lobby as everyone may see it (publicLobby: seats, size, timer, roster; never a token)
   epilogue: false, // a ladder win over Control has just happened: Final report plays the epilogue before the dossier
   recruits: null, // that win's recruits toast, held until the epilogue has gone (flushRecruits)
@@ -149,10 +155,15 @@ const ui = {
   typeNext: null, // a line just said (say()): the next render types it out in the ticker again
   calledKey: null, // `${matchId}:${roundNo}:${by}` of the last call whose answers card was due (three seats and more)
   sheetEnter: false, // a city dossier or a rival's file has just been opened: its next render slides it in (once)
-  emotes: [], // online: the last emote from each seat, { seat, i, at } (Task 14 draws them)
+  emotes: [], // online: the last emote from each seat, { seat, i, at } (by its sender's tag for EMOTE_MS: showEmote)
+  hideEmotes: saved.get('hideEmotes', false) === true, // Hide emotes (the emote row, Help → Rules): others' emotes still arrive, but draw nothing
+  emoteOpen: false, // online at a seat: the row of emotes is open above the controls (the header's Emote)
+  emoteEnter: false, // the row has just been opened: its next draw slides it in (once)
+  bannerText: '', // the banner's words as #banner shows them (syncBanner), '' for none
 };
 let table = null;
 let bots = []; // the computer rivals seated at the table (attachBot), one per rival seat
+let tableClock = null; // solo at a Table, pass and play: the turn clock on the table (attachClock), with a timer
 let standInWait; // __game.standInMs(ms): the host's stand-in wait for this tab (undefined: the session's STANDIN_MS)
 let unwatch = null;
 let modalShown = ''; // the HTML last put in #modal-root
@@ -274,9 +285,9 @@ function persist() {
   if (!table) return;
   // A Table (solo at three or four seats) keeps its rivals, so Continue seats them again.
   if (ui.mode === 'solo' || ui.mode === 'pass') saved.set('match', { mode: ui.mode, rival: ui.rival?.id ?? null, free: ui.mode === 'solo' && ui.free, ...(ui.mode === 'solo' && ui.tableRivals ? { rivals: ui.tableRivals } : {}), table: table.toJSON() });
-  // The host saves its lobby (with the guests' tokens, so a reload gives each their seat back) and
-  // the table, once the match has started: before Start there is no table to save.
-  if (ui.mode === 'host' && ui.net?.code && ui.net.session && ui.net.lobby?.started) saved.set(`host-${ui.net.code}`, { ...ui.net.session.toJSON(), at: Date.now() });
+  // The host saves its lobby (with the guests' tokens for this room, so a reload gives each their seat
+  // back) and the table, once the match has started: before Start there is no table to save.
+  if (ui.mode === 'host' && ui.net?.code && ui.net.session && ui.net.lobby?.started) saved.set(`host-${ui.net.code}`, { ...ui.net.session.toJSON(), at: Date.now(), roomTokens: true });
 }
 
 /**
@@ -318,6 +329,9 @@ function freshMatchUi() {
   ui.tagOpen = null;
   ui.calledKey = null;
   ui.sheetEnter = false;
+  ui.passClock = null;
+  ui.emoteOpen = false;
+  ui.emoteEnter = false;
   cancelDrag();
   clearOverlays();
 }
@@ -329,6 +343,7 @@ function resetMatchUi() {
   ui.remote = null;
   ui.tableRivals = null;
   ui.emotes = [];
+  clearEmotes();
   ui.lobby = null;
   stopBots();
 }
@@ -360,10 +375,91 @@ function countOnce(id) {
 const botHold = () => ui.updating || ui.holdRival;
 
 /** Stand every computer rival down (they make no further move). */
-function stopBots() {
+function standDown() {
   for (const b of bots) b.stop();
   bots = [];
 }
+
+/** Leaving the table: the computer rivals stand down and its turn clock stops. */
+function stopBots() {
+  standDown();
+  tableClock?.stop();
+  tableClock = null;
+}
+
+/**
+ * Solo at a Table and pass and play: the turn clock, when the table has a timer (a resumed one keeps
+ * its own). Solo times only you, never the computer ("against the computer only you are timed"), and
+ * waits while a reveal or a card is up (beginMatch's round card included, so it can go first). Pass and
+ * play times whoever holds the device, from the moment they uncover (passClock).
+ */
+function startClock() {
+  tableClock?.stop();
+  tableClock = null;
+  if (!table?.timer) return;
+  const pass = ui.mode === 'pass';
+  tableClock = attachClock(table, {
+    timer: table.timer,
+    humans: () => (!pass ? [0] : ui.screen === 'play' && isSeat(table.state, ui.seat) ? [ui.seat] : []),
+    armOn: pass ? 'uncover' : 'change',
+    hold: () => ui.clockHeld || (!pass && ui.updating),
+    onExpire: timeUp,
+  });
+  passClock();
+}
+
+/**
+ * Pass and play: the clock runs for the seat holding the device, on what it must decide now (answer a
+ * call, or drop), armed once per decision: as it uncovers, or when its call settles and it drops next.
+ * On the round's result, shown to everyone, it runs for Next. Covered, there is no clock.
+ */
+function passClock() {
+  if (ui.mode !== 'pass' || !tableClock || !table) return;
+  // The round's result is everyone's: whoever holds the device presses Next, or the clock does after NEXT_MS.
+  if (ui.screen === 'play' && table.state.phase === 'round-over') {
+    const key = `next:${table.matchId}:${table.state.roundNo}`;
+    if (key !== ui.passClock) {
+      ui.passClock = key;
+      tableClock.arm('next');
+    }
+    return;
+  }
+  const v = ui.screen === 'play' && isSeat(table.state, ui.seat) ? table.view(ui.seat) : null;
+  if (!v || v.phase !== 'plan' || outOfRound(v, ui.seat)) {
+    ui.passClock = null;
+    tableClock.clear();
+    return;
+  }
+  const kind = owesAnswer(v) ? 'answer' : 'drop';
+  const key = `${ui.seat}:${kind}:${v.matchId}:${v.roundNo}:${v.turnSeq}`;
+  if (key === ui.passClock) return;
+  ui.passClock = key;
+  tableClock.arm(kind);
+}
+
+/**
+ * The turn clock ran out on this table (solo, pass and play, or the host's own seat): the card and city
+ * I have picked lock in, before the clock picks a drop at random for whoever hasn't. A toast says so.
+ * On pass and play's shared result it presses Next.
+ */
+function timeUp(kind) {
+  const v = view();
+  // Pass and play's shared result: nobody's seat is uncovered, so the clock presses Next for the table.
+  if (kind === 'next') {
+    if (ui.mode === 'pass' && ui.screen === 'play' && table?.state.phase === 'round-over') actions.next();
+    return;
+  }
+  if (!v || v.phase !== 'plan' || !isSeat(v, me()) || outOfRound(v)) return;
+  if (kind === 'answer' && owesAnswer(v)) toast('Time’s up: you play on.');
+  if (kind !== 'drop' || myPlan(v)) return;
+  if (pickReady(v)) {
+    lockIn();
+    toast('Time’s up: your drop is locked in.');
+  } else toast('Time’s up: the station picks your drop.');
+}
+
+/** The drop I'm choosing is complete, so Lock in would lock it: a card, its city, and an Accomplice's partner (or Drop alone). */
+const pickReady = (v) => !!ui.selected && ui.target !== null && !(partnerPrompt(v) && ui.partner === null);
 
 /**
  * Seat the computer rivals of a solo table, one per rival seat: the ladder's rival at seat 1, or a
@@ -371,7 +467,7 @@ function stopBots() {
  * raises ui.updating): a bot's first tick checks its hold at once.
  */
 function seatBots() {
-  stopBots();
+  standDown();
   if (ui.mode !== 'solo' || !table) return;
   const ids = ui.tableRivals ?? [ui.rival.id];
   bots = ids.map((id, i) => attachBot(table, i + 1, RIVALS.find((r) => r.id === id) ?? RIVALS[0], { hold: botHold }));
@@ -426,6 +522,7 @@ function startTable({ seats = 3, rivals: ids = ['wren', 'magpie', 'heron'], setu
   if (resume) restoreSaved(resume);
   else table = createTable({ seats: n, names: names ?? [meta.codename, ...tableNames(ui.tableRivals)], setup, timer, seed, cities });
   watch(table);
+  startClock();
   beginMatch();
   seatBots();
 }
@@ -440,16 +537,17 @@ function startPass({ seats = 2, setup = CLASSIC_SETUP, timer = 0, resume = null 
   else table = createTable({ seats, names: SEAT_NAMES.slice(0, seats), setup, timer });
   watch(table);
   ui.seat = null;
+  startClock();
   beginMatch();
 }
 
 /**
  * The lobby of a host table saved without one (the build before the lobby saved only the table): every
- * guest seat waits unclaimed, and the first newcomer to say hello takes it.
+ * guest seat waits unclaimed, and the first newcomer to say hello takes it. startHost keys the host's seat.
  */
 function savedLobby(json) {
   const n = json.state.scores.length;
-  const lobby = createLobby({ host: { name: meta.codename, token: meta.token }, size: n });
+  const lobby = createLobby({ host: { name: meta.codename, token: null }, size: n });
   for (let s = 1; s < n; s++) lobby.seats[s] = { kind: 'guest', name: json.names?.[s] ?? 'Agent ?', token: null, here: false };
   lobby.started = true;
   return lobby;
@@ -492,6 +590,9 @@ function holdingBots(fn) {
  * before the lobby saved no lobby: then every guest seat waits for the first newcomer), to reopen.
  */
 async function startHost({ code = roomCode(), resume = null } = {}) {
+  // The host's seat is keyed by its token for this room, as every guest's is: the browser's own token
+  // stays out of the lobby and the save, and a second tab of this browser sits as a guest (session.js).
+  const key = roomToken(meta.token, code);
   leaveMatch();
   resetMatchUi();
   ui.mode = 'host';
@@ -501,13 +602,18 @@ async function startHost({ code = roomCode(), resume = null } = {}) {
   history.replaceState(null, '', `#host=${code}`);
   if (resume) {
     net.lobby = lobbyFits(resume.lobby, resume.table) ? resume.lobby : savedLobby(resume.table);
+    // A save from before PROTOCOL 5 keyed its guests by their own tokens, which they no longer send (and
+    // have since replaced): each guest seat goes to the first newcomer, as in a save without a lobby.
+    if (!resume.roomTokens) for (const seat of net.lobby.seats) if (seat.kind === 'guest') seat.token = null;
     restoreSaved(resume.table);
     table.names[0] = meta.codename;
     watch(table);
-  } else net.lobby = createLobby({ host: { name: meta.codename, token: meta.token } });
+  } else net.lobby = createLobby({ host: { name: meta.codename, token: null } });
   render();
   let room;
   try {
+    // Before the room opens, so nothing comes between it and the session's handlers.
+    net.lobby.seats[0].token = await key;
     room = await joinRoom({ slug: SLUG, code, transport: NET });
   } catch (err) {
     if (ui.net !== net) return;
@@ -533,6 +639,9 @@ async function startHost({ code = roomCode(), resume = null } = {}) {
       table: resume ? table : null,
       makeTable: (S) => createTable({ seats: S.seats, names: S.names, setup: lobby.setup, timer: lobby.timer }),
       hold: botHold,
+      // The host's clock times the host too: its own pick locks in as it runs out. A check can hold it.
+      clockHold: () => ui.clockHeld,
+      onExpire: timeUp,
       standInMs: standInWait,
       onEmote: heardEmote,
       onStatus: (s, name) => {
@@ -635,6 +744,8 @@ async function startGuest(code) {
   };
   net.session = guestSession({
     room,
+    // The session sends the host a token worked out for this room (roomToken), never meta.token itself.
+    code,
     name: meta.codename,
     token: meta.token,
     // A hidden tab (locked, or switched away) stops pinging, so after 30 s the station covers its seat;
@@ -645,6 +756,7 @@ async function startGuest(code) {
       // A goodbye is still on its way out: views from the old room no longer belong on screen.
       if (ui.net !== net) return;
       ui.remote = v;
+      ui.remoteAt = performance.now();
       // Every view names the seat it is for (-1: watching). It can differ from the welcome's, since the
       // lobby closes its empty seats at the start.
       if (Number.isInteger(v.seat) && v.seat >= -1 && v.seat < seatCount(v)) ui.seat = v.seat;
@@ -721,9 +833,18 @@ const STATUS_TOASTS = {
   watching: (name) => `${name} is watching.`,
 };
 
-/** An emote arrived (the host relays every seat's, its own included): the last one from each seat. */
+/**
+ * An emote arrived (the host relays every seat's, its own and the sender's included): the last one from
+ * each seat, and its slip by the sender's tag. Hide emotes draws none of the others' (your own still
+ * shows, so you see what went out). Its flick sounds as it lands, the sender's own too: a press the host
+ * turned away (too soon after the last) comes back as nothing, and makes no sound.
+ */
 function heardEmote({ seat, i }) {
   ui.emotes[seat] = { seat, i, at: performance.now() };
+  const mine = seat === me();
+  if ((ui.hideEmotes && !mine) || ui.screen !== 'play' || !EMOTES[i]) return;
+  showEmote(seat, i);
+  if (!document.hidden) audio.emote();
 }
 
 /** Bookkeeping as a match comes on screen: count it (once per match id). A match only watched isn't one you played. */
@@ -756,6 +877,8 @@ function leaveMatch({ keepSave = false } = {}) {
   unwatch = null;
   const { room, session } = ui.net || {};
   ui.net = null;
+  // The host's clock stops now, not once the goodbye has gone (it could still run out meanwhile).
+  session?.clock?.stop();
   // Say goodbye before leaving the room, so the other side reads "left the table", not a lost
   // connection. bye() settles within 400 ms even if the message never goes out.
   if (room) Promise.resolve(session?.bye()).finally(() => (session ? session.close() : room.leave()));
@@ -767,7 +890,14 @@ function leaveMatch({ keepSave = false } = {}) {
 }
 
 function act(a) {
-  if (ui.mode === 'guest') return ui.net?.session?.act(a);
+  if (ui.mode === 'guest') {
+    // A drop, or taking one back, names the turn it was made for: the host drops one that arrives after
+    // that turn resolved (the host's clock ran out first, or a phone woke with it queued), rather than
+    // playing it into the next turn.
+    const v = view();
+    if ((a.a === 'lock' || a.a === 'unlock') && v?.round) a = { ...a, round: v.roundNo, turn: v.round.turn };
+    return ui.net?.session?.act(a);
+  }
   if (!table) return false;
   if (ui.mode === 'pass') {
     if (a.a === 'next' || a.a === 'rematch') return allSeats(table.state).reduce((ok, s) => table.act(s, a) | ok, 0);
@@ -1049,7 +1179,10 @@ async function showLatest() {
     const kind = theirs(res.folded) ? 'fold' : theirs(res.winner) ? 'won' : res.winner === me() ? 'lost' : null;
     ui.remark = { key: resultKey, text: kind ? remark(kind) : null };
   }
-  if (ui.mode === 'pass') passCover(v);
+  if (ui.mode === 'pass') {
+    passCover(v);
+    passClock();
+  }
   audio.level(levelFor(v));
   if (v.phase === 'match-over' && !ui.matchDone) {
     ui.matchDone = true;
@@ -1201,26 +1334,31 @@ async function finale(e, next, bottom, cancelled) {
         const s = Number(el.dataset.total);
         el.textContent = String(Math.round((totals[s] * step) / 6));
       }
-      audio.tick(step);
+      // A skipped reveal runs these steps out at once: the count-up's ticks would land in one burst.
+      if (!ui.skip) audio.tick(step);
       await wait(55);
       if (cancelled()) return;
     }
     const w = e.cityWinners[ci];
-    sec.classList.add(w === null ? 'won-none' : w === bottom ? 'won-me' : 'won-them', 'sweeping');
-    // At three seats and more the city takes that rival's colour (cityHTML's data-them).
-    if (w !== null && w !== bottom && seatCount(next) > 2) sec.dataset.them = String(w);
+    // A spectator has no side: every city takes its winner's colour, as a rival's does (cityHTML's neutral).
+    const mine = !watching() && w === bottom;
+    sec.classList.add(w === null ? 'won-none' : mine ? 'won-me' : 'won-them', 'sweeping');
+    // At three seats and more (and for a spectator) the city takes that seat's colour (cityHTML's data-them).
+    if (w !== null && !mine && (seatCount(next) > 2 || watching())) sec.dataset.them = String(w);
     if (w === null) audio.nobody();
     // Each flourish takes about 1.2 s, so it plays only at the table's own pace. Sped up, the cities
     // come about 0.45 s apart, and a skipped reveal resolves them all at once: no flourishes piled up.
-    else if (!ui.skip && ui.speed === revealBase(next)) audio.flourish(next.round.cities[ci].id, ui.mode === 'pass' ? w === 0 : w === me());
+    // A spectator hears every city's flourish in full.
+    else if (!ui.skip && ui.speed === revealBase(next)) audio.flourish(next.round.cities[ci].id, ui.mode === 'pass' ? w === 0 : watching() || w === me());
     say(w === null ? `${cityName(next, ci)}: nobody holds it.` : `${cityName(next, ci)} goes to ${labelLower(w, next)}.`);
     await wait(1000);
     sec.classList.remove('resolving');
   }
   if (cancelled()) return;
   if (e.winner !== null) {
+    // A spectator neither wins nor loses: no sting, only the thump on the table.
     const mine = ui.mode === 'pass' ? true : e.winner === me();
-    (mine ? audio.roundWon : audio.roundLost)();
+    if (!watching()) (mine ? audio.roundWon : audio.roundLost)();
     shake($('#board'), 2);
   } else audio.nobody();
   await wait(500);
@@ -1769,14 +1907,18 @@ function typedHTML(text, { delay = 0, per = 12 } = {}) {
 const ICON = {
   sound: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/><path d="M16 8.5c1.3 1 2 2.2 2 3.5s-.7 2.5-2 3.5M18.5 6c2 1.6 3 3.6 3 6s-1 4.4-3 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   music: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17.5V5l11-2v12.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="6.5" cy="17.5" rx="3.2" ry="2.6" fill="currentColor"/><ellipse cx="17.5" cy="15.5" rx="3.2" ry="2.6" fill="currentColor"/></svg>',
+  // A speech slip cut from paper, its tail at the foot, two lines of type cut out of it.
+  emote: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M2.6 4.4 21.4 3l-.6 12.8-9.2.5-5.5 4.9.7-4.6-4-.1zM6.6 7.6h10.6v2.1H6.6zm0 3.7h7.1v2.1H6.6z"/></svg>',
 };
 
 function renderTop() {
-  return `<header class="top">
+  const emote = canEmote();
+  return `<header class="top${emote ? ' has-emote' : ''}">
     <div class="home-slot"></div>
     <p class="mark">${jitter('Dead Drop', 3)}</p>
     <div class="tools">
       ${ui.screen === 'play' || ui.screen === 'cover' ? '<button class="tool" data-action="quit">Leave</button>' : ''}
+      ${emote ? `<button class="tool icon emote${ui.emoteOpen ? ' open' : ''}" data-action="emote-row" aria-label="Emote" aria-expanded="${ui.emoteOpen}" title="Emote">${ICON.emote}</button>` : ''}
       <button class="tool" data-action="help" aria-label="How to play">?</button>
       <button class="tool icon${sfx.muted ? ' off' : ''}" data-action="mute" aria-label="Sound effects" aria-pressed="${!sfx.muted}" title="Sound (M)">${ICON.sound}</button>
       <button class="tool icon${audio.musicOn ? '' : ' off'}" data-action="music" aria-label="Music" aria-pressed="${audio.musicOn}" title="Music">${ICON.music}</button>
@@ -1897,7 +2039,8 @@ function tableHTML() {
         ${rows.join('')}
       </ol>
       <div class="pick-row"><span class="lbl">Roster</span>${switchHTML('table-roster', [['classic', 'Classic', false], ['mixed', 'Mixed', !mixedOpen]], mixed ? 'mixed' : 'classic', 'Roster')}<p class="seg-note">${esc(rosterNote)}</p></div>
-      <button class="slip primary" data-action="table-start">Start</button>
+      <div class="pick-row"><span class="lbl">Timer</span>${switchHTML('table-timer', TIMERS.map((ms) => [ms, TIMER_LABELS[ms], false]), ui.tableTimer, 'Turn timer')}<p class="seg-note">${ui.tableTimer ? `${esc(TIMER_LABELS[ui.tableTimer])} to drop each turn. Against the computer only you are timed.` : 'No clock: take as long as you like.'}</p></div>
+      <div class="start-bar"><button class="slip primary" data-action="table-start">Start</button></div>
     </div>`;
 }
 
@@ -1986,7 +2129,8 @@ function seatsHTML(L, mine) {
     const colour = at < 0 ? 'none' : SEAT_COLOURS[(at - from + held.length) % held.length];
     // (A guest's welcome seat can move if the host closes an empty seat before it: the name must match too.)
     const you = i === mine && (seat.kind === 'host' || (seat.kind === 'guest' && seat.name === meta.codename));
-    const name = seat.kind === 'empty' ? 'Open seat' : seat.kind === 'bot' ? `${seat.name} (computer)` : seat.name;
+    // (A computer rival's role label already says so: its name stands alone.)
+    const name = seat.kind === 'empty' ? 'Open seat' : seat.name;
     const role = seat.kind === 'host' ? (you ? 'You · host' : 'Host') : seat.kind === 'guest' ? (you ? 'You' : 'Guest') : seat.kind === 'bot' ? 'Computer' : 'Waiting';
     const line = seat.kind === 'host' || seat.kind === 'guest' ? `<i class="line${seat.here === false ? ' away' : ''}" role="img" aria-label="${seat.here === false ? 'Not connected' : 'Connected'}"></i>` : '';
     return `<li class="seat ${seat.kind} col-${colour}${you ? ' you' : ''}"><i class="band" aria-hidden="true"></i><span class="nm">${esc(name)}</span><small class="role">${esc(role)}</small>${line}</li>`;
@@ -2022,7 +2166,8 @@ function lobbyHTML() {
             : empty
               ? `${seated} seated. Start now, or wait for more.`
               : 'Every seat is taken.';
-    const fill = bots ? 'Clear computer rivals' : 'Fill empty seats with computer rivals';
+    // Fill while a seat is open (again after the table grows); Clear once the computer rivals fill it.
+    const fill = empty ? 'Fill empty seats with computer rivals' : 'Clear computer rivals';
     return `<div class="lobby host">
       <h2 class="cut-h">${jitter('Open a table', 4)}</h2>
       <p>Send your friends this link. Start when everyone is seated.</p>
@@ -2079,13 +2224,13 @@ function lobbyHTML() {
     searching: `Looking for room ${esc(n.code)}…`,
     joined: 'Connected. Waiting for the table…',
     full: 'That table is full and has all the spectators it can take.',
-    version: 'Your rival is on a different version of Dead Drop. Both reload the page and try again.',
+    version: 'This table is on a different version of Dead Drop. Reload the page, ask the host to reload theirs, and try again.',
     error: esc(n.error || 'Something went wrong.'),
   }[n.status];
   return `<div class="lobby">
     <h2 class="cut-h">${jitter('Joining', 6)}</h2>
     <p class="wait" role="status">${['connecting', 'searching', 'joined'].includes(n.status) ? '<i class="dots" aria-hidden="true"></i>' : ''}${msg}</p>
-    ${n.slow ? `<p class="err">Still looking. Check that your rival has the game open on the same link. Some office and school networks block direct connections: try mobile data or another Wi-Fi, or play pass and play on one device.</p>` : ''}
+    ${n.slow ? `<p class="err">Still looking. Check that the host has the table open on the same link. Some office and school networks block direct connections: try mobile data or another Wi-Fi, or play pass and play on one device.</p>` : ''}
     ${n.error && n.status !== 'error' ? `<p class="err">${esc(n.error)}</p>` : ''}
     <button class="slip quiet" data-action="title">Cancel</button>
   </div>`;
@@ -2150,10 +2295,10 @@ function statusText(v) {
   const waiting = waitingNames(v);
   const two = seatCount(v) === 2;
   const choosing = !waiting ? '' : two && unlockedRivals(v).length === 1 ? `${waiting} is choosing…` : `Waiting for ${waiting}…`;
-  // A spectator: whose table it is, then who is still choosing once someone has locked in.
+  // A spectator: who is at the table, then who is still choosing once someone has locked in.
   if (!isSeat(v, me())) {
     const everyone = unlockedRivals(v).length === allSeats(v).filter((s) => !R.folded[s]).length;
-    return `Watching ${andList(v.names)}’s table.${choosing && !everyone ? ` ${choosing}` : ''}`;
+    return `Watching: ${andList(v.names)}.${choosing && !everyone ? ` ${choosing}` : ''}`;
   }
   if (R.pending && R.pending.by === me()) return `Waiting for ${andList(unanswered(R.pending).map((s) => label(s, v)))} to answer your escalation…`;
   // I've answered a call that others haven't yet (three seats and more): say who the table waits for,
@@ -2192,8 +2337,11 @@ function planStatus(v, R, waiting, two, choosing) {
 function hintText(v) {
   if (meta.matches > 2 || v.phase !== 'plan' || v.roundNo > 1 || watching()) return '';
   const t = v.round.turn;
-  if (v.roundNo === 0 && t === 1) return 'You and your rival both drop an agent in secret. Then the cards flip together, and the First flip token shows whose tricks go first.';
-  if (v.roundNo === 0 && t === 2) return 'Higher total holds a city. Hold two of the three cities after six drops to win the round.';
+  const two = seatCount(v) === 2;
+  if (v.roundNo === 0 && t === 1) return `${two ? 'You and your rival both drop' : 'Everyone drops'} an agent in secret. Then the cards flip together, and the First flip token shows whose tricks go first.`;
+  if (v.roundNo === 0 && t === 2) return `Higher total holds a city. Hold ${two ? 'two of the three cities' : 'the most cities'} after six drops to win the round.`;
+  // Escalating: not once the round's one escalation has gone (or a call is waiting on the table).
+  if (v.roundNo === 0 && t === 3 && (v.round.escalated.some(Boolean) || v.round.pending)) return '';
   if (v.roundNo === 0 && t === 3) {
     // "left" once one is spent (an escalation on turn 1 or 2).
     const left = v.tokens[me()];
@@ -2201,7 +2349,11 @@ function hintText(v) {
     return `Feeling strong? Escalate doubles the stake.${left > 0 ? ` You have ${have}, so pick your moments.` : ''}`;
   }
   if (v.roundNo === 0 && t === 4 && v.round.film !== null) return `The canister marks the Microfilm. Lose a round but hold that city, and you take a strip of film. ${reelSentence(v.reel)}.`;
-  if (v.roundNo === 0 && t === TURNS) return `Final turn: the stake doubles when the cards flip. Fold now and your rival takes only the current stake${v.round.pot > 0 ? ' (and the pot)' : ''}.`;
+  if (v.roundNo === 0 && t === TURNS) {
+    return two
+      ? `Final turn: the stake doubles when the cards flip. Fold now and your rival takes only the current stake${v.round.pot > 0 ? ' (and the pot)' : ''}.`
+      : 'Final turn: the stake doubles when the cards flip. Fold now and you’re out of the round: the current stake goes into the pot, for whoever wins it.';
+  }
   if (v.roundNo === 1 && t === 1) return 'Tap any card on the board to read what it does.';
   return '';
 }
@@ -2387,7 +2539,7 @@ function controlsHTML(v) {
   </div>`;
 }
 
-function handHTML(v, disabled) {
+function handHTML(v, disabled, fuse = '') {
   const R = v.round;
   if (!isSeat(v, me())) return '<div class="hand empty" id="hand"></div>';
   const legalUids = new Set(R.legal.map((d) => d.uid));
@@ -2408,7 +2560,118 @@ function handHTML(v, disabled) {
         seenBy: seen.get(cv.uid) ?? null,
       }),
     )
-    .join('')}</div>`;
+    .join('')}${fuse}</div>`;
+}
+
+// ── the turn clock ──────────────────────────────────────────────────────────
+
+/** The fuse turns red, and ticks each second, for this long at the end. */
+const HOT_MS = 5000;
+
+/**
+ * The turn clock waits (its hold: solo while a reveal or a card is up, or __game.holdClock): the fuse
+ * stands still and no tick sounds meanwhile. A guest's clock is the host's, which runs on.
+ */
+function clockHeld() {
+  if (ui.mode === 'guest') return false;
+  const c = ui.mode === 'host' ? ui.net?.session?.clock : tableClock;
+  return !!c?.held;
+}
+
+/**
+ * The turn clock as it stands now, for this screen: { kind, left, total } in ms, or null. A guest counts
+ * down from the latest view's `left` since that view arrived (the host's clock sends no more until the
+ * table changes); a table here (solo, pass and play, the host) reads its own clock.
+ */
+function clockNow() {
+  if (ui.mode === 'guest') {
+    const c = ui.remote?.clock;
+    if (!c) return null;
+    return { kind: c.kind, left: Math.max(0, c.left - (performance.now() - ui.remoteAt)), total: c.kind === 'next' ? NEXT_MS : ui.remote.timer };
+  }
+  const c = table?.clock ? viewOf(table.clock, table.clockNow()) : null;
+  return c && { ...c, total: c.kind === 'next' ? NEXT_MS : table.timer };
+}
+
+/**
+ * The turn clock as a fuse burning down: across the top of my hand while I plan or answer ('drop',
+ * 'answer'), under the result's heading for Next ('next'). It is drawn from the time left now, so a
+ * render redraws it where it has burnt to and the CSS animation burns on from there; red for the last
+ * HOT_MS. Under reduced motion it stands still and says the seconds (syncFuse updates it once a second).
+ * Dimmed (done) once I have done what it waits for, while it runs on for the others.
+ */
+function fuseHTML(v, where) {
+  const c = clockNow();
+  if (!c || !(c.total > 0) || (where === 'next') !== (c.kind === 'next')) return '';
+  if (where === 'hand' && (v.phase !== 'plan' || !isSeat(v, me()) || outOfRound(v))) return '';
+  if (where === 'prompt' && c.kind !== 'answer') return '';
+  const left = Math.round(Math.min(c.left, c.total));
+  const done = c.kind === 'next' ? watching() || !!v.ready?.[me()] : c.kind === 'answer' ? !owesAnswer(v) : !!myPlan(v);
+  const secs = Math.ceil(left / 1000);
+  const what = { drop: 'to lock in', answer: 'to answer', next: 'until the next round' }[c.kind];
+  return `<div class="fuse kind-${c.kind}${left <= HOT_MS ? ' hot' : ''}${done ? ' done' : ''}${clockHeld() ? ' held' : ''}" style="--left:${left}ms; --total:${c.total}ms; --from:${(left / c.total).toFixed(4)}" role="timer" aria-label="${secs} s ${what}"><i></i>${reducedMotion() ? `<b>${secs}</b>` : ''}</div>`;
+}
+
+let fuseTimers = [];
+/**
+ * After each render (and as the clock is held or let go): the escalation prompt's fuse (put into the sheet,
+ * so the prompt's own HTML, and its focus, stay as they are), the ticks for the last five seconds while I
+ * still have to act, the seconds under reduced motion, and local zero. Plain timers, all cleared and set
+ * again from the clock at every render, so a hidden tab never waits on an animation. While the clock is
+ * held the fuse stands still (`held`) and nothing is set: the render that lets it go sets them again.
+ */
+function syncFuse() {
+  fuseTimers.forEach((t) => clearTimeout(t));
+  fuseTimers = [];
+  const v = view();
+  const sheet = $('#modal-root .modal.hot .sheet');
+  sheet?.querySelector(':scope > .fuse')?.remove();
+  if (sheet && v && ui.screen === 'play') sheet.querySelector('h2')?.insertAdjacentHTML('afterend', fuseHTML(v, 'prompt'));
+  const c = clockNow();
+  const held = clockHeld();
+  for (const f of document.querySelectorAll('#screen .fuse, #modal-root .fuse')) f.classList.toggle('held', held);
+  const el = $('#screen .fuse, #modal-root .fuse');
+  if (!c || !el || held) return;
+  // Each timer belongs to the decision on screen now: the round and turn, and the clock's kind.
+  const key = `${v?.matchId}:${v?.roundNo}:${v?.round.turn}:${c.kind}`;
+  const same = () => {
+    const now = view();
+    return !!now && `${now.matchId}:${now.roundNo}:${now.round.turn}:${clockNow()?.kind}` === key && !clockHeld();
+  };
+  const later = (ms, fn) => fuseTimers.push(setTimeout(() => same() && fn(), Math.max(0, ms)));
+  const done = el.classList.contains('done');
+  if (!done) {
+    for (let s = HOT_MS / 1000; s >= 1; s--) if (c.left > s * 1000) later(c.left - s * 1000, () => document.hidden || audio.countdown(s));
+  }
+  // Under reduced motion the seconds count down, and the cord shortens, once a second.
+  if (reducedMotion()) {
+    const step = () => {
+      const now = clockNow();
+      if (!now) return;
+      for (const f of document.querySelectorAll('.fuse')) {
+        const b = f.querySelector('b');
+        if (b) b.textContent = String(Math.ceil(now.left / 1000));
+        f.style.setProperty('--from', (Math.min(now.left, now.total) / now.total).toFixed(4));
+        f.classList.toggle('hot', now.left <= HOT_MS);
+      }
+      if (now.left > 0) later(((now.left - 1) % 1000) + 1, step);
+    };
+    later(((c.left - 1) % 1000) + 1, step);
+  }
+  if (done || c.kind === 'next') return;
+  // Local zero, for a decision still mine. Solo and pass and play run their clock here, so it runs out at
+  // once rather than waiting out the grace the host gives for a line's latency: my pick locks in, else the
+  // station's. A guest's own zero locks the card and city picked (the host picks at random for a guest who
+  // has picked nothing, after its grace).
+  later(c.left, () => {
+    const now = view();
+    if (!now || now.phase !== 'plan' || ui.animating || (clockNow()?.left ?? 0) > 100) return;
+    if (ui.mode === 'solo' || ui.mode === 'pass') tableClock?.expire();
+    else if (ui.mode === 'guest' && c.kind === 'drop' && !myPlan(now) && pickReady(now)) {
+      lockIn();
+      toast('Time’s up: your drop is locked in.');
+    }
+  });
 }
 
 function resultHTML(v, bottom) {
@@ -2450,8 +2713,9 @@ function resultHTML(v, bottom) {
         const heads = c.id === 'reykjavik';
         score = `<span class="bys">${order.map((s) => `<small class="by own-${s}${heads ? ' count' : ''}" title="${esc(`${label(s, v)}: ${heads ? `${counted(n(s), 'agent')}, power ${t[s]}` : `power ${t[s]}`}`)}"><i class="dot" aria-hidden="true"></i>${heads ? n(s) : t[s]}</small>`).join('')}</span>`;
       }
-      const own = order.length > 2 ? ` by-seat${w !== null ? ` own-${w}` : ''}` : '';
-      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom ? 'me' : 'them'}${own}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} ${score}</span>`);
+      // A spectator's lines take each winner's own colour, the bottom seat's too (it is nobody's "me").
+      const own = order.length > 2 ? ` by-seat${w !== null ? ` own-${w}` : ''}` : watching() && w !== null ? ` own-${w}` : '';
+      lines.push(`<span class="city-line w-${w === null ? 'none' : w === bottom && !watching() ? 'me' : 'them'}${own}"><b>${esc(CITY[c.id].name)}</b> ${w === null ? 'nobody' : esc(label(w, v))} ${score}</span>`);
     });
     // Geneva's tie went to whoever was behind on points.
     const gi = R.cities.findIndex((c) => c.id === 'geneva');
@@ -2502,6 +2766,7 @@ function resultHTML(v, bottom) {
   if (ui.peek) {
     return `<div class="result peek" role="dialog" aria-label="Round result">
     <h2>${jitter(head, v.roundNo + 3)}</h2>
+    ${fuseHTML(v, 'next')}
     <div class="btns">${peekBtn}${btn}</div>
   </div>`;
   }
@@ -2509,6 +2774,7 @@ function resultHTML(v, bottom) {
   const said = ui.remark?.key === `${v.matchId}:${v.roundNo}` ? ui.remark.text : null;
   return `<div class="result${enter ? ' enter' : ''}" role="dialog" aria-label="Round result">
     <h2>${jitter(head, v.roundNo + 3)}</h2>
+    ${fuseHTML(v, 'next')}
     <div class="lines">${lines.map((l) => `<p>${l}</p>`).join('')}</div>
     <p class="tally">${tally(v, bottom)}</p>
     ${said ? `<p class="remark">${esc(said)}</p>` : ''}
@@ -2532,11 +2798,12 @@ function tally(v, bottom) {
  * guest seat whose line is down and not yet covered ("Teal lost connection. The station covers the
  * seat in 30 s."). A covered seat says so on its tag at three seats and more; at two there is no tag,
  * so the banner says it (and a rival's goodbye keeps its own line, with the way back to the title).
+ * Returns { text, link } (link: the words of a way back to the title, or ''), or null for no banner.
  */
-function peerBannerHTML(v) {
+function peerBanner(v) {
   const n = ui.net;
-  if (!n || !v) return '';
-  const banner = (text, link = '') => `<p class="banner" role="status"><span>${esc(text)}</span>${link ? ` <button class="link" data-action="title">${link}</button>` : ''}</p>`;
+  if (!n || !v) return null;
+  const banner = (text, link = '') => ({ text, link });
   const two = seatCount(v) === 2;
   if (ui.mode === 'guest' && n.peer === 'left') return banner(`${n.leftName || 'Your rival'} left the table.`, 'Back to the title');
   if (ui.mode === 'guest' && n.peer === 'gone') return banner('The host lost connection. Waiting for them to come back.', 'Leave');
@@ -2546,7 +2813,22 @@ function peerBannerHTML(v) {
   if (lost.length) return banner(`${andList(lost.map((s) => label(s, v)))} lost connection. The station covers ${lost.length === 1 ? 'the seat' : 'their seats'} in 30 s.`, two && ui.mode === 'host' ? 'Leave' : '');
   const covered = two ? rivals(v).filter((s) => v.standIn?.[s]) : [];
   if (covered.length) return banner(`${label(covered[0], v)}’s line went dead. The station is covering.`);
-  return '';
+  return null;
+}
+
+let bannerSeq = 0; // each banner #banner has shown, stamped on it (data-id): a check can tell a rewrite from the same one
+/**
+ * The banner over the table lives in #banner (role="status"), outside the screen that renders redraw, and
+ * is written only when its words change (ui.bannerText): a status reader announces each one once, however
+ * often the table under it is drawn again. `b` is peerBanner's, or null to take it down.
+ */
+function syncBanner(b) {
+  const root = $('#banner');
+  if (!root) return;
+  const text = b ? `${b.text}|${b.link}` : '';
+  if (text === ui.bannerText) return;
+  ui.bannerText = text;
+  root.innerHTML = b ? `<p class="banner" data-id="${++bannerSeq}"><span>${esc(b.text)}</span>${b.link ? ` <button class="link" data-action="title">${esc(b.link)}</button>` : ''}</p>` : '';
 }
 
 /** The reveal's button: a tap speeds the reveal up, the next one skips it (tapReveal). */
@@ -2559,6 +2841,7 @@ const revealLabel = () => `${ui.speed >= FAST * revealBase() ? 'Skip' : 'Speed u
  */
 function renderPlay({ board = view(), hand = board, revealing = false, still = false, bottom = null } = {}) {
   if (ui.drag && (revealing || still || !canDrag())) cancelDrag();
+  const rowFocus = emoteRowFocus();
   const v = board;
   const b = bottom ?? bottomSeat(v);
   const R = v.round;
@@ -2587,27 +2870,38 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
   const tapFresh = !!tapKey && `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}` !== ui.tapShown;
   if (tapKey) ui.tapShown = `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}`;
   const settled = v.phase !== 'plan' && R.result && R.result.cityWinners;
-  const cities = R.cities.map((_, ci) => cityHTML(v, ci, b, { ghost, choosing, legalCities, tapFresh, won: settled ? R.result.cityWinners[ci] : undefined })).join('');
+  const cities = R.cities.map((_, ci) => cityHTML(v, ci, b, { ghost, choosing, legalCities, tapFresh, won: settled ? R.result.cityWinners[ci] : undefined, neutral: watching() })).join('');
   const n = seatCount(v);
   const caption = busy ? ui.caption : ui.caption || inspectText(v) || hintText(v);
   // A line said just before this render types out again on the new ticker.
   const typing = !!caption && ui.typeNext === caption;
   ui.typeNext = null;
   syncNight();
-  // The banner keeps its element while its words stand, so a status reader announces it once.
-  const banner = $('#screen .play > .banner');
-  $('#screen').innerHTML = `<div class="play${n > 2 ? ' many' : ''}${revealing ? ' revealing' : ''}" data-bottom="${b}" data-seats="${n}">
-    ${peerBannerHTML(v)}
+  syncBanner(peerBanner(v));
+  $('#screen').innerHTML = `<div class="play${n > 2 ? ' many' : ''}${revealing ? ' revealing' : ''}${watching() ? ' watching' : ''}" data-bottom="${b}" data-seats="${n}">
     ${n > 2 ? tagbarHTML(v, b) : scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
     <p class="ticker${typing ? ' typing' : ''}" id="ticker" role="status">${esc(caption)}</p>
     ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : still ? '<div class="controls"><p class="status"></p></div>' : controlsHTML(v)}
-    ${handHTML(hand, busy)}
+    ${handHTML(hand, busy, busy ? '' : fuseHTML(v, 'hand'))}
     ${!busy && v.phase !== 'plan' ? resultHTML(v, b) : ''}
   </div>`;
-  const fresh = $('#screen .play > .banner');
-  if (banner && fresh && banner.textContent === fresh.textContent) fresh.replaceWith(banner);
+  fitTags();
   markDrag();
+  syncEmoteRow(rowFocus);
+  placeEmotes();
+}
+
+/**
+ * Four tags across a narrow phone: when a full name doesn't fit its tag, every tag drops its title
+ * ("Agent Marten" becomes "Marten", "Agent Wren III" "Wren III"), the same way on every tag; a name still
+ * too long ends in an ellipsis. The full name stays in the tag's label and in its file.
+ */
+function fitTags() {
+  const tags = $('#screen .tags');
+  if (!tags) return;
+  tags.classList.remove('short');
+  if ([...tags.querySelectorAll('.who')].some((w) => w.scrollWidth > w.clientWidth + 1)) tags.classList.add('short');
 }
 
 function overHTML() {
@@ -2782,7 +3076,7 @@ function helpBodyHTML(tab) {
       .join('');
   }
   if (tab === 'keys') return `<ul class="key-list">${HELP_KEYS.map(([keys, text]) => `<li><span class="keys">${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')}</span> <span>${esc(text)}</span></li>`).join('')}</ul>`;
-  return `<ol class="rules">${helpRules().map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`;
+  return `<ol class="rules">${helpRules().map((r) => `<li>${esc(r)}</li>`).join('')}<li class="emote-rule">${esc(EMOTE_RULE)} ${hideEmotesHTML()}</li></ol>`;
 }
 
 /**
@@ -2828,6 +3122,7 @@ function passSheetHTML() {
       <h2>${jitter('Pass and play', 3)}</h2>
       <p>${many} spymasters, one device: hand it over between turns. ${n === 2 ? 'Both of you play' : 'You all play'} the same roster of ${ROSTER.size} agents.</p>
       <div class="pick-row"><span class="lbl">Players</span>${switchHTML('pass-seats', [2, 3, 4].map((k) => [k, String(k), false]), n, 'Players')}</div>
+      <div class="pick-row"><span class="lbl">Timer</span>${switchHTML('pass-timer', TIMERS.map((ms) => [ms, TIMER_LABELS[ms], false]), ui.passTimer, 'Turn timer')}</div>
       <div class="picks">
         <button class="slip primary" data-action="pass-start" data-choice="classic"><span>Classic</span><small>The original ${DECK.length} agents and ${CLASSIC_CITIES.length} cities. Best for a first match.</small></button>
         <button class="slip" data-action="pass-start" data-choice="mixed"><span>Mixed: all ${AGENTS.length} agents and cities</span><small>Each match draws ${ROSTER.size} of the ${AGENTS.length} agents.</small></button>
@@ -2965,8 +3260,9 @@ function render() {
   const s = ui.screen;
   audio.scene(SCENE[s] ?? null); // a no-op while that piece plays
   if (!$('#top')) {
-    app.innerHTML = `<div id="top"></div><main id="screen"></main><div id="modal-root"></div>`;
+    app.innerHTML = `<div id="top"></div><div id="banner" role="status"></div><main id="screen"></main><div id="emote-root" aria-live="polite"></div><div id="modal-root"></div>`;
     modalShown = '';
+    ui.bannerText = '';
   }
   $('#top').innerHTML = renderTop();
   homeLink({ parent: $('#top .home-slot') });
@@ -2982,6 +3278,8 @@ function render() {
     // A reveal or a fold's exit draws the table itself until it is done.
     if (!ui.animating && !ui.holdBoard) renderPlay();
   }
+  // The banner is the table's (it stays up through a reveal, and goes with the table).
+  syncBanner(s === 'play' && view() ? peerBanner(view()) : null);
   // An escalation asking me for an answer closes a city dossier or a rival's file: the prompt wins.
   if ((ui.modal === 'city' || ui.modal === 'tag') && s === 'play' && view() && owesAnswer(view())) {
     ui.modal = null;
@@ -2993,6 +3291,191 @@ function render() {
   if (ui.drag && (!canDrag() || modalShown)) cancelDrag();
   const focus = $('#modal-root .slip.primary');
   if (focus && document.activeElement?.closest?.('#modal-root') === null) focus.focus({ preventScroll: true });
+  syncFuse();
+  // The emote row and the slips, also when a reveal draws the table itself (render() leaves it alone).
+  syncEmoteRow();
+  placeEmotes();
+}
+
+// ── emotes ──────────────────────────────────────────────────────────────────
+
+/** How long an emote's slip stays by its sender's tag, and its exit (style.css .emote-slip.out). */
+const EMOTE_MS = 2500;
+const EMOTE_OUT_MS = 160;
+/** Help → Rules' last line (the Hide emotes toggle follows it). */
+const EMOTE_RULE = 'Playing online, Emote (the speech slip beside Help) puts one of six set lines by your tag for the whole table to see, one every three seconds at most.';
+/** The timer that takes each seat's slip away, by seat. */
+const emoteTimers = new Map();
+
+/** Online at a seat (hosting, or a guest who isn't watching), on the table: this browser can send emotes. */
+const canEmote = () => (ui.mode === 'host' || ui.mode === 'guest') && !!ui.net?.session && ui.screen === 'play' && Number.isInteger(ui.seat) && ui.seat >= 0;
+
+/** The Hide emotes toggle: at the end of the emote row, and in Help → Rules' last line. */
+const hideEmotesHTML = () => `<button class="hide-emotes" data-action="hide-emotes" aria-pressed="${ui.hideEmotes}">Hide emotes</button>`;
+
+function emoteRowHTML(enter) {
+  return `<div class="emote-row${enter ? ' enter' : ''}" id="emote-row" role="group" aria-label="Emotes">${EMOTES.map((text, i) => `<button class="slip small quiet" data-action="emote" data-i="${i}">${esc(text)}</button>`).join('')}${hideEmotesHTML()}</div>`;
+}
+
+/** Which of the row's buttons has focus (an emote's index, or 'hide'), so a redraw can give it back; null if none. */
+function emoteRowFocus() {
+  const el = document.activeElement?.closest?.('#emote-row [data-action]');
+  return el ? (el.dataset.i ?? 'hide') : null;
+}
+
+/**
+ * Draw the emote row at the top of the controls, or take it away: it opens only online at a seat, on the
+ * table, with no sheet open. A render draws the table afresh, so the row goes back in (its slide-in played
+ * once, as it opened) with focus where it was.
+ */
+function syncEmoteRow(focus = emoteRowFocus()) {
+  if (ui.emoteOpen && (!canEmote() || ui.modal)) ui.emoteOpen = false;
+  const row = $('#emote-row');
+  const controls = $('#screen .play > .controls');
+  if (!ui.emoteOpen || !controls) {
+    row?.remove();
+    return;
+  }
+  if (row && row.parentElement === controls) {
+    row.querySelector('[data-action=hide-emotes]')?.setAttribute('aria-pressed', String(ui.hideEmotes));
+    return;
+  }
+  row?.remove();
+  controls.insertAdjacentHTML('afterbegin', emoteRowHTML(ui.emoteEnter));
+  ui.emoteEnter = false;
+  if (focus !== null) $(focus === 'hide' ? '#emote-row [data-action=hide-emotes]' : `#emote-row [data-i="${focus}"]`)?.focus({ preventScroll: true });
+}
+
+/** The header's Emote: open the row (focus on its first line) or close it. */
+function toggleEmoteRow(open = !ui.emoteOpen) {
+  if (open === ui.emoteOpen) return;
+  if (open && (!canEmote() || ui.modal)) return;
+  if (!open) return void closeEmoteRow();
+  ui.emoteOpen = true;
+  ui.emoteEnter = true;
+  audio.place();
+  render();
+  $('#emote-row [data-action=emote]')?.focus({ preventScroll: true });
+}
+
+/** Close the emote row in place (an outside tap, Escape, a line sent); `refocus` puts focus back on Emote. */
+function closeEmoteRow({ refocus = false } = {}) {
+  if (!ui.emoteOpen) return false;
+  ui.emoteOpen = false;
+  ui.emoteEnter = false;
+  $('#emote-row')?.remove();
+  const tool = $('#top [data-action=emote-row]');
+  tool?.setAttribute('aria-expanded', 'false');
+  tool?.classList.remove('open');
+  if (refocus) tool?.focus({ preventScroll: true });
+  return true;
+}
+
+/**
+ * Say EMOTES[i]: through the session, host or guest, so the host rate-limits every seat alike (its own
+ * too: one every EMOTE_GAP_MS) and relays it to the whole table, the sender included, whose slip then
+ * shows on its own tag. The flick sounds when the host's echo lands (heardEmote), so a refusal is silent.
+ */
+function sendEmote(i) {
+  closeEmoteRow();
+  if (!canEmote() || !EMOTES[i]) return;
+  ui.net.session.emote(i);
+}
+
+/** Hide emotes, or show them again (saved for this browser). Hiding takes the others' slips away at once. */
+function toggleHideEmotes(el) {
+  ui.hideEmotes = !ui.hideEmotes;
+  saved.set('hideEmotes', ui.hideEmotes);
+  if (ui.hideEmotes) {
+    for (const el of [...document.querySelectorAll('#emote-root .emote-slip')]) {
+      const seat = Number(el.dataset.seat);
+      if (seat !== me()) dropEmote(seat, true);
+    }
+  }
+  audio.place();
+  // In Help the sheet is drawn again: keep its scroll and the focus on the toggle. In the row, the
+  // row stays open and the toggle keeps focus (syncEmoteRow).
+  const help = !!el?.closest?.('#modal-root');
+  const top = $('#help-panel')?.scrollTop ?? 0;
+  render();
+  if (!help) return;
+  const panel = $('#help-panel');
+  if (panel) panel.scrollTop = top;
+  $('#modal-root [data-action=hide-emotes]')?.focus({ preventScroll: true });
+}
+
+/**
+ * Where seat's slip hangs (viewport px): under its tag at three seats and more, under its side of the
+ * scorebar at two, centred on the name. Null when the table doesn't show that seat.
+ */
+function emoteSpot(seat) {
+  const tag = $(`#screen .tags .tag.s-${seat}`);
+  if (tag) {
+    const r = tag.getBoundingClientRect();
+    return r.width ? { x: r.left + r.width / 2, y: r.bottom } : null;
+  }
+  const side = $(`#screen .scorebar .side.s-${seat}`);
+  const name = side?.querySelector('.tag');
+  if (!name) return null;
+  const n = name.getBoundingClientRect();
+  return n.width ? { x: n.left + n.width / 2, y: side.getBoundingClientRect().bottom } : null;
+}
+
+/**
+ * Hang each slip under its seat's tag, inside the window, its tail on the tag's middle. The slips live in
+ * #emote-root, outside the table that renders redraw (so the pop plays once), and never take a tap: the
+ * tag under one is still pressed as if the slip weren't there. Off the table they wait unseen.
+ */
+function placeEmotes() {
+  const root = $('#emote-root');
+  if (!root?.firstElementChild) return;
+  const width = document.documentElement.clientWidth;
+  for (const el of root.children) {
+    const at = ui.screen === 'play' ? emoteSpot(Number(el.dataset.seat)) : null;
+    el.hidden = !at;
+    if (!at) continue;
+    const w = el.offsetWidth;
+    const left = Math.max(8, Math.min(width - w - 8, at.x - w / 2));
+    el.style.left = `${Math.round(left + scrollX)}px`;
+    el.style.top = `${Math.round(at.y + scrollY + 10)}px`;
+    el.style.setProperty('--tail', `${Math.round(Math.max(16, Math.min(w - 16, at.x - left)))}px`);
+  }
+}
+
+/** Show seat's slip saying EMOTES[i] for EMOTE_MS: one per seat, so a new one replaces it (and its time). */
+function showEmote(seat, i) {
+  const root = $('#emote-root');
+  if (!root) return;
+  clearTimeout(emoteTimers.get(seat));
+  root.querySelector(`.emote-slip[data-seat="${seat}"]`)?.remove();
+  const text = EMOTES[i];
+  const who = label(seat);
+  root.insertAdjacentHTML(
+    'beforeend',
+    `<p class="emote-slip own-${seat}${seat % 2 ? ' odd' : ''}" data-seat="${seat}"><span class="vh">${esc(who ? `${who}: ${text}` : text)}</span><span class="paper" aria-hidden="true">${jitter(text, 5 + seat * 3 + i)}</span></p>`,
+  );
+  placeEmotes();
+  emoteTimers.set(seat, setTimeout(() => dropEmote(seat), EMOTE_MS));
+}
+
+/** Take seat's slip away: it lifts off (at once under reduced motion, or with `now`). */
+function dropEmote(seat, now = false) {
+  clearTimeout(emoteTimers.get(seat));
+  emoteTimers.delete(seat);
+  const el = $(`#emote-root .emote-slip[data-seat="${seat}"]`);
+  if (!el) return;
+  if (now || reducedMotion()) return el.remove();
+  // A new slip from this seat meanwhile takes this one away at once (showEmote).
+  el.classList.add('out');
+  setTimeout(() => el.remove(), EMOTE_OUT_MS);
+}
+
+/** Every slip goes, at once (leaving the table). */
+function clearEmotes() {
+  for (const t of emoteTimers.values()) clearTimeout(t);
+  emoteTimers.clear();
+  const root = $('#emote-root');
+  if (root) root.textContent = '';
 }
 
 // ── QR code and invite sharing ──────────────────────────────────────────────
@@ -3150,8 +3633,14 @@ function startDrag() {
   ghost.style.transformOrigin = `${press.dx}px ${press.dy}px`;
   const cs = getComputedStyle(card);
   for (const prop of ['--me-col', '--them-col']) ghost.style.setProperty(prop, cs.getPropertyValue(prop));
+  ghost.style.padding = cs.padding;
+  // The hand sets its print by how many cards it holds (.hand[data-n]), and the ghost is out of the hand:
+  // its power, name and rule keep the card's own sizes.
   [...card.children].forEach((el, i) => {
-    if (getComputedStyle(el).display === 'none') ghost.children[i].style.display = 'none';
+    const ecs = getComputedStyle(el);
+    const g = ghost.children[i];
+    if (ecs.display === 'none') g.style.display = 'none';
+    else if (el.matches('.pow, .nm, .tx')) for (const prop of ['font-size', 'line-height', 'letter-spacing']) g.style.setProperty(prop, ecs.getPropertyValue(prop));
   });
   document.body.append(ghost);
   ui.drag = { uid, ghost, over: null };
@@ -3369,14 +3858,22 @@ const actions = {
     render();
     $(`#modal-root [data-action=pass-seats][data-choice="${n}"]`)?.focus({ preventScroll: true });
   },
-  'pass-start': (el) => startPass({ seats: ui.passSeats, setup: el.dataset.choice === 'mixed' ? MIXED_ALL : CLASSIC_SETUP }),
+  'pass-timer': (el) => {
+    const ms = Number(el.dataset.choice);
+    if (!TIMERS.includes(ms) || ms === ui.passTimer) return;
+    ui.passTimer = ms;
+    audio.place();
+    render();
+    $(`#modal-root [data-action=pass-timer][data-choice="${ms}"]`)?.focus({ preventScroll: true });
+  },
+  'pass-start': (el) => startPass({ seats: ui.passSeats, setup: el.dataset.choice === 'mixed' ? MIXED_ALL : CLASSIC_SETUP, timer: ui.passTimer }),
   // The host's lobby, until Start: the settings freeze then (the lobby refuses changes once started).
   'host-roster': (el) => lobbySet(el, { setup: el.dataset.choice === 'mixed' ? MIXED_ALL : CLASSIC_SETUP }),
   'lobby-size': (el) => lobbySet(el, { size: Number(el.dataset.choice) }),
   'lobby-timer': (el) => lobbySet(el, { timer: Number(el.dataset.choice) }),
-  'lobby-fill': (el) => lobbySet(el, { fill: !ui.net?.lobby?.seats.some((s) => s.kind === 'bot') }),
+  'lobby-fill': (el) => lobbySet(el, { fill: !!ui.net?.lobby?.seats.some((s) => s.kind === 'empty') }),
   'lobby-start': startLobby,
-  // The Table tab: seats, a rival per seat, the roster, Start.
+  // The Table tab: seats, a rival per seat, the roster, the timer, Start.
   'table-seats': (el) => {
     const n = Number(el.dataset.choice);
     if ((n !== 3 && n !== 4) || n === ui.tableSeats) return;
@@ -3404,7 +3901,15 @@ const actions = {
     render();
     $(`#screen [data-action=table-roster][data-choice=${roster}]`)?.focus({ preventScroll: true });
   },
-  'table-start': () => startTable({ seats: ui.tableSeats, rivals: tablePicks(), setup: tableSetup() }),
+  'table-timer': (el) => {
+    const ms = Number(el.dataset.choice);
+    if (!TIMERS.includes(ms) || ms === ui.tableTimer) return;
+    ui.tableTimer = ms;
+    audio.place();
+    render();
+    $(`#screen [data-action=table-timer][data-choice="${ms}"]`)?.focus({ preventScroll: true });
+  },
+  'table-start': () => startTable({ seats: ui.tableSeats, rivals: tablePicks(), setup: tableSetup(), timer: ui.tableTimer }),
   title: () => {
     leaveMatch({ keepSave: true });
     resetMatchUi();
@@ -3459,6 +3964,7 @@ const actions = {
     ui.cover = null;
     ui.screen = 'play';
     ui.view = table.view(ui.seat);
+    passClock();
     audio.place();
     render();
   },
@@ -3536,6 +4042,10 @@ const actions = {
     render();
   },
   unseen: (el) => toggleUnseen(Number(el.dataset.seat)),
+  // Online at a seat: the header's Emote opens the row; a slip in it says that line and closes it.
+  'emote-row': () => toggleEmoteRow(),
+  emote: (el) => sendEmote(Number(el.dataset.i)),
+  'hide-emotes': toggleHideEmotes,
 };
 
 document.addEventListener('click', (ev) => {
@@ -3548,9 +4058,11 @@ document.addEventListener('click', (ev) => {
   }
   // An open unseen strip closes on a tap anywhere outside it, and the tap goes on to do what it does.
   if (ui.unseenOpen !== null && !ev.target.closest('.unseen-panel, [data-action=unseen]')) closeUnseen();
-  // During a reveal a click is a tap on it (speed up, then skip), except in the header and
-  // inside the help sheet.
-  if (ui.animating && !ev.target.closest('.top') && !(ui.modal === 'help' && ev.target.closest('#modal-root'))) {
+  // So does the emote row (its own button toggles it).
+  if (ui.emoteOpen && !ev.target.closest('#emote-row, [data-action=emote-row]')) closeEmoteRow();
+  // During a reveal a click is a tap on it (speed up, then skip), except in the header, the banner, the
+  // emote row and inside the help sheet.
+  if (ui.animating && !ev.target.closest('.top, #banner, #emote-row') && !(ui.modal === 'help' && ev.target.closest('#modal-root'))) {
     tapReveal();
     return;
   }
@@ -3596,6 +4108,14 @@ document.addEventListener('keydown', (ev) => {
     if (k === 'Escape') cancelDrag();
     return;
   }
+  // The emote row takes Escape first (focus goes back to its button if it was in the row), and Enter or
+  // Space on a focused emote button presses that button rather than locking in.
+  if (ui.emoteOpen && k === 'Escape') {
+    ev.preventDefault();
+    closeEmoteRow({ refocus: !!document.activeElement?.closest?.('#emote-row') });
+    return;
+  }
+  if ((k === 'Enter' || k === ' ') && ev.target.closest?.('#emote-row, [data-action=emote-row]')) return;
   // The help sheet can be open over a reveal (its button sits in the header).
   if (ui.modal === 'help' && (k === 'ArrowRight' || k === 'ArrowLeft')) {
     ev.preventDefault();
@@ -3714,6 +4234,15 @@ document.addEventListener('keydown', (ev) => {
 });
 
 onHidden(() => audio.pause());
+window.addEventListener('resize', () => {
+  fitTags();
+  placeEmotes();
+});
+// The tags are measured in the web font: once it has loaded, measure them again (and the slips follow).
+document.fonts?.ready?.then(() => {
+  fitTags();
+  placeEmotes();
+});
 /** Back in front: the screen's piece plays again (from its first bar). */
 const resumeMusic = () => {
   if (!document.hidden) audio.resume();
@@ -3735,7 +4264,12 @@ const clearOld = (key) => {
   if (m && !canRestore(m.table)) clearOld('match');
 }
 
+/** A host's save (`host-CODE`) reopens its table for this long; older ones are cleared. */
+const HOST_SAVE_MS = 6 * 3600e3;
+
 function route() {
+  // Every host save past its time goes, whichever room it was for (they hold the guests' tokens).
+  for (const k of saved.keys()) if (k.startsWith('host-') && !(Date.now() - (saved.get(k, null)?.at ?? 0) < HOST_SAVE_MS)) saved.remove(k);
   const h = new URLSearchParams(location.hash.slice(1));
   const join = cleanCode(h.get('join'));
   const host = cleanCode(h.get('host'));
@@ -3749,7 +4283,7 @@ function route() {
       clearOld(`host-${host}`);
       s = null;
     }
-    return startHost({ code: host, resume: s && Date.now() - s.at < 6 * 3600e3 ? { lobby: s.lobby ?? null, table: s.table } : null });
+    return startHost({ code: host, resume: s ? { lobby: s.lobby ?? null, table: s.table, roomTokens: s.roomTokens === true } : null });
   }
   ui.screen = 'title';
   render();
@@ -3765,7 +4299,7 @@ route();
  */
 function quickTurns(turns, rng = Math.random) {
   const seated = bots.length > 0;
-  stopBots();
+  standDown();
   unwatch?.();
   for (let t = 0; t < turns && table.state.phase === 'plan'; t++) {
     const P = table.state.round.pending;
@@ -3836,10 +4370,13 @@ function stage({ rival = 'wren', free = false, roster = null, cities = null, han
 
 markReady({
   ui,
-  /** The music, for the smoke: notes scheduled per voice, and the piece playing. */
+  /** The music, for the smoke: notes scheduled per voice, the piece playing, and each effect's calls (effects, by name). */
   audio: {
     get played() {
       return audio.played;
+    },
+    get effects() {
+      return audio.effects;
     },
     get sceneName() {
       return audio.sceneName;
@@ -3871,6 +4408,20 @@ markReady({
   holdRival(on = true) {
     ui.holdRival = !!on;
   },
+  /**
+   * The turn clock on this tab's table (solo at a Table, pass and play, or the host's), or null with no
+   * timer: expire() runs it out at once, through the clock's own path (my pick, else a random drop; play
+   * on; Next), held or not; kind is what it waits on.
+   */
+  get clock() {
+    const c = ui.mode === 'host' ? ui.net?.session?.clock : tableClock;
+    return c ? { expire: () => c.expire(), kind: c.kind } : null;
+  },
+  /** Hold the turn clock (true) for a check's steady table, or let it run (false): the fuse stands still, or burns on. */
+  holdClock(on = true) {
+    ui.clockHeld = !!on;
+    syncFuse();
+  },
   startHost: (code) => startHost({ code }),
   startGuest: (code) => startGuest(code),
   /** Online: this tab's role ('host' | 'guest'), room code and seat (-1 watching, null before the welcome), or null. */
@@ -3883,12 +4434,25 @@ markReady({
     standInWait = ms;
     ui.net?.session?.setStandInMs?.(ms);
   },
-  /** Online: send emote `i` (an EMOTES index) through the session, as Task 14's button will. True if it went. */
+  /** Online: send emote `i` (an EMOTES index) through the session, as the emote row does (without its sound). True if it went. */
   emote(i) {
     const session = ui.net?.session;
     return session && (ui.mode === 'host' || ui.mode === 'guest') ? !!session.emote(i) : false;
   },
   quickTurns,
+  /**
+   * Deal `n` more cards from `seat`'s deck into its hand, straight on this tab's table (solo or pass and
+   * play), as Lookouts' draws would: a fuller hand for a check of the phone's layout. The number dealt.
+   */
+  give(n = 1, seat = 0) {
+    if (!table || (ui.mode !== 'solo' && ui.mode !== 'pass')) return 0;
+    const R = table.state.round;
+    if (!R.hands[seat] || table.state.phase !== 'plan') return 0;
+    const moved = R.decks[seat].splice(0, Math.max(0, n));
+    R.hands[seat].push(...moved);
+    table.touch();
+    return moved.length;
+  },
   /** Finish the round instantly from both seats' first legal drops. */
   finishRound() {
     quickTurns(TURNS);

@@ -3,6 +3,7 @@ import { AGENT, AGENTS, CITIES, CITY, CLASSIC_CITIES, DECK } from './js/data.js'
 import { cable, DOSSIERS, EPILOGUE, operation, REMARKS, twistText } from './js/story.js';
 import { sightings, unseen } from './js/counting.js';
 import { deckList } from './js/engine.js';
+import { roomToken } from './js/session.js';
 // Scripted play-through run by `npm run check` (see scripts/check.mjs).
 // smoke(): one page — title, rivals, a solo match (its round title card and the First flip
 // token; a turn dropped by dragging a card onto a city, whose reveal is sped up, then skipped;
@@ -30,9 +31,18 @@ import { deckList } from './js/engine.js';
 // on the round card; the unseen strip (U, its counts, an outside tap); the twist chip; and the
 // epilogue after a ladder win over Control, before the dossier. A match may open on intro cards
 // (a first meeting's dossier, a roster that isn't Classic) before its round card: clearCard skips them.
-// Phase 3: the table at four seats (tableSeats), the flows at three (tableFlows, pass and play for three
-// from the title's sheet), and lobbySteps: the rivals screen's Table tab (and Continue for it), then the
-// host's lobby on a ?net=local page (Seats, Timer, Fill, Start) with a spectator in a second tab.
+// Phase 3: the table at four seats (tableSeats: the longest codename in every seat, the sheets, which come
+// up from the bottom on a phone, and the final turn at night, whose skipped reveal plays no tick burst; on
+// the phone pass narrowTable: Agent Wren II and III at 390px, then 320×568 with five and seven cards and the
+// drag ghost's print), the flows at three (tableFlows, pass and play for three from the title's sheet), and
+// lobbySteps: the rivals screen's Table tab (Start on screen at four seats, and Continue for it), then the
+// host's lobby on a ?net=local page (Seats, Timer, Fill and its top-up, Start) with a spectator in a second
+// tab (no side: no sting, nothing coloured as its own).
+// The turn timer (timerSteps): no clock without a timer; the Table tab's Blitz and the fuse across the
+// hand, standing still while the clock is held; time running out on a picked drop, on nothing picked, at
+// the solo clock's own zero (no grace), on an answer and on Next (the full result and See the board's
+// strip); the seconds under reduced motion; Continue keeping the timer; and pass and play's clock starting
+// only at uncover, and pressing Next on the shared result.
 // duo(): two pages in one browser joined over the BroadcastChannel transport (?net=local) —
 // host lobby (it switches the roster to Mixed, and the guest's first view has that roster), guest joins
 // (the host sees them in its seat list, the guest waits read-only, then the host presses Start), the host locks in while the guest's round card is still up, a turn
@@ -40,16 +50,19 @@ import { deckList } from './js/engine.js';
 // both screens agree on the tokens, the escalator's side one chit down),
 // match over and a rematch, a guest reload during the rematch's first turn (it must not count the
 // match again, and a turn that resolves behind the guest's round card must still be revealed from
-// the turn-1 board), and the guest leaving. It plays a Mixed roster, so its rounds vary between runs.
+// the turn-1 board), and the guest leaving (the host's banner then stands, one element, through two
+// turns). It plays a Mixed roster, so its rounds vary between runs.
 // scripts/verify-live.mjs runs duo() again on the live site with { live: true }, joining
 // through the real public relays.
 // table(): three players and a watcher at one online table, four pages in one browser on ?net=local,
 // each a player of its own (token= and name= in its URL) — the lobby, Start and a turn of face-down
 // Sleepers no guest or spectator view names, a spectator, an escalation with two answers (the answers
-// card on every page, then the abort's exit), emotes, a line going dead (the stand-in sits and locks; the
+// card on every page, then the abort's exit), emotes from the Emote row (the slip by the sender's tag, the host's
+// 3 s limit, Hide emotes, the row on a phone), a line going dead (the stand-in sits and locks; the
 // player comes back to its lock), a guest's reload and the host's (route() reopens the table and lobby),
-// a player leaving (the stand-in at once) and a rematch at three seats. verify-live runs it with three
-// browsers through the relays (no watcher, no stand-in clock, no host reload).
+// a player leaving (the stand-in at once) and a rematch at three seats, all on a 30 s turn timer (every view
+// carries the host's clock, every player sees the fuse, and the host's clock runs out a turn at the end).
+// verify-live runs it with three browsers through the relays (no watcher, no stand-in clock, no host reload).
 // Waits on game state, never on fixed sleeps.
 let T = 15000;
 
@@ -61,10 +74,10 @@ async function until(page, fn, arg, what) {
   }
 }
 const idle = (page) => until(page, () => !window.__game.ui.animating, null, 'the reveal to finish');
-/** Let entrance animations finish before a screenshot (endless pulses are ignored). */
+/** Let entrance animations finish before a screenshot (endless pulses, and the turn clock's fuse burning down, are ignored). */
 const settle = (page) =>
   page
-    .waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, { timeout: 4000 })
+    .waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity || ['burn', 'heat', 'spark'].includes(a.animationName)), null, { timeout: 4000 })
     .catch(() => {});
 const snap = async (page, shot, name) => {
   await settle(page);
@@ -373,6 +386,14 @@ async function dragFirst(page, { shot = null } = {}) {
   await page.mouse.move(p.x, p.y, { steps: 8 });
   if (!(await page.$('.city.drop-over'))) fail('dragging a card over a city did not mark it .drop-over');
   if (!(await page.$('.drag-ghost'))) fail('dragging a card shows no .drag-ghost');
+  // Out of the hand, the ghost keeps the print of the card it left (the hand sizes it by how many it holds).
+  const print = await page.evaluate((uid) => {
+    const size = (el, sel) => getComputedStyle(el.querySelector(sel)).fontSize;
+    const g = document.querySelector('.drag-ghost');
+    const card = document.querySelector(`#hand .card[data-uid="${uid}"]`);
+    return { ghost: [size(g, '.nm'), size(g, '.tx')], card: [size(card, '.nm'), size(card, '.tx')] };
+  }, c.uid);
+  if (print.ghost.join() !== print.card.join()) fail(`the drag ghost's name and rule should be the card's size: ${JSON.stringify(print)}`);
   if (shot) await shot('drag', page);
   await page.mouse.up();
   const s = await state();
@@ -545,6 +566,8 @@ export default async function smoke(page, { log, shot, audit, phone = false, url
   // Two seats keep their screen: the scorebar and the rival's full row, no tags and no lanes.
   const two = await page.evaluate(() => ({ scorebar: !!document.querySelector('.scorebar'), tags: !!document.querySelector('.tags'), lanes: document.querySelectorAll('.lane').length, rows: document.querySelectorAll('#board .row[data-row]').length }));
   if (!two.scorebar || two.tags || two.lanes || two.rows !== 6) fail(`a two-seat table should show the scorebar and two full rows per city, no tags or lanes: ${JSON.stringify(two)}`);
+  // Emotes are for online tables: playing the computer there is no Emote button.
+  if (await page.$('[data-action=emote-row]')) fail('playing the computer should show no Emote button');
   if (phone) {
     const fit = await phoneFits(page);
     log(`phone fit: ${JSON.stringify(fit)}`);
@@ -735,6 +758,7 @@ export default async function smoke(page, { log, shot, audit, phone = false, url
   await dropFirst(page);
   await until(page, () => window.__game.ui.cover?.seat === 1, null, 'the cover for Teal');
   await page.click('[data-action=uncover]');
+  if (await page.$('[data-action=emote-row]')) fail('pass and play should show no Emote button');
   await snap(page, shot, 'pass-teal');
   // Teal drags: the board is drawn from Teal's side now, and the drop must still find the city.
   await dragFirst(page);
@@ -1158,28 +1182,100 @@ export default async function smoke(page, { log, shot, audit, phone = false, url
   await matchFrame(page, { log, shot, audit, phone });
   await tableSeats(page, { log, shot, audit, phone });
   await tableFlows(page, { log, shot, audit, phone });
+  await timerSteps(page, { log, shot, audit, phone });
   await lobbySteps(page, { log, shot, audit, phone, url });
 }
 
 /** Take down any toast still up (the ladder's six-second recruits toast, say), so it isn't in the next shots. */
 const clearToasts = (page) => page.evaluate(() => document.querySelectorAll('.cg-toast').forEach((t) => t.remove()));
 
+/** The longest codename, in every seat: the tags' worst case (seat 0 still reads "You"). */
+const MARTENS = ['Agent Marten', 'Agent Marten', 'Agent Marten', 'Agent Marten'];
+
+/**
+ * An open sheet's box (px from the viewport's edges), its height and its Close button's, and the window's
+ * size: on a phone the city dossier and a rival's file come up from the bottom edge, at most 70% of the
+ * screen high, with Close on screen and at least 44px tall.
+ */
+const sheetFits = (page) =>
+  page.evaluate(() => {
+    const r = document.querySelector('#modal-root .sheet')?.getBoundingClientRect();
+    const c = document.querySelector('#modal-root .sheet [data-action=close-modal]')?.getBoundingClientRect();
+    if (!r || !c) return null;
+    return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), height: Math.round(r.height), close: Math.round(c.height), closeBottom: Math.round(c.bottom), innerWidth, innerHeight };
+  });
+const bottomSheet = (f) => !!f && f.top >= 0 && f.bottom <= f.innerHeight && f.bottom >= f.innerHeight - 1 && f.left >= 0 && f.right <= f.innerWidth && f.height <= Math.ceil(f.innerHeight * 0.7) + 1 && f.close >= 44 && f.closeBottom <= f.innerHeight;
+
+/** The tags' names as shown (a tight tag drops its title: main.js fitTags), any cut short by an ellipsis, and the bar's right edge. */
+const tagNames = (page) =>
+  page.evaluate(() => {
+    const whos = [...document.querySelectorAll('.tags .who')];
+    return {
+      shown: whos.map((w) => w.innerText),
+      cut: whos.filter((w) => w.scrollWidth > w.clientWidth + 1).map((w) => w.innerText),
+      short: !!document.querySelector('.tags.short'),
+      right: Math.round(document.querySelector('.tags').getBoundingClientRect().right),
+      innerWidth,
+    };
+  });
+
+/** The hand across the window: how many cards, its edges, and any card whose power, name, picture or rule spills out of it. */
+const handFits = (page) =>
+  page.evaluate(() => {
+    const cards = [...document.querySelectorAll('#hand .card')];
+    const spill = cards
+      .filter((c) => {
+        const r = c.getBoundingClientRect();
+        return [...c.children].some((k) => {
+          if (k.tagName === 'KBD' || getComputedStyle(k).display === 'none') return false;
+          const b = k.getBoundingClientRect();
+          return b.left < r.left - 2 || b.right > r.right + 2 || b.bottom > r.bottom + 2;
+        });
+      })
+      .map((c) => c.querySelector('.nm')?.textContent);
+    return {
+      n: cards.length,
+      left: Math.round(Math.min(...cards.map((c) => c.getBoundingClientRect().left))),
+      right: Math.round(Math.max(...cards.map((c) => c.getBoundingClientRect().right))),
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      spill,
+    };
+  });
+
+/** A four-seat Table (the rivals held by the caller) named `names`, its round card skipped and two turns played straight through, with no toast up. */
+async function table4(page, names, extra = {}) {
+  await page.evaluate(([names, extra]) => window.__game.startTable({ seats: 4, names, ...extra }), [names, extra]);
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, 'the four-seat table');
+  // Two turns at random, straight through the table, so the lanes have agents in them.
+  await page.evaluate(() => {
+    let s = 11;
+    window.__game.quickTurns(2, () => ((s = (s * 16807) % 2147483647) / 2147483647));
+  });
+  await until(page, () => window.__game.view?.round.turn === 3 && document.querySelector('.tags'), null, 'turn 3 at the four-seat table');
+  await clearToasts(page);
+}
+
 /**
  * The table at four seats (Phase 3), from __game.startTable with the rivals held so nothing races
- * the checks: four tags in table order from you (each with its name, score, tokens and reel, and one
- * First flip coin among them), three lanes above each plate and your full row below, the seat colours
- * on <body>, then the city dossier (a plate's tap; Escape closes it) and a rival's file (its tag; an
- * outside tap closes it). On a phone the tags, the cities, the hand and Lock in fit 390px without
- * scrolling, and an open sheet doesn't make the page grow.
+ * the checks, the longest codename in every seat: four tags in table order from you (each with its name,
+ * score, tokens and reel, and one First flip coin among them), three lanes above each plate and your
+ * full row below, the seat colours on <body>, then the city dossier (a plate's tap; Escape closes it)
+ * and a rival's file (its tag; an outside tap closes it), and the final turn at night (tags on ink,
+ * lanes at 60%), whose skipped reveal plays no burst of tally ticks. On a phone the tags, the cities,
+ * the hand and Lock in fit 390px without scrolling, an open sheet comes up from the bottom without
+ * making the page grow, and narrowTable() goes on to Agent Wren II and III at 390px and to 320px.
  */
 export async function tableSeats(page, { log, shot, audit, phone }) {
   const fail = (m) => {
     throw new Error(m);
   };
-  await page.evaluate(() => {
+  await page.evaluate((names) => {
     window.__game.holdRival(true);
-    window.__game.startTable({ seats: 4 });
-  });
+    // Three cities that never close (and no Berlin), so the final turn always has somewhere to drop.
+    window.__game.startTable({ seats: 4, names, seed: 'table4', cities: ['moscow', 'istanbul', 'lisbon'] });
+  }, MARTENS);
   await clearCard(page);
   await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('.hand .card'), null, 'the four-seat table');
   await clearToasts(page);
@@ -1254,6 +1350,10 @@ export async function tableSeats(page, { log, shot, audit, phone }) {
     const grown = await page.evaluate((h) => ({ now: document.scrollingElement.scrollHeight, h, wide: document.scrollingElement.scrollWidth > innerWidth }), height);
     log(`phone fit with the city dossier open: ${JSON.stringify({ ...fit, scrollHeight: grown.now })}`);
     if (grown.now > grown.h || grown.wide) fail(`the city dossier should overlay the table without making the page grow: ${JSON.stringify(grown)}`);
+    await settle(page);
+    const sheetBox = await sheetFits(page);
+    log(`the city dossier as a bottom sheet: ${JSON.stringify(sheetBox)}`);
+    if (!bottomSheet(sheetBox)) fail(`on a phone the city dossier comes up from the bottom, at most 70% high, Close on screen and 44px tall: ${JSON.stringify(sheetBox)}`);
   }
   await page.keyboard.press('Escape');
   await until(page, () => !document.querySelector('.city-sheet') && window.__game.ui.modal === null, null, 'Escape to close the city dossier');
@@ -1277,6 +1377,11 @@ export async function tableSeats(page, { log, shot, audit, phone }) {
   if (file.name !== file.want || file.score !== file.wantScore || !file.mark || !file.unseen) fail(`a rival's file should show its name, score, mark and unseen agents: ${JSON.stringify(file)}`);
   await snap(page, shot, 'tag-sheet');
   await audit('tag-sheet');
+  if (phone) {
+    await settle(page);
+    const sheetBox = await sheetFits(page);
+    if (!bottomSheet(sheetBox)) fail(`on a phone a rival's file comes up from the bottom, at most 70% high, Close on screen and 44px tall: ${JSON.stringify(sheetBox)}`);
+  }
   // An outside tap (the veil, clear of the sheet) closes it.
   await page.mouse.click(4, 4);
   await until(page, () => !document.querySelector('.tag-sheet') && window.__game.ui.modal === null, null, 'an outside tap to close the rival’s file');
@@ -1285,11 +1390,137 @@ export async function tableSeats(page, { log, shot, audit, phone }) {
   if (await page.evaluate(() => window.__game.ui.modal !== null || !!document.querySelector('.sheet'))) fail('tapping your own tag should open nothing');
   log(`a rival's file (${file.name}): score, mark and unseen list; an outside tap closed it`);
 
+  // Night at four seats: the final turn (toFinalTurn on a Table). The tags turn to ink with paper type,
+  // the rivals' lanes stand back at 60%, and the cities stay lit.
+  await page.evaluate(() => window.__game.toFinalTurn());
+  await until(page, () => document.querySelector('.final-card') || (!window.__game.ui.card && !window.__game.ui.updating && window.__game.view?.round.turn === 6), null, 'the final turn’s card (or none)');
+  if (await page.$('.final-card')) await page.keyboard.press('Enter');
+  await until(page, () => !window.__game.ui.card && !window.__game.ui.updating && window.__game.view?.round.turn === 6 && document.body.dataset.night === '1' && document.querySelector('#hand .card:not([disabled])'), null, 'the final turn at night, four seats');
+  await clearToasts(page);
+  const night = await page.evaluate(() => {
+    const tag = getComputedStyle(document.querySelector('.tags .tag.s-1'));
+    return { bg: tag.backgroundColor, color: tag.color, lanes: [...new Set([...document.querySelectorAll('#board .row.lane')].map((l) => getComputedStyle(l).opacity))], plates: [...new Set([...document.querySelectorAll('#board .plate')].map((p) => getComputedStyle(p).opacity))] };
+  });
+  if (night.bg !== 'rgb(46, 41, 36)' || night.color !== 'rgb(240, 226, 196)' || night.lanes.join() !== '0.6' || night.plates.join() !== '1') fail(`at night the tags are ink with paper type, the lanes at 60% and the cities lit: ${JSON.stringify(night)}`);
+  await snap(page, shot, 'table4-night');
+  await audit('table4-night');
+  if (phone) {
+    const fit = await phoneFits(page);
+    const over = ['boardBottom', 'lockBottom', 'tagsBottom'].filter((k) => !(fit[k] <= fit.innerHeight));
+    if (over.length || !(fit.tagsRight <= fit.innerWidth)) fail(`the four-seat night should show the tags, the cities and Lock in without scrolling: ${JSON.stringify(fit)}`);
+  }
+  // Its reveal, skipped: the cities resolve at once, with no burst of the tally's ticks (it was 18 at once).
+  const skipping = await page.evaluate(() => window.__game.ui.alwaysSkip);
+  const heard = () => page.evaluate(() => ({ ...window.__game.audio.effects }));
+  const before = await heard();
+  await page.evaluate(() => {
+    window.__game.skipAnimations(true);
+    window.__game.rivalLocks();
+  });
+  await dropFirst(page);
+  await until(page, () => window.__game.view?.phase !== 'plan' && !window.__game.ui.updating && document.querySelector('.result'), null, 'the final flip, skipped');
+  const after = await heard();
+  await page.evaluate((s) => window.__game.skipAnimations(s), skipping);
+  const ticks = after.tick - before.tick;
+  const ends = ['roundWon', 'roundLost', 'nobody'].reduce((n, k) => n + after[k] - before[k], 0);
+  if (ticks !== 0 || ends < 1) fail(`a skipped final reveal resolves the cities with no tally ticks: ${JSON.stringify({ ticks, ends })}`);
+  log(`night at four seats: tags ${night.bg} with ${night.color} type, lanes at ${night.lanes}; the skipped final flip ticked ${ticks} times`);
+
+  if (phone) await narrowTable(page, { log, shot, audit, fail });
+
   await page.evaluate(() => {
     window.__game.leave();
     window.__game.holdRival(false);
   });
   await until(page, () => document.querySelector('.title-screen'), null, 'the title after the four-seat table');
+}
+
+/**
+ * The four-seat table on the narrowest phones (the phone pass only). At 390px, Agent Wren, Wren II and
+ * Wren III (14 characters): a name that won't fit drops its title on every tag, and none is cut. Then at
+ * 320×568: the longest codename in every seat, with the tags across the window, Lock in on screen and no
+ * overflow; the sheets come up from the bottom; five cards share the width, and the drag ghost keeps the
+ * card's print; then seven. The viewport goes back to 390×844 whatever happens.
+ */
+async function narrowTable(page, { log, shot, audit, fail }) {
+  // Seeded deals, the cities with the longest names and rules (the tallest plates).
+  const deal = { seed: 'narrow', cities: ['tangier', 'glienicke', 'macau'] };
+  await table4(page, ['Agent Marten', 'Agent Wren', 'Agent Wren II', 'Agent Wren III'], deal);
+  const wrens = await tagNames(page);
+  log(`Agent Wren II and III at 390px: ${JSON.stringify(wrens)}`);
+  if (wrens.cut.length || !(wrens.right <= wrens.innerWidth) || !wrens.shown.includes('Wren III')) fail(`at 390px Agent Wren II and III fit their tags (without their title): ${JSON.stringify(wrens)}`);
+  const phoneSize = page.viewportSize();
+  await page.setViewportSize({ width: 320, height: 568 });
+  try {
+    await table4(page, MARTENS, deal);
+    const fit = await phoneFits(page);
+    const names = await tagNames(page);
+    log(`320px: ${JSON.stringify({ ...fit, names: names.shown, cut: names.cut })}`);
+    const missing = Object.keys(fit).filter((k) => fit[k] === null);
+    if (missing.length || !(fit.tagsRight <= fit.innerWidth) || !(fit.tagsBottom <= fit.innerHeight) || !(fit.lockBottom <= fit.innerHeight) || !(fit.scorebarTop >= 0)) fail(`at 320×568 the four tags fit across and Lock in is on screen: ${JSON.stringify(fit)}`);
+    if (!(names.right <= names.innerWidth)) fail(`the tags run off a 320px screen: ${JSON.stringify(names)}`);
+    await snap(page, shot, 'table4-320');
+    await audit('table4-320');
+
+    // The sheets, from the bottom edge.
+    const ci = await page.evaluate(() => window.__game.view.round.cities.reduce((best, c, i, all) => (c.sides.flat().length > all[best].sides.flat().length ? i : best), 0));
+    await page.click(`#board .city[data-city="${ci}"] .plate[data-action=city-sheet]`);
+    await until(page, () => document.querySelector('.city-sheet') && window.__game.ui.modal === 'city', null, 'the city dossier at 320px');
+    await settle(page);
+    const city = await sheetFits(page);
+    await snap(page, shot, 'city-sheet-320');
+    await audit('city-sheet-320');
+    await page.keyboard.press('Escape');
+    await until(page, () => !document.querySelector('.sheet'), null, 'the city dossier closed at 320px');
+    await page.click('.tags button.tag[data-seat="1"]');
+    await until(page, () => document.querySelector('.tag-sheet') && window.__game.ui.modal === 'tag', null, 'a rival’s file at 320px');
+    await settle(page);
+    const tag = await sheetFits(page);
+    await audit('tag-sheet-320');
+    await page.keyboard.press('Escape');
+    await until(page, () => !document.querySelector('.sheet'), null, 'the file closed at 320px');
+    log(`320px sheets: city ${JSON.stringify(city)}, file ${JSON.stringify(tag)}`);
+    if (!bottomSheet(city) || !bottomSheet(tag)) fail(`at 320px the sheets come up from the bottom, at most 70% high, Close on screen and 44px tall: ${JSON.stringify({ city, tag })}`);
+
+    // Five cards share the width, every part of each inside its card.
+    const dealt = await page.evaluate(() => window.__game.view.round.hand.length);
+    if (dealt > 5) fail(`the seeded deal should leave at most five cards in hand by turn 3, not ${dealt}`);
+    await page.evaluate((n) => window.__game.give(5 - n), dealt);
+    await until(page, () => document.querySelectorAll('#hand .card').length === 5 && !window.__game.ui.updating, null, 'five cards in hand');
+    const five = await handFits(page);
+    if (five.left < 0 || five.right > five.innerWidth || five.scrollWidth > five.innerWidth || five.spill.length) fail(`five cards should fit 320px, each card's print inside it: ${JSON.stringify(five)}`);
+    await audit('hand5-320');
+    // A card dragged out of the hand keeps its print: the ghost's name is the size of the card's.
+    await page.evaluate(() => document.querySelector('#hand').scrollIntoView({ block: 'end' }));
+    const c = await page.$eval('#hand .card:not([disabled])', (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, uid: el.dataset.uid };
+    });
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.down();
+    await page.mouse.move(c.x, c.y - 40, { steps: 5 });
+    await until(page, () => document.querySelector('.drag-ghost'), null, 'the drag ghost at 320px');
+    const ghost = await page.evaluate((uid) => {
+      const size = (el, sel) => getComputedStyle(el.querySelector(sel)).fontSize;
+      const g = document.querySelector('.drag-ghost');
+      const card = document.querySelector(`#hand .card[data-uid="${uid}"]`);
+      return { ghost: [size(g, '.nm'), size(g, '.tx')], card: [size(card, '.nm'), size(card, '.tx')] };
+    }, c.uid);
+    await page.mouse.move(c.x, c.y, { steps: 3 });
+    await page.mouse.up();
+    if (ghost.ghost.join() !== ghost.card.join()) fail(`the drag ghost should keep the card's print at 320px with five cards: ${JSON.stringify(ghost)}`);
+    await snap(page, shot, 'hand5-320');
+    // Seven.
+    await page.evaluate(() => window.__game.give(2));
+    await until(page, () => document.querySelectorAll('#hand .card').length === 7 && !window.__game.ui.updating, null, 'seven cards in hand');
+    const seven = await handFits(page);
+    if (seven.left < 0 || seven.right > seven.innerWidth || seven.scrollWidth > seven.innerWidth || seven.spill.length) fail(`seven cards should fit 320px: ${JSON.stringify(seven)}`);
+    await audit('hand7-320');
+    log(`320px hands: five ${five.left}–${five.right}, seven ${seven.left}–${seven.right} of ${seven.innerWidth}; the ghost's name ${ghost.ghost[0]} as the card's`);
+  } finally {
+    await page.setViewportSize(phoneSize ?? { width: 390, height: 844 });
+    await page.evaluate(() => scrollTo(0, 0));
+  }
 }
 
 /**
@@ -1606,6 +1837,238 @@ export async function tableFlows(page, { log, shot, audit, phone }) {
 }
 
 /**
+ * The turn timer (Phase 3, Task 13), on the check's page. A ladder match has no timer: no fuse, no clock.
+ * The Table tab's Timer (Blitz) deals a three-seat table whose fuse burns across the top of the hand
+ * (the clock held, so it never runs out by itself mid-step; __game.clock.expire() runs it out through its
+ * own path). Out of time with a card and a city picked, that drop locks in; next turn with nothing
+ * picked, a random legal one does. A rival's escalation brings the prompt with its own fuse, and running
+ * out plays on; the round's result has its fuse under the heading, and running out presses Next. Under
+ * reduced motion the fuse stands still and counts the seconds. Continue keeps the timer. Pass and play's
+ * sheet has the Timer too, and its clock starts only when a player uncovers.
+ */
+export async function timerSteps(page, { log, shot, audit, phone }) {
+  const fail = (m) => {
+    throw new Error(m);
+  };
+  const skipping = await page.evaluate(() => window.__game.ui.alwaysSkip);
+  await page.evaluate(() => {
+    window.__game.leave();
+    window.__game.skipAnimations(true);
+    window.__game.holdRival(true);
+    window.__game.startSolo('wren');
+  });
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('#hand .card'), null, 'a ladder table');
+  const plain = await page.evaluate(() => ({ fuse: document.querySelectorAll('.fuse').length, clock: window.__game.clock, view: window.__game.view.clock, timer: window.__game.view.timer }));
+  if (plain.fuse || plain.clock !== null || plain.view !== null || plain.timer !== 0) fail(`a match with no timer has no fuse and no clock: ${JSON.stringify(plain)}`);
+
+  // 1. The Table tab: Timer Blitz, three seats, Start. The fuse burns across the top of the hand.
+  await page.evaluate(() => window.__game.leave());
+  await until(page, () => document.querySelector('.title-screen [data-action=rivals]'), null, 'the title for the timed Table');
+  await page.click('[data-action=rivals]');
+  await page.click('[data-action=rivals-tab][data-choice=table]');
+  await until(page, () => document.querySelector('[data-action=table-timer][data-choice="0"][aria-pressed=true]'), null, 'the Table tab, its timer Off');
+  await page.click('[data-action=table-seats][data-choice="3"]');
+  await page.click('[data-action=table-timer][data-choice="10000"]');
+  await until(page, () => document.querySelector('[data-action=table-timer][data-choice="10000"][aria-pressed=true]') && /only you are timed/.test(document.querySelector('.table-pick').textContent), null, 'Blitz pressed on the Table tab');
+  await page.evaluate(() => window.__game.holdClock(true));
+  await page.click('[data-action=table-start]');
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && !window.__game.ui.card && document.querySelector('#hand .fuse.kind-drop'), null, 'the fuse across the hand');
+  const lit = await page.evaluate(() => {
+    const g = window.__game;
+    const f = document.querySelector('#hand .fuse');
+    const core = f.querySelector('i').getAnimations();
+    return { seats: g.view.scores.length, timer: g.view.timer, kind: g.clock?.kind, clock: g.table.view(0).clock, burning: core.map((a) => a.animationName), state: [...new Set(core.map((a) => a.playState))].join(), held: f.classList.contains('held'), done: f.classList.contains('done') };
+  });
+  // (The check holds the clock, so the fuse stands still where it is: held, its burn paused.)
+  if (lit.seats !== 3 || lit.timer !== 10000 || lit.kind !== 'drop' || lit.clock?.kind !== 'drop' || !(lit.clock.left > 0 && lit.clock.left <= 10000) || !lit.burning.includes('burn') || !lit.held || lit.state !== 'paused' || lit.done) {
+    fail(`Blitz at the Table: a 10 s drop clock and a fuse across the hand, standing still while the clock is held: ${JSON.stringify(lit)}`);
+  }
+  await snap(page, shot, 'fuse');
+  await audit('fuse');
+  if (phone) {
+    const fit = await phoneFits(page);
+    const fuse = await page.evaluate(() => {
+      const r = document.querySelector('#hand .fuse').getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), innerWidth, innerHeight };
+    });
+    log(`phone fit with the fuse: ${JSON.stringify({ ...fit, fuse })}`);
+    const missing = Object.keys(fit).filter((k) => fit[k] === null);
+    const over = ['boardBottom', 'handBottom', 'lockBottom', 'tagsBottom'].filter((k) => !(fit[k] <= fit.innerHeight));
+    if (missing.length || over.length || !(fit.scorebarTop >= 0) || !(fit.tagsRight <= fit.innerWidth)) fail(`the timed phone screen should show the tags, the cities, the hand and Lock in without scrolling: ${JSON.stringify(fit)}`);
+    if (!(fuse.top >= 0 && fuse.bottom <= fuse.innerHeight && fuse.left >= 0 && fuse.right <= fuse.innerWidth)) fail(`the fuse should be on the phone's screen: ${JSON.stringify(fuse)}`);
+  }
+
+  // 2. Out of time with a card and a city picked: that drop locks in.
+  const pick = '#hand .card:not([disabled]):not(.k-blackmailer):not(.k-accomplice)';
+  await page.click((await page.$(pick)) ? pick : '#hand .card:not([disabled])');
+  await page.click('.city.target .plate');
+  if (await page.$('[data-action=alone]')) await page.click('[data-action=alone]');
+  const mine = await page.evaluate(() => {
+    const g = window.__game;
+    const want = { uid: g.ui.selected, city: g.ui.target };
+    const ran = g.clock.expire();
+    return { want, ran, plan: g.table.view(0).round.plan, rivals: g.state.round.plans.slice(1) };
+  });
+  if (!mine.ran || mine.plan?.uid !== mine.want.uid || mine.plan.city !== mine.want.city || mine.rivals.some(Boolean)) fail(`out of time, my picked drop should lock in (and nothing for the rivals): ${JSON.stringify(mine)}`);
+  await until(page, () => document.querySelector('[data-action=unlock]') && document.querySelector('#hand .fuse.done') === null, null, 'my drop locked in, the clock run out');
+
+  // 3. Next turn, nothing picked: a random legal drop locks in.
+  await page.evaluate(() => window.__game.rivalLocks());
+  await untilSkipping(page, () => window.__game.view?.round.turn === 2 && !window.__game.ui.updating && document.querySelector('#hand .fuse.kind-drop:not(.done)'), null, 'turn 2 and its fuse');
+  const random = await page.evaluate(() => {
+    const g = window.__game;
+    const legal = g.table.view(0).round.legal;
+    const ran = g.clock.expire();
+    const plan = g.table.view(0).round.plan;
+    return { ran, plan, legal: !!plan && legal.some((d) => d.uid === plan.uid && d.city === plan.city), selected: g.ui.selected };
+  });
+  if (!random.ran || !random.legal || random.selected !== null) fail(`out of time with nothing picked, a random legal drop should lock in: ${JSON.stringify(random)}`);
+  await until(page, () => document.querySelector('[data-action=unlock]'), null, 'the random drop locked in');
+
+  // 3b. The clock let go for real: at its own zero my picked drop locks in at once, not after the 1.5 s
+  // grace the host gives a guest's line (solo's clock is on this device). The deadline is brought near.
+  await page.evaluate(() => window.__game.rivalLocks());
+  await untilSkipping(page, () => window.__game.view?.round.turn === 3 && !window.__game.ui.updating && document.querySelector('#hand .fuse.kind-drop:not(.done)'), null, 'turn 3 and its fuse');
+  await page.click((await page.$(pick)) ? pick : '#hand .card:not([disabled])');
+  await page.click('.city.target .plate');
+  if (await page.$('[data-action=alone]')) await page.click('[data-action=alone]');
+  await clearToasts(page);
+  const burning = await page.evaluate(() => {
+    const g = window.__game;
+    window.__zeroAt = Date.now() + 400;
+    g.table.clock.deadline = window.__zeroAt;
+    g.holdClock(false); // the fuse burns again, and its timers are set from the clock
+    const f = document.querySelector('#hand .fuse');
+    return { held: f.classList.contains('held'), state: [...new Set(f.querySelector('i').getAnimations().map((a) => a.playState))].join() };
+  });
+  if (burning.held || burning.state !== 'running') fail(`let go, the fuse burns again: ${JSON.stringify(burning)}`);
+  await until(page, () => window.__game.table.view(0).round.plan, null, 'my drop locked in at the clock’s zero');
+  const zero = await page.evaluate(() => {
+    window.__game.holdClock(true);
+    return { late: Date.now() - window.__zeroAt, toast: document.querySelector('.toast')?.textContent ?? '' };
+  });
+  log(`the solo clock's own zero locked my pick ${zero.late} ms after zero`);
+  if (!(zero.late < 1500) || !zero.toast.includes('your drop is locked in')) fail(`at the solo clock's zero my pick locks in at once, inside the 1.5 s grace: ${JSON.stringify(zero)}`);
+
+  // 4. A rival escalates: the prompt has its fuse, and running out plays on.
+  await page.evaluate(() => window.__game.rivalEscalates(1));
+  await untilSkipping(page, () => document.querySelector('.modal.hot .sheet > .fuse.kind-answer:not(.done)') && !window.__game.ui.card && !window.__game.ui.updating, null, 'the escalation prompt with its fuse');
+  await snap(page, shot, 'fuse-answer');
+  await audit('fuse-answer');
+  const answered = await page.evaluate(() => {
+    const g = window.__game;
+    const ran = g.clock.expire();
+    return { ran, mine: g.state.round.pending?.calls[0] ?? null };
+  });
+  if (!answered.ran || answered.mine !== 'on') fail(`out of time on a call, I play on: ${JSON.stringify(answered)}`);
+  await until(page, () => !document.querySelector('.modal.hot'), null, 'the prompt to go once I played on');
+
+  // 5. The round's result: its fuse under the heading; running out presses Next for me.
+  await page.evaluate(() => window.__game.finishRound());
+  await untilSkipping(page, () => document.querySelector('.result h2 + .fuse.kind-next:not(.done)') && !window.__game.ui.updating && !window.__game.ui.card, null, 'the result with its fuse');
+  await clearToasts(page);
+  await snap(page, shot, 'fuse-next');
+  await audit('fuse-next');
+  // See the board: the strip keeps the fuse.
+  await page.click('[data-action=peek]');
+  await until(page, () => document.querySelector('.result.peek > .fuse.kind-next'), null, 'the peek strip with its fuse');
+  await snap(page, shot, 'fuse-peek');
+  await audit('fuse-peek');
+  await page.click('[data-action=peek]');
+  await until(page, () => document.querySelector('.result:not(.peek) h2 + .fuse.kind-next'), null, 'the full result again');
+  const next = await page.evaluate(() => {
+    const g = window.__game;
+    const ran = g.clock.expire();
+    return { ran, ready: g.table.ready.slice(), roundNo: g.state.roundNo };
+  });
+  if (!next.ran || next.ready.join() !== 'true,false,false') fail(`out of time on the result, Next is pressed for me (the held rivals not yet): ${JSON.stringify(next)}`);
+
+  // 6. Reduced motion: the next round's fuse stands still and counts the seconds down.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(() => {
+    const t = window.__game.table;
+    t.act(1, { a: 'next' });
+    t.act(2, { a: 'next' });
+  });
+  await clearCard(page);
+  await until(page, (r) => window.__game.view?.roundNo === r + 1 && !window.__game.ui.updating && document.querySelector('#hand .fuse.kind-drop b'), next.roundNo, 'the next round’s fuse under reduced motion');
+  const still = await page.evaluate(() => {
+    const f = document.querySelector('#hand .fuse');
+    return { secs: Number(f.querySelector('b').textContent), moving: f.getAnimations({ subtree: true }).filter((a) => a.playState === 'running').map((a) => a.animationName), spark: getComputedStyle(f, '::after').display };
+  });
+  if (!(still.secs >= 1 && still.secs <= 10) || still.moving.length || still.spark !== 'none') fail(`under reduced motion the fuse says the seconds and stands still: ${JSON.stringify(still)}`);
+  await page.evaluate(() => window.__game.holdClock(false));
+  await until(page, (s) => Number(document.querySelector('#hand .fuse b')?.textContent) < s, still.secs, 'the seconds to count down');
+  await page.evaluate(() => window.__game.holdClock(true));
+  await clearToasts(page);
+  await snap(page, shot, 'fuse-reduced');
+  await page.emulateMedia({ reducedMotion: null });
+
+  // 7. Continue keeps the timer.
+  await until(page, () => JSON.parse(localStorage.getItem('cg:dead-drop:match') || 'null')?.table?.timer === 10000, null, 'the timed Table saved');
+  await toTitle(page);
+  await page.click('[data-action=continue]');
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'play' && !window.__game.ui.updating && window.__game.view?.scores.length === 3, null, 'the timed Table resumed');
+  const resumed = await page.evaluate(() => ({ timer: window.__game.table.timer, clock: window.__game.clock?.kind ?? null, fuse: !!document.querySelector('#hand .fuse') }));
+  if (resumed.timer !== 10000 || !resumed.clock || !resumed.fuse) fail(`Continue should keep the Table's timer: ${JSON.stringify(resumed)}`);
+  log(`timer: Blitz at the Table; out of time my pick locked in, then a random drop, then play on and Next; reduced motion counted ${still.secs}, then down; Continue kept it`);
+
+  // 8. Pass and play's sheet has the Timer; the clock starts only when a player uncovers.
+  await toTitle(page);
+  await page.evaluate(() => localStorage.removeItem('cg:dead-drop:match'));
+  await page.click('[data-action=pass]');
+  await page.click('.pass-sheet [data-action=pass-seats][data-choice="2"]');
+  await page.click('.pass-sheet [data-action=pass-timer][data-choice="30000"]');
+  await until(page, () => document.querySelector('.pass-sheet [data-action=pass-timer][data-choice="30000"][aria-pressed=true]') && document.querySelector('.pass-sheet [data-action=pass-seats][data-choice="2"][aria-pressed=true]'), null, 'pass and play: two players, 30 s');
+  await clearToasts(page);
+  await snap(page, shot, 'pass-timer');
+  await audit('pass-timer');
+  await page.click('.pass-sheet [data-action=pass-start][data-choice=classic]');
+  await until(page, () => window.__game.ui.screen === 'cover' && window.__game.ui.cover?.seat === 0 && !window.__game.ui.updating, null, 'the first cover');
+  const covered = await page.evaluate(() => ({ timer: window.__game.table.timer, clock: window.__game.table.view(-1).clock, fuse: document.querySelectorAll('.fuse').length }));
+  if (covered.timer !== 30000 || covered.clock !== null || covered.fuse) fail(`behind the cover no clock runs: ${JSON.stringify(covered)}`);
+  await page.click('[data-action=uncover]');
+  await until(page, () => document.querySelector('#hand .fuse.kind-drop'), null, 'the fuse once uncovered');
+  const uncovered = await page.evaluate(() => window.__game.table.view(0).clock);
+  if (uncovered?.kind !== 'drop' || !(uncovered.left > 0 && uncovered.left <= 30000)) fail(`uncovered, the drop clock runs: ${JSON.stringify(uncovered)}`);
+  await dropFirst(page);
+  await until(page, () => window.__game.ui.screen === 'cover' && window.__game.ui.cover?.seat === 1, null, 'the second cover');
+  const handed = await page.evaluate(() => window.__game.table.view(-1).clock);
+  if (handed !== null) fail(`handing the device over stops the clock until the next player uncovers: ${JSON.stringify(handed)}`);
+  // The round's result is everyone's: the clock runs for Next there (whoever holds the device presses it,
+  // or it does), and running out starts the next round.
+  await page.click('[data-action=uncover]');
+  await until(page, () => window.__game.ui.screen === 'play' && document.querySelector('#hand .fuse.kind-drop'), null, 'the second player’s hand');
+  await page.evaluate(() => window.__game.finishRound());
+  await untilSkipping(page, () => window.__game.state.phase === 'round-over' && document.querySelector('.result h2 + .fuse.kind-next:not(.done)') && !window.__game.ui.updating && !window.__game.ui.card, null, 'pass and play’s shared result with its fuse');
+  const shared = await page.evaluate(() => {
+    const g = window.__game;
+    const kind = g.clock?.kind;
+    const ran = g.clock.expire();
+    return { kind, ran, roundNo: g.state.roundNo, ready: g.table.ready.slice() };
+  });
+  if (shared.kind !== 'next' || !shared.ran || shared.roundNo !== 1) fail(`pass and play's result: Next on the clock, and running out starts the next round: ${JSON.stringify(shared)}`);
+  await clearCard(page);
+  await until(page, () => window.__game.ui.screen === 'cover' && !window.__game.ui.updating && window.__game.table.view(-1).clock === null, null, 'the next round’s cover, no clock');
+  log('pass and play: Timer 30 s on the sheet; no clock behind a cover, the fuse once uncovered; the shared result pressed Next when its clock ran out');
+
+  await page.evaluate((skip) => {
+    const g = window.__game;
+    g.leave();
+    g.holdClock(false);
+    g.holdRival(false);
+    g.skipAnimations(skip);
+    g.ui.tableTimer = 0;
+    g.ui.passTimer = 0;
+    localStorage.removeItem('cg:dead-drop:match');
+  }, skipping);
+  await until(page, () => document.querySelector('.title-screen'), null, 'the title after the timer');
+}
+
+/**
  * Phase 3's screens (Task 10). The rivals screen's Table tab: four seats default to the open rungs (Agent
  * Wren, the Magpie, Mr Heron; never Control), a rung picked twice is "Agent Wren II", Mixed draws from your
  * network, Start deals a four-seat table with those names, and the title's Continue resumes it; with
@@ -1613,8 +2076,9 @@ export async function tableFlows(page, { log, shot, audit, phone }) {
  * lobby on its own page (?net=local, no guest): Seats 3, Timer 30 s, Fill (two computer rivals) and
  * Start with one human, while a second tab, which arrived once the table was full, watches: from the
  * lobby to the table with no hand and no controls, every tag a button, the help sheet, a round's result
- * with no Next round, and a dossier with no rematch and no win or loss. That tab isn't the check's page,
- * so its screenshots are saved straight into the check's folder (`<slug>-[phone-]tab-<name>.png`).
+ * with no Next round (and no sting, no city coloured as its own), and a dossier with no rematch and no win
+ * or loss. That tab isn't the check's page: its shots and DOM audits go through the check's own shot() and
+ * audit(), which take a page (`<slug>-[phone-]tab-<name>.png`).
  */
 export async function lobbySteps(page, { log, shot, audit, phone, url }) {
   const fail = (m) => {
@@ -1652,8 +2116,26 @@ export async function lobbySteps(page, { log, shot, audit, phone, url }) {
   await until(page, () => document.querySelectorAll('.table-seat .nm')[3]?.textContent === 'Agent Wren II', null, 'seat 4’s rival changed to Agent Wren II');
   const changed = await pickNow();
   if (changed.names.join('|') !== 'Agent Wren|The Magpie|Agent Wren II' || changed.pressed.join() !== 'wren,magpie,wren') fail(`a rung picked twice is "Agent Wren II": ${JSON.stringify(changed)}`);
+  await clearToasts(page);
+  await page.evaluate(() => scrollTo(0, 0));
   await snap(page, shot, 'table-screen');
   await audit('table-screen');
+  // Start is on screen without scrolling at four seats, with three rungs open and with all five (its bar
+  // sticks to the window's foot).
+  const startAt = () =>
+    page.evaluate(() => {
+      scrollTo(0, 0);
+      const r = document.querySelector('[data-action=table-start]').getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), innerHeight, scrollHeight: document.scrollingElement.scrollHeight };
+    });
+  const start3 = await startAt();
+  await page.evaluate(() => window.__game.beat(['wren', 'magpie', 'heron', 'countess', 'control']));
+  await until(page, () => document.querySelectorAll('.table-seat:nth-child(2) [data-action=table-rival]').length === 5, null, 'five rungs at the Table');
+  const start5 = await startAt();
+  await page.evaluate(() => window.__game.beat(['wren', 'magpie']));
+  await until(page, () => document.querySelectorAll('.table-seat:nth-child(2) [data-action=table-rival]').length === 3, null, 'three rungs at the Table again');
+  log(`the Table's Start at four seats: ${JSON.stringify({ start3, start5 })}`);
+  if (![start3, start5].every((r) => r.top >= 0 && r.bottom <= r.innerHeight)) fail(`the Table's Start should be on screen without scrolling at four seats: ${JSON.stringify({ start3, start5 })}`);
   // Mixed from the network, then Start: the rivals are held, and a drop saves the Table.
   await page.click('[data-action=table-roster][data-choice=mixed]');
   await until(page, () => document.querySelector('[data-action=table-roster][data-choice=mixed][aria-pressed=true]'), null, 'the Table’s Mixed roster');
@@ -1742,10 +2224,29 @@ export async function lobbySteps(page, { log, shot, audit, phone, url }) {
   await page.click('[data-action=lobby-fill]');
   await until(page, () => document.querySelectorAll('.lobby .seat.bot').length === 2, null, 'two computer rivals in the seat list');
   const filled = await lobbyNow();
-  if (filled.seats !== 'host,bot,bot' || !filled.names.slice(1).every((n) => n.endsWith(' (computer)')) || filled.fill !== 'Clear computer rivals' || filled.start !== 'Start' || filled.startOff || filled.small !== '2') {
-    fail(`Fill seats two computer rivals; Start is open, and two seats (fewer than the three taken) can't be chosen: ${JSON.stringify(filled)}`);
+  const roles = () => page.evaluate(() => [...document.querySelectorAll('.lobby .seat .role')].map((x) => x.textContent));
+  const filledRoles = await roles();
+  if (filled.seats !== 'host,bot,bot' || filled.names.some((n) => /computer/i.test(n)) || filledRoles.slice(1).join() !== 'Computer,Computer' || filled.fill !== 'Clear computer rivals' || filled.start !== 'Start' || filled.startOff || filled.small !== '2') {
+    fail(`Fill seats two computer rivals (named once, "Computer" beside them); Start is open, and two seats (fewer than the three taken) can't be chosen: ${JSON.stringify({ ...filled, roles: filledRoles })}`);
   }
-  log(`lobby: Seats 3 and Timer 30 s pressed; Fill seated ${filled.names.slice(1).join(' and ')}`);
+  // A table grown after Fill has an open seat again: Fill tops it up, then Clear empties the computer seats.
+  await page.click('[data-action=lobby-size][data-choice="4"]');
+  await until(page, () => window.__game.ui.lobby?.size === 4 && document.querySelectorAll('.lobby .seat.empty').length === 1, null, 'a fourth, open seat');
+  const grown = await lobbyNow();
+  if (grown.fill !== 'Fill empty seats with computer rivals') fail(`with a seat open again, the lobby offers Fill: ${JSON.stringify(grown)}`);
+  await page.click('[data-action=lobby-fill]');
+  await until(page, () => document.querySelectorAll('.lobby .seat.bot').length === 3, null, 'Fill topping up the fourth seat');
+  const topped = await lobbyNow();
+  if (topped.seats !== 'host,bot,bot,bot' || topped.fill !== 'Clear computer rivals') fail(`Fill tops up the grown table, then offers Clear: ${JSON.stringify(topped)}`);
+  await page.click('[data-action=lobby-fill]');
+  await until(page, () => !document.querySelector('.lobby .seat.bot'), null, 'Clear emptying the computer seats');
+  await page.click('[data-action=lobby-size][data-choice="3"]');
+  await until(page, () => window.__game.ui.lobby?.size === 3, null, 'three seats again');
+  await page.click('[data-action=lobby-fill]');
+  await until(page, () => document.querySelectorAll('.lobby .seat.bot').length === 2, null, 'two computer rivals again');
+  const again = await lobbyNow();
+  if (again.seats !== 'host,bot,bot' || again.names.join('|') !== filled.names.join('|')) fail(`Fill seats the same two computer rivals again: ${JSON.stringify(again)}`);
+  log(`lobby: Seats 3 and Timer 30 s pressed; Fill seated ${filled.names.slice(1).join(' and ')}; grown to four, Fill topped up ${topped.names[3]}, Clear emptied them`);
 
   // A second tab arrives while the table is full: it watches.
   const sp = await page.context().newPage();
@@ -1781,12 +2282,13 @@ export async function lobbySteps(page, { log, shot, audit, phone, url }) {
       controls: [...document.querySelectorAll('.controls button')].map((b) => b.dataset.action),
       status: document.querySelector('.controls .status')?.textContent ?? '',
       tags: [...document.querySelectorAll('.tags .tag')].map((t) => t.tagName).join(),
+      who: [...document.querySelectorAll('.tags .who')].map((t) => t.textContent),
       leave: !!document.querySelector('.top [data-action=quit]'),
       names: window.__game.view.names,
     }));
-    const wantStatus = `Watching ${watch.names[0]}, ${watch.names[1]} and ${watch.names[2]}’s table.`;
-    if (watch.hand || watch.controls.length || !watch.status.startsWith(wantStatus) || watch.tags !== 'BUTTON,BUTTON,BUTTON' || !watch.leave) {
-      fail(`a spectator sees the table with no hand or controls, "${wantStatus}", every tag a button and Leave: ${JSON.stringify(watch)}`);
+    const wantStatus = `Watching: ${watch.names[0]}, ${watch.names[1]} and ${watch.names[2]}.`;
+    if (watch.hand || watch.controls.length || !watch.status.startsWith(wantStatus) || watch.tags !== 'BUTTON,BUTTON,BUTTON' || watch.who.join('|') !== watch.names.join('|') || !watch.leave) {
+      fail(`a spectator sees the table with no hand or controls, "${wantStatus}", every tag a button named for its seat (no "You") and Leave: ${JSON.stringify(watch)}`);
     }
     // Seat 0's file opens from its tag (every tag is a rival's to a spectator), and the help sheet works.
     await sp.click('.tags button.tag[data-seat="0"]');
@@ -1801,14 +2303,44 @@ export async function lobbySteps(page, { log, shot, audit, phone, url }) {
     await sp.keyboard.press('f');
     await sp.keyboard.press('e');
     if (await sp.evaluate(() => window.__game.ui.modal !== null || !!document.querySelector('.modal'))) fail('F or E opened something for a spectator');
+    await clearToasts(sp);
     await spShot('spectator');
     await spAudit('table');
 
-    // A round ends: the spectator's result has no Next round, only who it waits for.
-    await page.evaluate(() => window.__game.finishRound());
-    await until(sp, `(window.__game.ui.animating && (window.__game.ui.skip = true), window.__game.view?.phase === 'round-over' && !window.__game.ui.updating && document.querySelector('.result'))`, null, 'the round’s result for the spectator');
-    const result = await sp.evaluate(() => ({ next: !!document.querySelector('[data-action=next]'), wait: document.querySelector('.result .wait')?.textContent.trim() ?? null }));
-    if (result.next || !/^Waiting for .+…$/.test(result.wait || '')) fail(`a spectator's round result has no Next round: ${JSON.stringify(result)}`);
+    // A round ends: the spectator's result has no Next round, only who it waits for. A spectator has no
+    // side: no win or loss sting, and no city or line coloured as its own ("me"), only by its winner's seat.
+    // A dead heat plays no sting to anyone, so the check would say nothing: until a round has a winner, the
+    // players start another (the film strips cleared each time, so no reel can end the match meanwhile).
+    const stings = () => sp.evaluate(() => ['roundWon', 'roundLost'].map((k) => window.__game.audio.effects[k]));
+    let stung = null;
+    let decided = null;
+    let played = 0;
+    for (let round = 0; round < 6 && decided === null; round++, played++) {
+      if (round) {
+        await page.evaluate(() => [0, 1, 2].forEach((s) => window.__game.table.act(s, { a: 'next' })));
+        await until(sp, (r) => (window.__game.ui.animating && (window.__game.ui.skip = true), window.__game.ui.card?.skip(), window.__game.view?.roundNo === r && window.__game.view.phase === 'plan' && !window.__game.ui.updating && !window.__game.ui.card), round, 'the next round for the spectator');
+      }
+      stung = await stings();
+      await page.evaluate(() => {
+        const g = window.__game;
+        g.state.strips = g.state.strips.map(() => 0);
+        g.finishRound();
+      });
+      await until(sp, (r) => (window.__game.ui.animating && (window.__game.ui.skip = true), window.__game.view?.roundNo === r && window.__game.view.phase === 'round-over' && !window.__game.ui.updating && document.querySelector('.result')), round, 'the round’s result for the spectator');
+      decided = await sp.evaluate(() => window.__game.view.round.result.winner);
+    }
+    if (decided === null) fail('six dead heats in a row: no round with a winner to check the spectator’s silence on');
+    const result = await sp.evaluate(() => ({
+      next: !!document.querySelector('[data-action=next]'),
+      wait: document.querySelector('.result .wait')?.textContent.trim() ?? null,
+      mine: document.querySelectorAll('.city.won-me, .city-line.w-me').length,
+      won: [...document.querySelectorAll('#board .city')].map((c) => (c.classList.contains('won-them') ? `them${c.dataset.them}` : c.classList.contains('won-none') ? 'none' : '?')),
+      winners: window.__game.view.round.result.cityWinners,
+    }));
+    const after = await stings();
+    const wonOk = result.won.every((w, i) => (result.winners[i] === null ? w === 'none' : w === `them${result.winners[i]}`));
+    if (result.next || !/^Waiting for .+…$/.test(result.wait || '') || result.mine || !wonOk || after.join() !== stung.join()) fail(`a spectator's round result has no Next round, no sting and nothing coloured as its own: ${JSON.stringify({ ...result, stung, after })}`);
+    await clearToasts(sp);
     await spShot('spectator-result');
     // The match ends: the dossier names the winner, with no rematch, and neither won nor lost.
     await page.evaluate(() => {
@@ -1826,7 +2358,7 @@ export async function lobbySteps(page, { log, shot, audit, phone, url }) {
     await spShot('spectator-over');
     await spAudit('dossier');
     if (spErrors.length) fail(`the spectator's tab logged errors: ${spErrors.join(' | ')}`);
-    log(`a spectator: "${watch.status}"; no Next round ("${result.wait}"), no rematch on "${over.head}"`);
+    log(`a spectator: "${watch.status}"; no Next round ("${result.wait}") and no sting in a round won by ${decided === 0 ? 'the host' : 'a computer rival'} (round ${played} of the match), no rematch on "${over.head}"`);
   } finally {
     await sp.close();
   }
@@ -1997,7 +2529,9 @@ export async function newContent(page, { log, shot, audit, phone }) {
         const g = window.__game;
         g.skipAnimations(true); // no final card: the night isn't what this step checks
         g.toFinalTurn();
-        return g.state.phase === 'plan' && g.view.round.turn === 6 && g.view.round.legal.length > 0;
+        // A Blackmailer of mine that flipped on the last quick turn leaves my call waiting on her answer, and
+        // the status says that instead of the listening line: deal again.
+        return g.state.phase === 'plan' && g.view.round.turn === 6 && g.view.round.legal.length > 0 && !g.view.round.pending;
       });
       await until(page, () => !window.__game.ui.updating, null, 'the final turn to come up');
       await page.evaluate(() => window.__game.skipAnimations(false));
@@ -2764,6 +3298,31 @@ export async function duo([host, guest], { url, log, shot, audit, live = false, 
   await until(host, () => document.querySelector('.banner')?.textContent.includes('left the table'), null, 'the host to hear the guest leave');
   await snap(host, shot, 'duo-left-host');
   await audit('duo-left-host', host);
+  // The banner is announced once: it lives in #banner (role="status"), outside the table, and two turns
+  // drawn under it (the stand-in plays the seat) leave the same element there (its data-id stamp).
+  const stamp = () =>
+    host.evaluate(() => {
+      const b = document.querySelector('.banner');
+      return { id: b?.dataset.id ?? null, text: b?.textContent ?? '', home: b?.parentElement?.id ?? null, role: document.querySelector('#banner')?.getAttribute('role') ?? null, inScreen: !!document.querySelector('#screen .banner') };
+    });
+  const first = await stamp();
+  if (first.home !== 'banner' || first.role !== 'status' || first.inScreen || !first.id) throw new Error(`the banner should live in #banner, a status region outside the table: ${JSON.stringify(first)}`);
+  for (let k = 0; k < 2; k++) {
+    // The host plays through its table, as its own lock and answer do: the stand-in's Blackmailer may have
+    // put a call to it (a prompt over the hand), and with nowhere to drop it passes by itself.
+    const turn = await host.evaluate(() => {
+      const t = window.__game.table;
+      const P = t.state.round.pending;
+      if (P && P.from.includes(0) && P.calls[0] === null) t.act(0, { a: 'respond', accept: true });
+      const d = t.view(0).round;
+      if (!d.plan && d.legal.length) t.act(0, { a: 'lock', uid: d.legal[0].uid, city: d.legal[0].city });
+      return d.turn;
+    });
+    await untilQuick(host, `() => window.__game.state.round.turn > ${turn} && window.__game.view?.round.turn > ${turn} && !window.__game.ui.updating`, `turn ${turn + 1} under the banner`);
+  }
+  const later = await stamp();
+  if (later.id !== first.id || later.text !== first.text || later.inScreen) throw new Error(`two new views redrew the table but should leave the banner as it was: ${JSON.stringify({ first, later })}`);
+  log(`the banner ("${first.text.trim()}") stood through two turns as one element (data-id ${first.id})`);
 
   // The host's dossier says so too, in place of a rematch nobody can accept.
   await host.evaluate(() => {
@@ -2896,14 +3455,15 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   }
   await host.evaluate((c) => window.__game.startHost(c), code);
   await until(host, () => window.__game.ui.net?.session && window.__game.ui.net.status === 'waiting' && document.querySelector('.lobby .seats'), null, 'the host’s lobby');
-  if (!live) await host.evaluate(() => window.__game.standInMs(2000));
   await host.click('[data-action=lobby-size][data-choice="3"]');
   await until(host, () => window.__game.ui.lobby?.size === 3 && window.__game.ui.lobby.roster === 'classic' && document.querySelector('[data-action=lobby-size][data-choice="3"][aria-pressed=true]'), null, 'a three-seat lobby on Classic');
+  await host.click('[data-action=lobby-timer][data-choice="30000"]');
+  await until(host, () => window.__game.ui.lobby?.timer === 30000 && document.querySelector('[data-action=lobby-timer][data-choice="30000"][aria-pressed=true]'), null, 'Timer 30 s in the lobby');
   const hostNet = await host.evaluate(() => window.__game.net);
   if (hostNet?.role !== 'host' || hostNet.code !== code || hostNet.seat !== 0) fail(`__game.net should say the host's role, code and seat: ${JSON.stringify(hostNet)}`);
   await snap(host, shot, 'lobby-host');
   await audit('lobby-host', host);
-  log(`1. the host's lobby: three seats, Classic${live ? '' : ', stand-in after 2 s'}`);
+  log("1. the host's lobby: three seats, Classic, Timer 30 s");
 
   // 2. Two guests sit down, one after the other (so they take seats 1 and 2 in that order, even through
   // the relays); the host sees both, here.
@@ -2929,6 +3489,8 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   // 3. Start. Everyone holds a Sleeper (moved into each hand on the host's table, as a deal could have),
   // so face-down agents are on the board for the checks below; each drops it, and turn 1 resolves.
   await host.click('[data-action=lobby-start]');
+  // The host's clock waits from here on (a steady table for the checks); step 11 runs it out.
+  await host.evaluate(() => window.__game.holdClock(true));
   for (const p of [host, a, b]) await until(p, () => window.__game.ui.screen === 'play' && window.__game.view?.scores.length === 3, null, 'the three-seat table');
   const planted = await host.evaluate(() => {
     const g = window.__game;
@@ -2947,6 +3509,12 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   if (planted) fail(planted);
   for (const p of [a, b]) await until(p, () => window.__game.ui.remote?.round.hand.some((c) => c.kind === 'sleeper'), null, 'a Sleeper in the guest’s hand');
   for (const p of [host, a, b]) await clearCard(p);
+  // Everyone is on the host's 30 s clock: every view carries it, and a fuse burns across every hand.
+  for (const p of [host, a, b]) await until(p, () => document.querySelector('#hand .fuse.kind-drop'), null, 'the fuse across the hand');
+  const clocks = await Promise.all([host, a, b].map((p) => p.evaluate(() => ({ clock: (window.__game.ui.remote ?? window.__game.table.view(0)).clock, timer: window.__game.view.timer, has: !!window.__game.clock }))));
+  if (clocks.some((c, i) => c.clock?.kind !== 'drop' || !(c.clock.left > 0 && c.clock.left <= 30000) || c.timer !== 30000 || c.has !== (i === 0))) {
+    fail(`every view should carry the host's 30 s drop clock (and only the host has one to run out): ${JSON.stringify(clocks)}`);
+  }
   for (const p of [host, a, b]) await dropKind(p, 'sleeper');
   for (const p of [host, a, b]) await until(p, () => window.__game.view?.round.turn === 2 && !window.__game.ui.animating && !window.__game.ui.updating && window.__game.ui.shownSeq === window.__game.view.turnSeq, null, 'turn 2, revealed');
   await snap(host, shot, 'table-host');
@@ -2961,15 +3529,15 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
     if (s.seat !== seat || !s.owners.length || s.owners.some((o) => o !== seat)) fail(`the guest at seat ${seat} should hold only its own cards: ${JSON.stringify(s)}`);
     if (s.hidden !== 2 || s.told || s.backs !== 2 || s.faces) fail(`the guest at seat ${seat} should see the other two Sleepers face down, with nothing about them: ${JSON.stringify(s)}`);
   }
-  log('3. Start dealt three seats; three Sleepers went down and no guest’s view names one');
+  log(`3. Start dealt three seats on a 30 s clock (left ${clocks.map((c) => c.clock.left).join(' / ')} ms, a fuse on every hand); three Sleepers went down and no guest’s view names one`);
 
   // 4. A spectator arrives mid-match: seat -1, no hand, no controls, every face-down agent hidden.
   if (watcher) {
     await watcher.goto(at(3, `#join=${code}`));
     await until(watcher, () => window.__game?.ui.seat === -1 && window.__game.ui.screen === 'play' && window.__game.ui.remote?.round.turn === 2 && !window.__game.ui.updating && document.querySelector('.tags'), null, 'the spectator’s table');
-    const seen = await watcher.evaluate(() => ({ net: window.__game.net, hand: document.querySelectorAll('#hand .card').length, controls: document.querySelectorAll('.controls button').length }));
+    const seen = await watcher.evaluate(() => ({ net: window.__game.net, hand: document.querySelectorAll('#hand .card').length, controls: document.querySelectorAll('.controls button').length, emote: !!document.querySelector('[data-action=emote-row]') }));
     const s = await secrets(watcher);
-    if (seen.net?.role !== 'guest' || seen.net.seat !== -1 || seen.hand || seen.controls) fail(`a spectator has seat -1, no hand and no controls: ${JSON.stringify(seen)}`);
+    if (seen.net?.role !== 'guest' || seen.net.seat !== -1 || seen.hand || seen.controls || seen.emote) fail(`a spectator has seat -1, no hand, no controls and no Emote: ${JSON.stringify(seen)}`);
     if (s.hidden !== 3 || s.told || s.backs !== 3 || s.faces) fail(`a spectator should see all three Sleepers face down, with nothing about them: ${JSON.stringify(s)}`);
     await snap(watcher, shot, 'spectator');
     await audit('spectator', watcher);
@@ -3036,27 +3604,149 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   }
   log(`5. an escalation with two answers: "${slips.slips.join(' ')}" on every page, then seat 2's exit, also where the turn resolved behind the card; stake ${out.stakes.join('/')}`);
 
-  // 6. Emotes: the host relays one to everyone; a second from the same seat within 3 s is dropped. A
-  // later emote from seat 2 marks the point by which the host has heard (and dropped) the second.
-  const sent = await a.evaluate(() => [window.__game.emote(2), window.__game.emote(3)]);
-  if (!sent.every(Boolean)) fail(`the guest's emotes should go out: ${sent}`);
-  await until(host, () => window.__game.ui.emotes[1]?.i === 2, null, 'the emote on the host');
+  // 6. Emotes, through the Emote button. Seat 1 opens the row and presses Well played: within a second its
+  // slip hangs under seat 1's tag on the host, on seat 2 and on its own page (and the watcher's), and takes
+  // no tap. A second press within 3 s is dropped by the host: no other slip shows there. A later emote from
+  // seat 2 marks the point by which the host has heard (and dropped) it. Then the host hides emotes (saved),
+  // and seat 1's next one, once 3 s have passed on the host's clock, lands in ui.emotes and draws nothing.
+  const LAND = live ? 5000 : 1000;
+  const within = (p, ms, fn, arg, what) =>
+    p.waitForFunction(fn, arg, { timeout: ms, polling: 25 }).catch(() => {
+      throw new Error(`timed out (${ms} ms) waiting for ${what}`);
+    });
+  const openRow = async (p) => {
+    await p.click('#top [data-action=emote-row]');
+    await until(p, () => document.querySelector('#emote-row [data-action=emote]') && document.querySelector('#top [data-action=emote-row]').getAttribute('aria-expanded') === 'true', null, 'the emote row');
+  };
+  const emoteVia = async (p, i) => {
+    await openRow(p);
+    await p.click(`#emote-row [data-action=emote][data-i="${i}"]`);
+    if (await p.$('#emote-row')) fail('pressing an emote should close the row');
+  };
+  const slipOn = (seat, text) =>
+    `[...document.querySelectorAll('#emote-root .emote-slip.own-${seat}')].some((s) => !s.hidden && !s.classList.contains('out') && s.textContent.includes(${JSON.stringify(text)}))`;
+  /** Record, in window.__slips, every emote slip the page puts up from now on. */
+  const watchSlips = (p) =>
+    p.evaluate(() => {
+      window.__slips = [];
+      window.__slipWatch?.disconnect();
+      window.__slipWatch = new MutationObserver((ms) => {
+        for (const m of ms) for (const n of m.addedNodes) if (n.classList?.contains('emote-slip')) window.__slips.push({ seat: Number(n.dataset.seat), text: n.querySelector('.paper')?.textContent ?? '' });
+      });
+      window.__slipWatch.observe(document.querySelector('#emote-root'), { childList: true });
+    });
+  // The watcher can't send: no Emote button (step 4 checks it too).
+  for (const p of [host, a, b]) await until(p, () => document.querySelector('#top [data-action=emote-row]') && !window.__game.ui.updating, null, 'the Emote button');
+  // The sender's flick sounds when the host's echo lands, not on the press: a press the host drops is silent.
+  const flicks = () => a.evaluate(() => (document.hidden ? null : window.__game.audio.effects.emote));
+  const flick0 = await flicks();
+  await emoteVia(a, 2);
+  const pressed = Date.now();
+  await within(host, LAND, slipOn(1, 'Well played'), null, "seat 1's Well played by its tag (0)");
   const first = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
-  for (const p of [b, watcher].filter(Boolean)) await until(p, () => window.__game.ui.emotes[1]?.i === 2, null, 'the emote relayed to the others');
-  await b.evaluate(() => window.__game.emote(4));
+  if (first.seat !== 1 || first.i !== 2) fail(`the host's ui.emotes should hold seat 1's Well played: ${JSON.stringify(first)}`);
+  // The second press goes as soon as the host has the first, not once it has reached every page (through
+  // the relays that can take seconds): within 3 s of the first on the host's clock, so the host drops it.
+  await watchSlips(host);
+  await emoteVia(a, 3);
+  const soon = await host.evaluate((t) => performance.now() - t, first.at);
+  if (soon >= 2900) fail(`the second emote went out ${Math.round(soon)} ms after the first: too late to try the host's 3 s limit`);
+  await Promise.all([b, a].map((p, i) => within(p, LAND, slipOn(1, 'Well played'), null, `seat 1's Well played by its tag (${i + 1})`)));
+  const landed = Date.now() - pressed;
+  const flick1 = await flicks();
+  await snap(host, shot, 'emote');
+  await audit('emote', host);
+  // The slip hangs under seat 1's tag, its tail on the tag, and never takes a tap: the tag is still what a tap finds.
+  const hung = await host.evaluate(() => {
+    const slip = [...document.querySelectorAll('#emote-root .emote-slip.own-1')].find((s) => !s.classList.contains('out'));
+    const tag = document.querySelector('.tags .tag.s-1');
+    if (!slip || !tag) return { slip: !!slip, tag: !!tag };
+    const s = slip.getBoundingClientRect();
+    const t = tag.getBoundingClientRect();
+    const tail = s.left + parseFloat(getComputedStyle(slip).getPropertyValue('--tail'));
+    const hit = document.elementFromPoint(s.left + s.width / 2, s.top + s.height / 2);
+    return {
+      gap: Math.round(s.top - t.bottom),
+      tailOnTag: tail >= t.left && tail <= t.right,
+      inWindow: s.left >= 0 && s.right <= innerWidth,
+      events: getComputedStyle(slip).pointerEvents,
+      inButton: !!slip.closest('button, a'),
+      hitSlip: !!hit?.closest('.emote-slip'),
+    };
+  });
+  if (!(hung.gap >= 0 && hung.gap <= 24) || !hung.tailOnTag || !hung.inWindow || hung.events !== 'none' || hung.inButton || hung.hitSlip) fail(`the slip should hang just under seat 1's tag, inside the window, and take no tap: ${JSON.stringify(hung)}`);
+  if (watcher) await until(watcher, slipOn(1, 'Well played'), null, 'seat 1’s Well played on the watcher');
+  await emoteVia(b, 4);
   await until(host, () => window.__game.ui.emotes[2]?.i === 4, null, 'seat 2’s emote on the host');
-  const second = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
-  if (first.seat !== 1 || second.i !== first.i || second.at !== first.at) fail(`a second emote within 3 s should be dropped: ${JSON.stringify({ first, second })}`);
-  log(`6. emote ${first.i} from seat 1 reached everyone; its second within 3 s was dropped`);
+  const second = await host.evaluate(() => ({ emote: { ...window.__game.ui.emotes[1] }, slips: window.__slips }));
+  if (second.emote.i !== first.i || second.emote.at !== first.at || second.slips.some((x) => x.seat === 1)) fail(`a second emote within 3 s should be dropped, with no new slip on the host: ${JSON.stringify({ first, second })}`);
+  if (!second.slips.some((x) => x.seat === 2 && x.text.includes('Bon voyage'))) fail(`seat 2's Bon voyage should show on the host: ${JSON.stringify(second.slips)}`);
+  await until(a, slipOn(2, 'Bon voyage'), null, 'seat 2’s Bon voyage on seat 1');
+  const flick2 = await flicks();
+  // (A page in the background plays no sound at all; then there is nothing to count.)
+  if (flick0 !== null && flick2 !== null && (flick1 - flick0 !== 1 || flick2 - flick1 !== 1)) fail(`seat 1 hears one flick for its own emote (on the echo) and one for seat 2's, none for the press the host dropped: ${JSON.stringify({ flick0, flick1, flick2 })}`);
+  // The host hides emotes from its row (the row stays open, the toggle pressed, saved for the browser); Escape closes the row.
+  await openRow(host);
+  await audit('emote row', host);
+  await host.click('#emote-row [data-action=hide-emotes]');
+  const hid = await host.evaluate(() => ({
+    hide: window.__game.ui.hideEmotes,
+    pressed: document.querySelector('#emote-row [data-action=hide-emotes]')?.getAttribute('aria-pressed'),
+    saved: localStorage.getItem('cg:dead-drop:hideEmotes'),
+    slips: document.querySelectorAll('#emote-root .emote-slip:not(.own-0)').length,
+  }));
+  if (!hid.hide || hid.pressed !== 'true' || hid.saved !== 'true' || hid.slips) fail(`Hide emotes should press, save and take the others' slips away: ${JSON.stringify(hid)}`);
+  await host.keyboard.press('Escape');
+  await until(host, () => !document.querySelector('#emote-row') && document.querySelector('#top [data-action=emote-row]').getAttribute('aria-expanded') === 'false', null, 'Escape to close the emote row');
+  // Seat 1 sends again once 3 s have passed since its last on the host's own clock (a timestamp, not a sleep).
+  await until(host, (t) => performance.now() - t > 3100, first.at, '3 s since seat 1’s last emote, on the host');
+  await watchSlips(host);
+  await emoteVia(a, 5);
+  await until(host, (t) => window.__game.ui.emotes[1].at !== t, first.at, 'seat 1’s next emote on the host');
+  await until(b, slipOn(1, 'Hmm.'), null, 'seat 1’s Hmm. on seat 2, who shows emotes');
+  const hidden = await host.evaluate(() => ({ emote: { ...window.__game.ui.emotes[1] }, slips: window.__slips, drawn: document.querySelectorAll('#emote-root .emote-slip.own-1').length }));
+  if (hidden.emote.i !== 5 || hidden.slips.length || hidden.drawn) fail(`a hidden emote lands in ui.emotes and draws nothing: ${JSON.stringify(hidden)}`);
+  const seat1 = hidden.emote;
+  // On a phone the row's six lines and the toggle fit across 390px, every one a 40px target, with the header's Emote.
+  let rowFit = null;
+  if (!live) {
+    await b.setViewportSize({ width: 390, height: 844 });
+    await openRow(b);
+    await settle(b);
+    rowFit = await b.evaluate(() => {
+      const row = document.querySelector('#emote-row').getBoundingClientRect();
+      const btns = [...document.querySelectorAll('#emote-row button')].map((x) => x.getBoundingClientRect());
+      const tools = document.querySelector('#top .tools').getBoundingClientRect();
+      return {
+        buttons: btns.length,
+        small: btns.filter((r) => r.width < 40 || r.height < 40).length,
+        outside: btns.filter((r) => r.left < row.left || r.right > row.right || r.top < row.top || r.bottom > row.bottom).length,
+        row: [Math.round(row.left), Math.round(row.right), Math.round(row.top), Math.round(row.bottom)],
+        toolsRight: Math.round(tools.right),
+        width: innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      };
+    });
+    await snap(b, shot, 'emote-row-phone');
+    await audit('emote row on a phone', b);
+    await b.keyboard.press('Escape');
+    await b.setViewportSize({ width: 1100, height: 760 });
+    if (rowFit.buttons !== 7 || rowFit.small || rowFit.outside || rowFit.row[0] < 0 || rowFit.row[1] > rowFit.width || rowFit.row[2] < 0 || rowFit.toolsRight > rowFit.width || rowFit.scrollWidth > rowFit.width) {
+      fail(`the emote row should fit a 390px phone, six lines and the toggle, each 40px or more: ${JSON.stringify(rowFit)}`);
+    }
+  }
+  log(`6. Well played from seat 1's Emote row by its tag on every page in ${landed} ms; its second within 3 s dropped; hidden on the host, the next landed in ui.emotes and drew nothing${rowFit ? `; the row on a phone: ${JSON.stringify(rowFit)}` : ''}`);
 
   // 7. A line goes dead: the stand-in sits after the 2 s wait and locks in; the player comes back to its lock.
+  // The 2 s wait starts here, so the guests who stay are never one stall from a stand-in in the steps before.
   if (!live) {
     await watchToasts(host);
+    await host.evaluate(() => window.__game.standInMs(2000));
     await a.close();
     await until(host, () => window.__game.view?.here[1] === false, null, 'the host to see seat 1’s line drop');
-    // Seat 1's second emote went out before its goodbye, on the same line: still dropped.
+    // Nothing more from seat 1 came after step 6's last emote.
     const third = await host.evaluate(() => ({ ...window.__game.ui.emotes[1] }));
-    if (third.at !== first.at) fail(`a second emote within 3 s should be dropped: ${JSON.stringify(third)}`);
+    if (third.at !== seat1.at) fail(`no emote from seat 1 since step 6's last: ${JSON.stringify({ third, seat1 })}`);
     const dead = `${P[1].name}’s line went dead`;
     await until(host, (t) => window.__game.view.standIn[1] && window.__toasts.some((x) => x.includes(t)), dead, 'the stand-in at seat 1, and the toast');
     await until(host, () => window.__game.table.view(0).round.locked[1], null, 'the stand-in to lock in');
@@ -3084,11 +3774,17 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
     for (const p of [a, b, watcher]) await watchToasts(p);
     await host.reload();
     await until(host, () => window.__game?.ui.screen === 'play' && window.__game.net?.role === 'host' && window.__game.ui.net.session && window.__game.view, null, 'the host’s table, reopened');
+    // The reopened table's clock (the timer came back with the save) waits too, until step 11.
+    if (!(await host.evaluate(() => window.__game.table.timer === 30000 && !!window.__game.clock))) fail('the reopened table should keep its 30 s timer and clock');
+    if (!(await host.evaluate(() => window.__game.ui.hideEmotes === true))) fail('Hide emotes should be saved across the host’s reload');
+    await host.evaluate(() => window.__game.holdClock(true));
     const reopened = await host.evaluate(() => {
       const g = window.__game;
       return { turnSeq: g.table.turnSeq, matchId: g.table.matchId, started: g.ui.net.lobby.started, tokens: g.ui.net.lobby.seats.map((s) => s.token ?? null) };
     });
-    if (reopened.turnSeq !== before.turnSeq || reopened.matchId !== before.matchId || !reopened.started || reopened.tokens.join() !== [P[0].token, P[1].token, P[2].token].join()) {
+    // The lobby keys each seat by that player's token for this room, never the token itself.
+    const keyed = await Promise.all([0, 1, 2].map((i) => roomToken(P[i].token, code)));
+    if (reopened.turnSeq !== before.turnSeq || reopened.matchId !== before.matchId || !reopened.started || reopened.tokens.join() !== keyed.join()) {
       fail(`the host's reload should reopen the saved table and its lobby: ${JSON.stringify({ before, reopened })}`);
     }
     // The reopened table starts every guest seat quiet (not here) until its player's hello.
@@ -3151,4 +3847,17 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   await snap(host, shot, 'table-rematch');
   await audit('table-rematch', host);
   log('10. a rematch at three seats: seat 2 accepted, the stand-in accepted by itself');
+
+  // 11. The host's clock runs out: seat 2 has locked its own drop, the host has picked nothing and gets a
+  // random one, and the stand-in (never timed) locks by itself, so the turn resolves.
+  const seq11 = await host.evaluate(() => window.__game.table.turnSeq);
+  await dropFirst(b);
+  await until(host, () => window.__game.state.round.plans[2], null, 'seat 2’s drop on the host');
+  const own = await host.evaluate(() => window.__game.state.round.plans[2]);
+  const ran = await host.evaluate(() => window.__game.clock.expire());
+  await untilSkipping(host, (s) => window.__game.table.turnSeq > s, seq11, 'the turn to resolve once the clock ran out');
+  const drops = await host.evaluate(() => window.__game.state.round.events.filter((e) => e.t === 'drop').map((e) => ({ seat: e.seat, uid: e.uid })));
+  const by = (s) => drops.find((d) => d.seat === s);
+  if (!ran || !by(0) || by(2)?.uid !== own.uid || !by(1)) fail(`the clock should drop for the host only, seat 2 keeping its own drop and the stand-in locking by itself: ${JSON.stringify({ ran, own, drops })}`);
+  log('11. the host’s clock ran out: a random drop for the host, seat 2’s own stood, the stand-in locked by itself');
 }

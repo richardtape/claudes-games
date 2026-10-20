@@ -174,13 +174,14 @@ export const canisterHTML = ({ label = true } = {}) =>
  * selected card in. The city carrying the Microfilm gets class `film` and the canister on its plate.
  * A wiretapper sees a "Tapped" slip, in the mark's colour, on the plate of the city its mark locked
  * (`tapFresh`: it has just appeared, so it comes in once). `won` (after a round's flip) is the
- * city's winner, or null for nobody.
+ * city's winner, or null for nobody. `neutral` (a spectator, who has no side) colours a won city by its
+ * winner's seat (`won-them` with `data-them`), even when the winner is the seat drawn at the bottom.
  *
  * Two seats: the rival's full row above the plate and yours below. Three and more: a thin lane per
  * rival above the plate (table order after you), their totals as badges along the plate's top edge,
  * and your full row below; a plate that isn't a drop target opens the city dossier (city-sheet).
  */
-export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false, won = undefined } = {}) {
+export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false, won = undefined, neutral = false } = {}) {
   const city = view.round.cities[ci];
   const def = CITY[city.id];
   const n = seatCount(view);
@@ -192,15 +193,16 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
   const leader = city.leader;
   const film = view.round.film === ci;
   const cls = ['city'];
-  if (won !== undefined) cls.push(won === null ? 'won-none' : won === me ? 'won-me' : 'won-them');
+  const wonMine = !neutral && won === me;
+  if (won !== undefined) cls.push(won === null ? 'won-none' : wonMine ? 'won-me' : 'won-them');
   cls.push(`c-${city.id}`);
   if (film) cls.push('film');
   if (target) cls.push('target');
   if (closedNow) cls.push('closed');
   if (leader !== null && leader !== undefined) cls.push(leader === me ? 'lead-me' : 'lead-them');
   // At three seats and more, "them" is a particular rival: the one who won the city, or else leads it.
-  const them = won !== undefined && won !== null && won !== me ? won : leader !== null && leader !== undefined && leader !== me ? leader : null;
-  const themAttr = many && them !== null ? ` data-them="${them}"` : '';
+  const them = won !== undefined && won !== null && !wonMine ? won : leader !== null && leader !== undefined && leader !== me ? leader : null;
+  const themAttr = (many || neutral) && them !== null ? ` data-them="${them}"` : '';
   const keys = ['A', 'S', 'D'];
   const rome = city.id === 'rome';
   // One slip per mark: a `tap` twist and a Wiretap on the same mark give two identical entries.
@@ -302,6 +304,13 @@ export function pulledOut(view, seats, next, { called = false } = {}) {
 const lineOf = (view, s) => (view.standIn?.[s] ? 'covered' : (view.here?.[s] ?? true) ? 'here' : 'away');
 const LINE_WORDS = { here: 'Connected', covered: 'Line quiet: the station is covering', away: 'Left the table' };
 
+/** A name's title ("Agent ", "The ", "Mr "), on its own: a tight tag can drop it ("Marten"; main.js fitTags). */
+const TITLE = /^(Agent|The|Mr|Mrs|Ms|Dr) (?=\S)/;
+const whoHTML = (name) => {
+  const m = TITLE.exec(name);
+  return m ? `<span class="hon">${esc(m[0])}</span>${esc(name.slice(m[0].length))}` : esc(name);
+};
+
 /**
  * The tag bar (three and four seats; it works at two): one compact tag per seat in table order from
  * `me` (the seat at the bottom; a spectator gets seat order), each with the name, the score, the
@@ -330,7 +339,7 @@ export function tagsHTML(view, me, { colours = [], label = (s) => nameOf(view, s
     ].join(', ');
     const cls = `tag own-${s} s-${s}${folded ? ' out' : ''}${line === 'away' ? ' away' : ''}${line === 'covered' ? ' covered' : ''}`;
     const mark = m === null ? '' : `<i class="mark own-${m}" title="${esc(`Their rival’s drop: ${label(m)}`)}" aria-hidden="true"></i>`;
-    const inner = `<span class="who">${esc(name)}</span><i class="dot" aria-hidden="true"></i><b class="score" data-score="${s}">${pts}</b>${coinHTML(view, s, { label, initShown })}${mark}${marksHTML(view, s)}`;
+    const inner = `<span class="who">${whoHTML(name)}</span><i class="dot" aria-hidden="true"></i><b class="score" data-score="${s}">${pts}</b>${coinHTML(view, s, { label, initShown })}${mark}${marksHTML(view, s)}`;
     return s === own
       ? `<div class="${cls} me" data-seat="${s}" role="group" aria-label="${esc(said)}">${inner}</div>`
       : `<button class="${cls}" data-action="tag" data-seat="${s}" aria-label="${esc(`${said}. Open their file`)}">${inner}</button>`;
@@ -382,11 +391,13 @@ export function tagSheetHTML(view, seat, { label = (s) => nameOf(view, s), intel
   const line = lineOf(view, seat);
   return `<div class="sheet tag-sheet own-${seat}" role="dialog" aria-label="${esc(`${name}’s file`)}" data-stop>
     <div class="tag-head"><h2>${esc(name)}</h2>${colours[seat] && colours[seat] !== name.toLowerCase() ? `<span class="colour">${esc(capital(colours[seat]))}</span>` : ''}</div>
-    <div class="tag-score"><b class="score">${view.scores[seat]}</b><span>of ${view.target} to win</span>${marksHTML(view, seat)}</div>
-    <p class="facts">${esc(facts.join(' · '))}.</p>
-    ${m === null ? '' : `<p class="mark-line"><i class="mark own-${m}" aria-hidden="true"></i><span>Their rival’s drop this round: <b>${esc(label(m))}</b></span></p>`}
-    ${intel ? `<div class="intel-block">${intel}</div>` : ''}
-    ${online ? `<p class="line-state ${line}"><i class="dot" aria-hidden="true"></i>${LINE_WORDS[line]}</p>` : ''}
+    <div class="sheet-body">
+      <div class="tag-score"><b class="score">${view.scores[seat]}</b><span>of ${view.target} to win</span>${marksHTML(view, seat)}</div>
+      <p class="facts">${esc(facts.join(' · '))}.</p>
+      ${m === null ? '' : `<p class="mark-line"><i class="mark own-${m}" aria-hidden="true"></i><span>Their rival’s drop this round: <b>${esc(label(m))}</b></span></p>`}
+      ${intel ? `<div class="intel-block">${intel}</div>` : ''}
+      ${online ? `<p class="line-state ${line}"><i class="dot" aria-hidden="true"></i>${LINE_WORDS[line]}</p>` : ''}
+    </div>
     <div class="btns"><button class="slip quiet" data-action="close-modal">Close<kbd>Esc</kbd></button></div>
   </div>`;
 }

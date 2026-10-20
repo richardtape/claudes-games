@@ -1007,7 +1007,22 @@ body[data-screen='title'] .mark {
   outline: 3px solid var(--mustard);
   outline-offset: 2px;
 }
-.table-pick > .slip.primary {
+/* Start stays on screen however many seats and rungs there are: its bar sticks to the foot of the window
+   (on the table's own ground, fading in over whatever scrolls behind it) until the form's end comes up. */
+.start-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  margin: -6px -20px 0;
+  padding: 18px 20px max(12px, env(safe-area-inset-bottom));
+  background-color: var(--ground);
+  background-image: var(--grain);
+  background-attachment: fixed;
+  -webkit-mask-image: linear-gradient(transparent, #000 16px);
+  mask-image: linear-gradient(transparent, #000 16px);
+}
+.start-bar > .slip.primary {
   justify-self: start;
   min-width: 220px;
 }
@@ -1015,8 +1030,14 @@ body[data-screen='title'] .mark {
   .lobby-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .table-pick > .slip.primary {
+  .start-bar > .slip.primary {
     justify-self: stretch;
+  }
+}
+@media (max-width: 600px) {
+  .start-bar {
+    margin-inline: -16px;
+    padding-inline: 16px;
   }
 }
 @media (max-width: 600px) {
@@ -1124,8 +1145,19 @@ body[data-screen='title'] .mark {
   --me-col: var(--c3);
   --them-col: var(--c0);
 }
+/* The banner over the table (main.js syncBanner): its own element above the screen, so redrawing the
+   table never replaces it; it lines up with the table's column. */
+#banner {
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 14px;
+}
+#banner:empty {
+  display: none;
+}
 .banner {
-  margin: 0;
+  margin: 0 0 8px;
   padding: 8px 12px;
   background: var(--ink);
   color: var(--paper);
@@ -2035,8 +2067,10 @@ body[data-screen='title'] .mark {
   box-shadow: inset 0 0 0 2px var(--paper);
 }
 
-/* Cards in hand */
+/* Cards in hand. The hand is its own stacking context, so the turn clock's fuse runs under the cards. */
 .hand {
+  position: relative;
+  isolation: isolate;
   display: flex;
   justify-content: center;
   align-items: flex-end;
@@ -2751,6 +2785,119 @@ body[data-screen='title'] .mark {
   clip-path: var(--cut-2);
   rotate: 0.6deg;
   animation: slip-type 0.4s 0.6s steps(30) both;
+}
+
+/* ── the turn clock ──────────────────────────────────────────────────────────
+   A fuse burning down: an ink cord, the unburnt fuse in mustard (red for the last five seconds) and
+   a spark at the burning end. It runs across the top of the hand (under the cards), under the round
+   result's heading for Next, and in the escalation prompt. main.js draws it from the time left: it
+   starts at --from of the cord and burns to nothing over --left. Dimmed, without its spark, once I've
+   done what it waits for. Under reduced motion it stands still and says the seconds. */
+.fuse {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ink);
+  box-shadow: 0 0 0 1.5px var(--line);
+}
+.fuse i {
+  position: absolute;
+  inset: 2px;
+  border-radius: 2px;
+  background: var(--mustard);
+  transform-origin: left center;
+  transform: scaleX(var(--from, 1));
+  animation:
+    burn var(--left) linear forwards,
+    heat 0.4s linear calc(var(--left) - 5000ms) forwards;
+}
+.fuse.hot i {
+  background: var(--red);
+}
+@keyframes burn {
+  to {
+    transform: scaleX(0);
+  }
+}
+@keyframes heat {
+  to {
+    background-color: var(--red);
+  }
+}
+.fuse::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: calc(2px + (100% - 4px) * var(--from, 1));
+  width: 14px;
+  height: 14px;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff7dc 0 20%, #ffc04d 38%, rgb(200 50 31 / 0.6) 58%, transparent 72%);
+  animation:
+    spark var(--left) linear forwards,
+    flicker 0.16s steps(2) infinite;
+}
+@keyframes spark {
+  to {
+    left: 2px;
+  }
+}
+/* Colour, not size: the spark only flickers. */
+@keyframes flicker {
+  50% {
+    opacity: 0.6;
+  }
+}
+/* The clock is held (a reveal, a card or a flash over a solo table): the fuse stops where it is, and its
+   spark goes still. */
+.fuse.held i,
+.fuse.held::after {
+  animation-play-state: paused;
+}
+.fuse.done {
+  opacity: 0.4;
+}
+.fuse.done::after {
+  visibility: hidden;
+}
+/* Reduced motion: the seconds, in a slip at the cord's end. */
+.fuse b {
+  position: absolute;
+  right: -3px;
+  top: 50%;
+  translate: 0 -50%;
+  min-width: 26px;
+  padding: 1px 5px 0;
+  border-radius: 8px;
+  background: var(--ink);
+  box-shadow: 0 0 0 1.5px var(--line);
+  color: var(--paper);
+  font: 700 12px/14px var(--type);
+  text-align: center;
+}
+.fuse.hot b {
+  background: var(--red);
+}
+/* Across the top of the hand, as wide as the cards, in the hand's top padding (under a lifted card). */
+.hand > .fuse {
+  position: absolute;
+  z-index: -1;
+  top: 3px;
+  left: 50%;
+  width: min(100%, calc(var(--n, 4) * 132px - 10px));
+  transform: translateX(-50%);
+}
+.result > .fuse {
+  justify-self: stretch;
+}
+.result.peek > .fuse {
+  grid-row: 2;
+  grid-column: 1 / -1;
+}
+.modal.hot .sheet > .fuse {
+  flex: none;
+  margin: 0 0 12px;
 }
 
 /* Modals */
@@ -3760,6 +3907,9 @@ body:has(.modal.hot) .unseen-panel {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tags.short .hon {
+  display: none;
+}
 .tags .tag .score {
   grid-area: score;
   align-self: stretch;
@@ -4038,16 +4188,21 @@ body:has(.modal.hot) .unseen-panel {
 .total.badge.t-3::before {
   background: var(--pat-3);
 }
-.many .city[data-them='0'] {
+/* A spectator's cities take each winner's colour by seat, at any table size (cityHTML's neutral). */
+.many .city[data-them='0'],
+.watching .city[data-them='0'] {
   --them-col: var(--c0);
 }
-.many .city[data-them='1'] {
+.many .city[data-them='1'],
+.watching .city[data-them='1'] {
   --them-col: var(--c1);
 }
-.many .city[data-them='2'] {
+.many .city[data-them='2'],
+.watching .city[data-them='2'] {
   --them-col: var(--c2);
 }
-.many .city[data-them='3'] {
+.many .city[data-them='3'],
+.watching .city[data-them='3'] {
   --them-col: var(--c3);
 }
 .many .plate .canister {
@@ -4208,6 +4363,16 @@ body:has(.modal.hot) .unseen-panel {
   font-size: 13px;
   font-style: italic;
   opacity: 0.7;
+}
+/* A rival's file scrolls inside, under its head, with Close kept at the foot (a little room at the sides,
+   so the scroller doesn't shave the mark's turned corners). */
+.tag-sheet .sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -8px;
+  padding: 0 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .tag-head {
   display: flex;
@@ -4536,8 +4701,8 @@ body[data-night='1'] .plate .tapped {
 }
 /* The final flip: once both lock in, the house lights go down on everything but the cities, the
    ticker that narrates them and the reveal's Speed up / Skip control (its only control). */
-body[data-night='1'] .play.revealing > :not(#board, .banner, .ticker, .controls),
-body[data-night='1'] .play.revealing > .controls > :not(.btns),
+body[data-night='1'] .play.revealing > :not(#board, .ticker, .controls),
+body[data-night='1'] .play.revealing > .controls > :not(.btns, .emote-row),
 body[data-night='1']:has(.play.revealing) #top {
   opacity: 0.35;
   animation: house-lights 0.7s ease-out both;
@@ -4548,8 +4713,8 @@ body[data-night='1']:has(.play.revealing) #top {
   }
 }
 
-/* The table at three and four seats after dark: the tags turn to ink (the paper slips would glare
-   in the dark), and the lanes stand a little back so the lit cities lead. */
+/* The table at three and four seats after dark: the tags turn to ink with paper type (the paper slips
+   would glare in the dark), and the rivals' lanes stand back at 60% so the lit cities lead. */
 body[data-night='1'] .tags .tag {
   background: var(--ink-2);
   color: var(--paper);
@@ -4570,8 +4735,8 @@ body[data-night='1'] .tags .tag.away .dot {
 body[data-night='1'] .tags .tag.covered .dot {
   box-shadow: 0 0 0 1.5px var(--paper);
 }
-body[data-night='1'] .lane .chip {
-  filter: brightness(0.82);
+body[data-night='1'] .city .row.lane {
+  opacity: 0.6;
 }
 body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   opacity: 1;
@@ -4642,6 +4807,12 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   .play {
     padding: 0 8px max(8px, env(safe-area-inset-bottom));
     gap: 6px;
+  }
+  #banner {
+    padding: 0 8px;
+  }
+  .banner {
+    margin-bottom: 6px;
   }
   .scorebar .score {
     font-size: 34px;
@@ -4886,6 +5057,10 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
     gap: 5px;
     min-height: 168px;
     padding-top: 12px;
+  }
+  .hand > .fuse {
+    top: 2px;
+    width: min(100%, calc(var(--n, 4) * 93px - 5px));
   }
   .card {
     width: min(88px, calc((100vw - 16px - (var(--n, 4) - 1) * 5px) / var(--n, 4)));
@@ -5144,7 +5319,8 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   }
 }
 
-/* The table at three and four seats on a phone: four tags across 390px, lanes a size down. */
+/* The table at three and four seats on a phone: four tags across 390px, lanes a size down. A full name
+   that won't fit drops its title on every tag (main.js fitTags: "Agent Marten" → "Marten"). */
 @media (max-width: 600px) {
   .tagbar {
     gap: 4px;
@@ -5334,6 +5510,177 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   }
 }
 
+/* On a phone the city dossier and a rival's file come up from the bottom edge, a file pulled up over
+   the table: the full width, at most 70% of the screen (the tags and the top of the board stay in
+   view), the inside scrolling and Close pinned at the foot, in thumb's reach. Only the top edge is cut. */
+@media (max-width: 600px) {
+  .sheet-modal {
+    place-items: end stretch;
+    padding: 0;
+  }
+  .sheet-modal .sheet.city-sheet,
+  .sheet-modal .sheet.tag-sheet {
+    width: 100%;
+    max-height: 70vh;
+    max-height: 70dvh;
+    padding: 20px 16px max(12px, env(safe-area-inset-bottom));
+    clip-path: polygon(0 9px, 46% 2px, calc(100% - 5px) 0, 100% 100%, 0 100%);
+    box-shadow: 0 -10px 30px rgb(0 0 0 / 0.35);
+  }
+  .sheet-modal .sheet-plate,
+  .sheet-modal .tag-head {
+    margin: -20px -16px 0;
+    padding: 24px 16px 12px;
+  }
+  .sheet-modal .sheet > .btns {
+    flex: none;
+    margin-top: 10px;
+  }
+  .sheet-modal .sheet > .btns .slip {
+    flex: 1;
+    min-height: 48px;
+  }
+  .sheet-modal.enter .sheet {
+    animation: sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  @keyframes sheet-up {
+    from {
+      translate: 0 100%;
+    }
+  }
+}
+
+/* The narrowest phones (320px): the header keeps its tools (the game's name gives way, and online the
+   Arcade link is its arrow alone), the board's sockets and chips go a size down so a city's three fit
+   its column, and the hand's cards share the width by how many there are (--n), up to seven. */
+@media (max-width: 360px) {
+  .top .mark {
+    visibility: hidden;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .top.has-emote .cg-home {
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
+  .top.has-emote .cg-home span {
+    font-size: 20px;
+  }
+  .tool {
+    padding: 0 7px;
+  }
+  .play {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  #banner {
+    padding: 0 6px;
+  }
+  .board {
+    gap: 4px;
+  }
+  .row {
+    gap: 2px;
+    min-height: 44px;
+  }
+  .slot,
+  .chip {
+    width: 29px;
+    height: 42px;
+  }
+  .chip .pow {
+    font-size: 17px;
+    left: 2px;
+  }
+  .chip .art {
+    width: 19px;
+    height: 19px;
+  }
+  .chip.back .q {
+    font-size: 22px;
+  }
+  .plate {
+    min-height: 116px;
+    padding: 5px 3px;
+  }
+  .plate h3 {
+    font-size: 20px;
+  }
+  .plate .rule {
+    font-size: 9px;
+  }
+  .total {
+    font-size: 19px;
+    min-width: 28px;
+    padding: 2px 4px 0;
+  }
+  .many .plate {
+    padding-top: 22px;
+  }
+  .controls .slip {
+    font-size: 19px;
+    padding: 8px 6px 6px;
+  }
+  .hand {
+    gap: 3px;
+  }
+  .hand > .fuse {
+    width: min(100%, calc(var(--n, 4) * 85px - 3px));
+  }
+  .card {
+    width: min(82px, calc((100vw - 12px - (var(--n, 4) - 1) * 3px) / var(--n, 4)));
+    padding: 5px 4px;
+  }
+  .card .pow {
+    font-size: 26px;
+    left: 5px;
+  }
+  .card .art {
+    width: 32px;
+    height: 34px;
+  }
+  .card .nm {
+    font-size: 15px;
+  }
+  .hand[data-n='5'] .card {
+    height: 150px;
+    padding-inline: 3px;
+  }
+  .hand[data-n='5'] .nm {
+    font-size: 13px;
+  }
+  .hand[data-n='5'] .tx {
+    font-size: 8.5px;
+    letter-spacing: -0.04em;
+  }
+  .hand[data-n='5'] .card .art,
+  .hand[data-n='6'] .card .art,
+  .hand[data-n='7'] .card .art {
+    width: 26px;
+    height: 28px;
+  }
+  .hand[data-n='6'] .card,
+  .hand[data-n='7'] .card {
+    grid-template-rows: 32px auto;
+    height: 96px;
+    padding-inline: 2px;
+  }
+  .hand[data-n='6'] .pow,
+  .hand[data-n='7'] .pow {
+    font-size: 22px;
+    left: 3px;
+  }
+  .hand[data-n='6'] .nm,
+  .hand[data-n='7'] .nm {
+    font-size: 11px;
+    line-height: 1.05;
+  }
+}
+
 @media (max-height: 520px) {
   /* Phones on their side: the round card's slips get shorter. */
   .cine {
@@ -5384,5 +5731,199 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   /* The ghost still follows the pointer (that is the information), without the tilt. */
   .card.drag-ghost {
     transform: scale(0.8);
+  }
+  /* The fuse stands where it has burnt to (main.js moves it, and the seconds, once a second). */
+  .fuse i,
+  .fuse::after {
+    animation: none !important;
+  }
+  .fuse::after {
+    display: none;
+  }
+}
+
+/* ── emotes: paper speech slips ─────────────────────────────────────────── */
+/* The header's Emote, inked red while its row is open. */
+.tool.emote.open {
+  background: var(--red);
+}
+/* The row: an ink card dealt over the controls, six lines on paper slips and the Hide emotes toggle. */
+.controls {
+  position: relative;
+}
+.emote-row {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(100%, 560px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 0 0 0 2px rgb(240 226 196 / 0.18);
+  clip-path: var(--cut-px);
+  --line: var(--paper); /* focus rings on the ink card */
+}
+.emote-row.enter {
+  animation: emote-row-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes emote-row-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+}
+.emote-row .slip {
+  flex: none;
+  min-height: 44px;
+  padding: 9px 13px 6px;
+  font-size: 22px;
+}
+/* Hide emotes: a ballot box ticked with a square of ink (or paper, on the row's ink). */
+.hide-emotes {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 4px 0 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: 700 13px var(--type);
+  cursor: pointer;
+}
+.hide-emotes::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+.hide-emotes[aria-pressed='true']::before {
+  background: linear-gradient(currentColor, currentColor) center / 8px 8px no-repeat;
+}
+.hide-emotes:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 2px;
+}
+.emote-row .hide-emotes {
+  margin-left: 4px;
+}
+.rules .emote-rule .hide-emotes {
+  vertical-align: middle;
+}
+
+/* The slip: a line on paper flicked onto the table under its sender's tag, the sender's colour and
+   pattern down its edge, a paper tail pointing up at the tag (--tail, set by placeEmotes). It lives
+   outside the table's markup, so redraws never restart it, and it never takes a tap. */
+#emote-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.emote-slip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  rotate: -2deg;
+  transform-origin: var(--tail, 50%) 0;
+  filter: drop-shadow(0 3px 0 rgb(29 26 23 / 0.35));
+  animation: emote-in 0.28s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.emote-slip.odd {
+  rotate: 1.6deg;
+}
+.emote-slip[hidden] {
+  display: none;
+}
+.emote-slip::before {
+  content: '';
+  position: absolute;
+  top: -9px;
+  left: calc(var(--tail, 50%) - 8px);
+  width: 16px;
+  height: 10px;
+  background: var(--paper);
+  clip-path: polygon(45% 0, 100% 100%, 0 100%);
+}
+.emote-slip .paper {
+  position: relative;
+  display: block;
+  padding: 9px 14px 5px 18px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 26px/1 var(--display);
+  letter-spacing: 0.03em;
+  clip-path: var(--cut);
+}
+.emote-slip .paper::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  background: var(--own-pat), var(--own);
+}
+.emote-slip.out {
+  animation: emote-out 0.16s ease-in both;
+}
+@keyframes emote-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) rotate(-10deg);
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes emote-out {
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+@media (max-width: 600px) {
+  /* Online the header has one tool more: the game's name gives way to it. */
+  .top.has-emote .mark {
+    visibility: hidden;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .emote-row {
+    left: 0;
+    width: auto;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px 10px 8px;
+  }
+  .emote-row .slip {
+    flex: 1 1 auto;
+    font-size: 20px;
+    padding: 9px 10px 6px;
+  }
+  .emote-slip .paper {
+    font-size: 22px;
+    padding: 8px 12px 4px 16px;
+  }
+}
+/* Under reduced motion the row and the slips simply appear and go. */
+@media (prefers-reduced-motion: reduce) {
+  .emote-row.enter,
+  .emote-slip,
+  .emote-slip.out {
+    animation: none;
   }
 }

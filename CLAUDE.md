@@ -166,8 +166,8 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
 
 ## Shared modules
 
-- `arcade.js`: `store(slug)`, `recordPlay`, `recordBest`, `loadStats`, `homeLink`, `markReady`,
-  `reducedMotion`, `onHidden`.
+- `arcade.js`: `store(slug)` (`get`, `set`, `remove`, `keys()` to prune old saves), `recordPlay`,
+  `recordBest`, `loadStats`, `homeLink`, `markReady`, `reducedMotion`, `onHidden`.
 - `sfx.js`: `createSfx(slug)` → `tone`, `noise`, `arp`, `toggleMute`, `now()`; `note(semitones)`.
   Synthesize every sound; no audio files needed. Unlocks on first gesture automatically.
   `tone`/`noise` take `at` (an absolute audio-clock time from `now()`) for sequencing.
@@ -189,7 +189,8 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
   `peers`, `leave()`. `transport: 'p2p'` (Trystero, lazy-imported) or `'local'`
   (BroadcastChannel between tabs of one browser: tests and `?net=local`). `roomCode()`,
   `cleanCode()`, and for node:test `createMemoryPair()` (two rooms) and `createMemoryHub(n)`
-  (`{ rooms, connect }`: rooms `peer-0`…, a `send` with a peer id reaches only that room).
+  (`{ rooms, connect, add }`: rooms `peer-0`…, a `send` with a peer id reaches only that room;
+  `add()` brings in a room later, for reloads and late arrivals, and `connect()` again meets it).
 
 When a game needs something generic (a helper you'd want again), add it to `shared/` and
 document it here rather than burying it in the game.
@@ -229,8 +230,9 @@ document it here rather than burying it in the game.
   - Host-authoritative: the host's browser owns the engine state and sends each guest
     `viewFor(state, seat)`, a masked view with no rival hand or face-down identities;
     guests send actions. A protocol version in `hello`, a per-browser token so a guest who
-    reloads gets their seat back, `nope` for a third browser, and the host saves its table
-    per room code so a host reload resumes (`games/dead-drop/js/session.js`).
+    reloads gets their seat back (sent to the host alone, which announces itself, and only as a
+    hash for the room: see Lessons learned), `nope` for a third browser, and the host saves its
+    table per room code so a host reload resumes (`games/dead-drop/js/session.js`).
   - Invite link `#join=CODE`, host URL `#host=CODE`, a typed-code field on the title, and a
     QR code (uqr from jsdelivr, pinned). Show the guest a "can't connect" hint after ~20 s.
   - Trystero 0.26 changed its API: callbacks are properties (`room.onPeerJoin = fn`) and
@@ -653,6 +655,31 @@ and new files.
 - Live `pgrep -f` matches its own wait loop when the pattern appears in the loop's command line
   (`pgrep -f "tools/sim.mjs"` inside `while pgrep …; do sleep; done` never exits). Test with
   `ps -eo args | grep "[n]ode games/dead-drop/tools/sim.mjs"` (the bracket excludes the grep).
+- Keep a turn clock as pure state with an injected `now` (`games/dead-drop/js/clock.js`: arm, left,
+  expired, view) and let one session-side `attachClock` arm it from `table.onChange` and act on
+  expiry through the same `table.act` calls a player makes. Tests then drive it with a manual
+  clock, `__game.clock.expire()` is the real path, and the UI only draws what the view carries.
+- Key anything you park across a decision by the decision it belongs to, captured when it was
+  armed, not re-read later: Dead Drop parked a drop's remaining time while a call was answered,
+  but took its key from `turnSeq` after the turn had already moved, so a Blackmailer flipped as a
+  turn resolved handed the next turn three seconds. The review caught it with a planted test.
+- Measure the busiest phone layout at 320px as well as 390px, with the longest names in every
+  seat: four tags held 390px with 12-character codenames, but 320px needed the titles dropped
+  ("Marten" for "Agent Marten") and the hand sized from its card count.
+- With three or more peers in a mesh every peer hears every other, so a secret must go to the host
+  alone. Dead Drop's guests said hello, token and all, to every peer (at two seats only a
+  turned-away third browser could hear it), so at
+  three a late spectator collected every guest's token and could take any seat and see its hand.
+  Now the host announces itself (`host { v }`) to each newcomer and to a knock (a hello with no
+  token), guests say hello only to a peer that announced itself and latch the first welcome, and
+  the token on the wire is a per-room hash (SHA-256 of `token:code` through `crypto.subtle`), so one
+  heard in one room claims nothing in another. Profiles from before the fix got a new token once
+  (`meta.tokenV`), so a token already leaked matches nothing. A hub test wraps every room's
+  delivery and asserts only the host's room ever hears a token, through a late spectator, a guest
+  reload and a host reload (`createMemoryHub(n).add()`).
+- A message that names no turn lands in whatever turn is current when it arrives: a guest's lock
+  that reached the host after its turn resolved became the next turn's drop. Stamp actions with
+  the round and turn they were made for and drop stale ones at the table (`table.act`).
 
 ## Games so far
 
@@ -660,5 +687,5 @@ and new files.
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
-| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live. Part B (2026-10-20): the turn timer (Off, 30 s, Blitz) on the host's clock with a fuse across the hand and auto-Next; six emotes as paper slips; four tags at 320px, bottom sheets, night at four seats; spectators neutral |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

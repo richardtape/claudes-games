@@ -6,15 +6,21 @@
 // room: each guest only ever receives viewFor(state, itsSeat), a spectator viewFor(state, -1), so
 // nobody sees another's cards. Tables seat 2-4 players, online too (the lobby: lobby.js). A table
 // plays a setup (roster.js: Classic, Mixed or a ladder rival's) and keeps it for rematches and saves.
+// attachClock() runs the turn timer (clock.js) on a table: the host's clock, online.
 import * as E from './engine.js';
 import { think, estimateLocked, stakeCall } from './bot.js';
 import { createRng } from '../../../shared/rng.js';
 import { CODENAMES, EMOTES, MAX_SEATS, RIVALS, SEAT_NAMES, STAND_IN, samplesFor, targetFor } from './data.js';
 import { away, fill as fillSeats, publicLobby, resize, seatOf, setSetup, setTimer, sit, start as startLobby, unfill } from './lobby.js';
 import { CLASSIC_SETUP, matchOptions } from './roster.js';
+import { arm as armClock, clear as clearClock, createClock, expired, viewOf } from './clock.js';
 
-/** 4: Phase 3 (tables of 2-4 online: the lobby, spectators, stand-ins, emotes). Older guests are turned away. */
-export const PROTOCOL = 4;
+/**
+ * 5: the host announces itself (`host`) and guests say hello, with their token for the room
+ * (roomToken), to the host alone; drops carry their turn. 4: Phase 3 (tables of 2-4 online: the lobby,
+ * spectators, stand-ins, emotes). Older guests are turned away.
+ */
+export const PROTOCOL = 5;
 /** A guest pings the host this often while its tab is visible. */
 export const PING_MS = 10000;
 /** A guest seat quiet this long (no hello, ping or action) gets the stand-in. */
@@ -28,6 +34,16 @@ export const MAX_SPECTATORS = 4;
 export function randomSeed() {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * A browser's token for one room: the first 16 hex characters of SHA-256 over `${token}:${code}`. Guests
+ * send this, never their own token, and the host's lobby keys every seat by it (the host's own too), so
+ * a token heard in one room claims nothing in another and the browser's own never leaves it.
+ */
+export async function roomToken(token, code) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${token}:${code}`));
+  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** 8 lowercase base-36 characters; not derived from the match seed, so rematches and equal seeds differ. */
@@ -49,7 +65,8 @@ const settleWithin = (fn, ms = 400) =>
  * A table for `seats` players playing `setup`. Its roster is drawn from `${seed}:setup`, apart from the deal's
  * rng, so a Classic table deals as before; a twist (a ladder rival's) belongs to `twistSeat`. `timer` is the
  * turn timer in ms (0: off). `standIn` and `here` (per seat) are kept by an online host's session: who is
- * played by the stand-in, and whose player is connected (the host and bots always are).
+ * played by the stand-in, and whose player is connected (the host and bots always are). `clock` is the
+ * turn clock's state (clock.js) while attachClock() runs one, read on `clockNow`; views carry it as `clock`.
  */
 export function createTable({ seed = null, seats = 2, target = targetFor(seats), cities, names = SEAT_NAMES.slice(0, seats), setup = CLASSIC_SETUP, twistSeat = 1, timer = 0 } = {}) {
   if (names.length !== seats) throw new Error('names must have one entry per seat');
@@ -71,17 +88,16 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
     standIn: none(),
     here: Array(seats).fill(true),
     timer,
-    /** A new match of `setup` (seed, roster, match id) at this table, keeping its listeners: the host's lobby before anyone joins. */
-    restart(next = table.setup) {
-      table.setup = next;
-      table.state = newMatch(null, table.state.target);
-      table.ready = none();
-      table.rematch = none();
-      table.matchId = newMatchId();
-      table.touch();
-    },
-    onChange(cb) {
-      listeners.add(cb);
+    clock: null,
+    clockNow: Date.now,
+    /** Call `cb(table)` after every change; `first` puts it before every listener so far (the clock arms before anyone reads a view). */
+    onChange(cb, { first = false } = {}) {
+      if (first) {
+        const rest = [...listeners];
+        listeners.clear();
+        listeners.add(cb);
+        rest.forEach((l) => listeners.add(l));
+      } else listeners.add(cb);
       return () => listeners.delete(cb);
     },
     touch(resolved = false) {
@@ -112,12 +128,18 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
         standIn: table.standIn.slice(),
         here: table.here.slice(),
         timer: table.timer,
+        clock: table.clock ? viewOf(table.clock, table.clockNow()) : null,
       };
     },
-    /** Apply one player action; returns whether it did anything. */
+    /**
+     * Apply one player action; returns whether it did anything. A lock or a take-back may carry the
+     * `round` and `turn` it was made for (a guest's do): one that arrives after that turn resolved is
+     * dropped rather than played into the next. Without them it is taken as now.
+     */
     act(seat, a) {
       const S = table.state;
       if (!Number.isInteger(seat) || seat < 0 || seat >= E.seatCount(S)) return false;
+      if ((a?.a === 'lock' || a?.a === 'unlock') && (a.round !== undefined || a.turn !== undefined) && (a.round !== S.roundNo || a.turn !== S.round?.turn)) return false;
       let ok = false;
       let resolved = false;
       switch (a?.a) {
@@ -354,7 +376,134 @@ export function attachBot(table, seat, rival, { pace = 1, rng = createRng(Date.n
   };
 }
 
-/** A per-browser token: 16 lowercase hex characters. A hello without one is ignored. */
+/** How often the clock looks at itself (when no test drives it). */
+const CLOCK_TICK_MS = 250;
+
+/**
+ * The turn timer on a table (Phase 3): each human seat (`humans()`: never a bot or a stand-in) has
+ * `timer` ms to lock its drop each turn and to answer a call, and NEXT_MS to press Next. It arms on
+ * every change: a call waiting for answers → 'answer'; planning → 'drop' (armed again only when a turn
+ * resolves, a round begins or a call settles, never because a seat locked in; a settled call gives the
+ * turn's drop back the time it had left when the call came); a round's result →
+ * 'next'; the match over → no clock. When it runs out (after GRACE_MS, for the line's latency, on drop
+ * and answer) it acts for every human who hasn't: a random legal drop (`rng`), play on, Next.
+ * `onExpire(kind)` runs first, so a player's own pick can lock instead. With `armOn: 'uncover'` (pass
+ * and play) nothing arms on a change: the UI arms it (arm) as each player takes the device. While
+ * `hold()` the countdown waits (solo: a reveal or a card is up). `table.clock` holds the clock.js state
+ * and every view carries it. Tests pass `now` and call tick(); otherwise it ticks every 250 ms until stop().
+ */
+export function attachClock(table, { timer, now = null, rng = createRng(randomSeed()), humans = () => [], armOn = 'change', hold = () => false, onExpire = () => {} } = {}) {
+  const time = now ?? Date.now;
+  const clock = createClock({ timer });
+  table.clock = clock;
+  table.clockNow = time;
+  let armedFor = null; // the decision the clock was last armed for, `${kind}:${matchId}:${roundNo}:${turnSeq}`
+  let parked = null; // a drop's time left while a call waits for its answers: { key, left }
+  let last = time();
+  let stopped = false;
+
+  /** The decision the table is waiting on: 'answer', 'drop', 'next', or null (the match is over). */
+  const due = () => {
+    const S = table.state;
+    if (S.phase === 'plan') return S.round.pending ? 'answer' : 'drop';
+    return S.phase === 'round-over' ? 'next' : null;
+  };
+  const keyOf = (kind) => `${kind}:${table.matchId}:${table.state.roundNo}:${table.turnSeq}`;
+  const disarm = () => {
+    armedFor = null;
+    parked = null;
+    clearClock(clock);
+  };
+  function arm(kind) {
+    if (stopped) return;
+    const t = time();
+    // A call mid-turn parks the drop's time left; the same turn's drop gets it back once the call settles.
+    // Only this turn's drop: a call that opens as a turn resolves (a Blackmailer's flip) finds the last
+    // turn's drop clock still armed, and its leftover is not the new turn's.
+    if (kind === 'answer' && armedFor === keyOf('drop') && clock.deadline !== null) parked = { key: armedFor, left: Math.max(0, clock.deadline - t) };
+    armedFor = keyOf(kind);
+    armClock(clock, kind, t);
+    if (kind !== 'answer') {
+      if (kind === 'drop' && parked?.key === armedFor && clock.deadline !== null) clock.deadline = t + parked.left;
+      parked = null;
+    }
+  }
+  function sync() {
+    if (stopped) return;
+    const kind = due();
+    if (armOn === 'uncover') {
+      if (table.state.phase !== 'plan') disarm();
+      return;
+    }
+    if (kind === null) return disarm();
+    if (keyOf(kind) !== armedFor) arm(kind);
+  }
+
+  /** Time's up: act for every human who hasn't, while the table still waits on the same decision. */
+  function fire() {
+    const kind = clock.kind;
+    const key = keyOf(kind);
+    clearClock(clock); // a change from here on re-arms only for a new decision
+    // Still the same decision: a drop may be made while a call waits (pass and play's escalator plans on).
+    const same = () => !stopped && keyOf(kind) === key && (kind === 'drop' ? table.state.phase === 'plan' : due() === kind);
+    onExpire(kind);
+    for (const seat of humans()) {
+      if (!same()) return;
+      const S = table.state;
+      if (kind === 'drop') {
+        if (S.round.plans[seat] || S.round.folded[seat]) continue;
+        const legal = E.legalDrops(S, seat);
+        if (legal.length) table.act(seat, { a: 'lock', ...rng.pick(legal) });
+      } else if (kind === 'answer') {
+        const P = S.round.pending;
+        if (P.from.includes(seat) && P.calls[seat] === null) table.act(seat, { a: 'respond', accept: true });
+      } else if (kind === 'next' && !table.ready[seat]) table.act(seat, { a: 'next' });
+    }
+  }
+
+  function tick() {
+    if (stopped) return;
+    const t = time();
+    // Held: the countdown waits, its deadline moving on with the time held.
+    if (hold() && clock.deadline !== null) clock.deadline += t - last;
+    last = t;
+    if (expired(clock, t)) fire();
+  }
+
+  const off = table.onChange(sync, { first: true });
+  sync();
+  const ticker = now ? null : setInterval(tick, CLOCK_TICK_MS);
+  ticker?.unref?.();
+  return {
+    tick,
+    /** Arm the clock for `kind` now (pass and play: as a player takes the device). */
+    arm,
+    clear: disarm,
+    /** Run the clock out now (checks): it acts at once, as at its deadline, held or not. False with nothing armed. */
+    expire() {
+      if (stopped || clock.deadline === null) return false;
+      fire();
+      return true;
+    },
+    get kind() {
+      return clock.kind;
+    },
+    /** The countdown waits (hold()): the UI freezes the fuse and its ticks meanwhile. */
+    get held() {
+      return !stopped && !!hold();
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(ticker);
+      off();
+      clearClock(clock);
+      if (table.clock === clock) table.clock = null;
+    },
+  };
+}
+
+/** A browser's token for the room (roomToken): 16 lowercase hex characters. A hello with anything else is ignored. */
 const TOKEN = /^[0-9a-f]{16}$/;
 
 /** The rival who covers a quiet guest's seat. */
@@ -362,16 +511,22 @@ const STAND_IN_RIVAL = RIVALS.find((r) => r.id === STAND_IN);
 if (!STAND_IN_RIVAL) throw new Error(`STAND_IN names no rival: ${STAND_IN}`);
 
 /**
- * Host side of an online table of 2-4 seats. One session covers the lobby and the match: each
- * guest says hello with its per-browser token and sits (lobby.js), or watches once the seats are
- * taken or the match has begun (up to MAX_SPECTATORS). start() deals the table from the lobby and
- * seats its computer rivals. A seated guest only ever receives its own view; a spectator, view(-1).
+ * Host side of an online table of 2-4 seats. One session covers the lobby and the match. It announces
+ * itself (`host { v }`) to every peer as they arrive, and to a knock (a hello with no token); each guest
+ * then says hello to it alone, with its token for the room (roomToken), and sits (lobby.js), or watches
+ * once the seats are taken or the match has begun (up to MAX_SPECTATORS). The lobby keys every seat by
+ * that token, the host's own included (main.js works it out the same way). start() deals the table
+ * from the lobby and seats its computer rivals. A seated guest only ever receives its own view; a
+ * spectator, view(-1).
  * A guest seat quiet for `standInMs` (no hello, ping or action) gets the stand-in (STAND_IN, stakes
  * off), at once if its player said bye, until its token comes back. Passing `table` with its
  * started `lobby` resumes a saved host: the bots sit again and every guest seat starts quiet.
- * Tests pass `now` and call tick() themselves; otherwise tick() runs every 5 s until close().
+ * With a turn timer (the lobby's, or a resumed table's) the host's clock (attachClock) times every
+ * player seat, the host's own included, never a bot or a stand-in: `onExpire(kind)` runs as it runs
+ * out (main.js locks the host's own pick), and `clockHold()` keeps it waiting (a check's steady table).
+ * Tests pass `now` and call tick() (and clock.tick()) themselves; otherwise tick() runs every 5 s until close().
  */
-export function hostSession({ room, lobby, makeTable, table = null, onStatus = () => {}, onEmote = () => {}, now = null, standInMs = STANDIN_MS, hold = () => false }) {
+export function hostSession({ room, lobby, makeTable, table = null, onStatus = () => {}, onEmote = () => {}, now = null, standInMs = STANDIN_MS, hold = () => false, clockHold = () => false, onExpire = () => {} }) {
   if (table && !lobby.started) throw new Error('a resumed table needs its started lobby');
   const clock = now ?? Date.now;
   /**
@@ -386,6 +541,7 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
   const bots = []; // the lobby's computer rivals
   const offs = [];
   let closed = false;
+  let timed = null; // the turn clock (attachClock), with a timer
 
   const hostKey = lobby.seats[0]?.token;
   const nameOf = (seat) => (table ? table.names[seat] : lobby.seats[seat]?.name);
@@ -414,6 +570,12 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
     onEmote(e);
   };
   const seatBot = (seat, id) => (bots[seat] = attachBot(table, seat, RIVALS.find((r) => r.id === id), { hold }));
+  /** The seats the clock times: the host and the guests, not the computer rivals, nor a seat the stand-in covers. */
+  const humans = () => lobby.seats.flatMap((s, seat) => ((s.kind === 'host' || s.kind === 'guest') && !table?.standIn[seat] ? [seat] : []));
+  /** The turn clock on table `t`, for a timer of `ms` (none for 0). Before setTable, though it arms first anyway. */
+  function clockOn(t, ms) {
+    if (ms > 0) timed = attachClock(t, { timer: ms, now, humans, hold: clockHold, onExpire });
+  }
 
   /** The table goes up: the lobby's seats are its seats; bots and the host are here, guests as the lobby says. */
   function setTable(t) {
@@ -478,12 +640,20 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
     return true;
   }
 
+  /** Tell a peer who the host is: guests say hello (with their token) to the host alone, never to each other. */
+  const announce = (id) => closed || room.send('host', { v: PROTOCOL }, id);
+  room.onPeerJoin = announce;
+  for (const id of room.peers) announce(id);
+
   room.on('hello', (d, peerId) => {
     if (closed) return;
     if (!d || d.v !== PROTOCOL) return room.send('nope', { why: 'version' }, peerId);
+    // A knock (no token): a guest looking for the host. An older host answers it with the version message.
+    if (d.token === undefined) return announce(peerId);
     if (typeof d.token !== 'string' || !TOKEN.test(d.token)) return;
     const name = CODENAMES.includes(d.name) ? d.name : 'Agent ?';
-    // A second tab of the host's own browser shares its token: it sits under a key of its own, never at seat 0.
+    // A second tab of the host's own browser has the same token for the room: it sits under a key of its
+    // own, never at seat 0.
     const key = d.token === hostKey ? `tab:${d.token}` : d.token;
     const known = seatOf(lobby, key);
     const holder = known >= 0 ? [...conns].find(([, c]) => c.key === key)?.[0] : undefined;
@@ -554,6 +724,7 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
     // A saved host resumes: its bots sit again, and every guest seat is quiet until its player says hello.
     const saved = table;
     table = null;
+    clockOn(saved, saved.timer);
     setTable(saved);
     lobby.seats.forEach((s, seat) => {
       if (s.kind === 'bot') seatBot(seat, s.rival);
@@ -573,10 +744,16 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
     get lobby() {
       return lobby;
     },
+    /** The turn clock (attachClock: tick, arm, clear, expire, stop), or null with no timer. */
+    get clock() {
+      return timed;
+    },
     /** Deal the table from the lobby (two seats taken at least), seat its bots, and send every view. */
     start() {
       const S = startLobby(lobby);
-      setTable(makeTable(S));
+      const t = makeTable(S);
+      clockOn(t, lobby.timer);
+      setTable(t);
       for (const { seat, rival } of S.bots) seatBot(seat, rival);
       sendLobby();
       sendViews();
@@ -608,6 +785,7 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
       if (closed) return;
       closed = true;
       clearInterval(ticker);
+      timed?.stop();
       offs.forEach((off) => off());
       [...covers, ...bots].forEach((b) => b?.stop());
       room.leave();
@@ -623,19 +801,47 @@ export function hostSession({ room, lobby, makeTable, table = null, onStatus = (
  * Guest side: forwards actions and emotes to the host and hands every view, lobby and emote it
  * receives to its callbacks. `seat` is null until welcomed, -1 while watching. It pings the host
  * every `pingMs` while `visible()`, so a quiet tab gets the stand-in.
+ *
+ * Finding the host (PROTOCOL 5): with three or more browsers in a room every peer hears every other, so
+ * the token goes to the host alone. While it has no host the guest knocks at each peer (a hello with no
+ * token); the host answers, as it does every newcomer, with `host { v }`, and an older host with the
+ * version message. The guest says hello, with its token for this room (roomToken of `token` and `code`:
+ * `token` itself never goes on the wire), only to a peer that announced itself, once while it is here.
+ * The first welcome makes that peer the host; while it is still here a welcome, nope or announcement
+ * from anyone else is ignored. When it goes (a host reload), the guest says hello to the peers that
+ * announced themselves meanwhile, and knocks at newcomers again.
  */
-export function guestSession({ room, name, token, onView, onLobby = () => {}, onEmote = () => {}, onStatus = () => {}, visible = () => true, pingMs = PING_MS }) {
+export function guestSession({ room, code, name, token, onView, onLobby = () => {}, onEmote = () => {}, onStatus = () => {}, visible = () => true, pingMs = PING_MS }) {
+  if (typeof code !== 'string' || !code) throw new Error('a guest needs the room code: its token is worked out for the room');
   let hostId = null;
   let said = false;
   let hostName;
   let seat = null;
-  const hello = (id) => room.send('hello', { v: PROTOCOL, name, token }, id);
+  let closed = false;
+  const key = roomToken(token, code);
+  const hosts = new Set(); // peers here that announced themselves as host
+  const asked = new Set(); // peers here this guest has said hello to
+  /** The host that welcomed this guest is still in the room. */
+  const latched = () => hostId !== null && room.peers.has(hostId);
+  const knock = (id) => closed || room.send('hello', { v: PROTOCOL }, id);
+  async function hello(id) {
+    if (asked.has(id)) return;
+    asked.add(id);
+    const k = await key;
+    if (!closed && room.peers.has(id)) room.send('hello', { v: PROTOCOL, name, token: k }, id);
+  }
   const ping = () => hostId && room.peers.has(hostId) && visible() && room.send('ping', {}, hostId);
   const pinger = setInterval(ping, pingMs);
   pinger?.unref?.();
-  room.onPeerJoin = hello;
-  for (const id of room.peers) hello(id);
+  room.onPeerJoin = (id) => latched() || knock(id);
+  for (const id of room.peers) knock(id);
+  room.on('host', (d, id) => {
+    if (d?.v !== PROTOCOL) return latched() || onStatus('version');
+    hosts.add(id);
+    if (!latched() || id === hostId) hello(id);
+  });
   room.on('welcome', (d, id) => {
+    if (!asked.has(id) || (latched() && id !== hostId)) return;
     hostId = id;
     said = false;
     hostName = CODENAMES.includes(d?.name) ? d.name : 'Agent ?';
@@ -644,7 +850,10 @@ export function guestSession({ room, name, token, onView, onLobby = () => {}, on
     onStatus(seat === -1 ? 'watching' : 'joined', hostName);
     onLobby(d?.lobby ?? null);
   });
-  room.on('nope', (d) => onStatus(d?.why === 'version' ? 'version' : 'full'));
+  room.on('nope', (d, id) => {
+    if (latched() && id !== hostId) return;
+    onStatus(d?.why === 'version' ? 'version' : 'full');
+  });
   room.on('lobby', (d, id) => {
     if (id !== hostId) return;
     if (Number.isInteger(d?.seat) && d.seat >= -1 && d.seat < MAX_SEATS) seat = d.seat;
@@ -662,7 +871,12 @@ export function guestSession({ room, name, token, onView, onLobby = () => {}, on
     onStatus('bye', hostName);
   });
   room.onPeerLeave = (id) => {
-    if (id === hostId && !said) onStatus('left');
+    hosts.delete(id);
+    asked.delete(id); // a peer that comes back (the same id, after a dropped line) is asked again
+    if (id !== hostId) return;
+    if (!said) onStatus('left');
+    // The host has gone (a reload): say hello to whoever announced themselves as host meanwhile.
+    for (const h of hosts) hello(h);
   };
   return {
     get seat() {
@@ -684,6 +898,7 @@ export function guestSession({ room, name, token, onView, onLobby = () => {}, on
       return true;
     },
     close() {
+      closed = true;
       clearInterval(pinger);
       room.leave();
     },
