@@ -4,6 +4,7 @@ import { cable, DOSSIERS, EPILOGUE, operation, REMARKS, twistText } from './js/s
 import { sightings, unseen } from './js/counting.js';
 import { deckList } from './js/engine.js';
 import { roomToken } from './js/session.js';
+import { lobbyHelp, returnLoop } from './smoke-return.mjs';
 // Scripted play-through run by `npm run check` (see scripts/check.mjs).
 // smoke(): one page — title, rivals, a solo match (its round title card and the First flip
 // token; a turn dropped by dragging a card onto a city, whose reveal is sped up, then skipped;
@@ -38,6 +39,8 @@ import { roomToken } from './js/session.js';
 // lobbySteps: the rivals screen's Table tab (Start on screen at four seats, and Continue for it), then the
 // host's lobby on a ?net=local page (Seats, Timer, Fill and its top-up, Start) with a spectator in a second
 // tab (no side: no sting, nothing coloured as its own).
+// Phase 4 (smoke-return.mjs, called last): the one that got away on a lost round's result (its slip, the ticker,
+// a tap lighting the city, a stripped view, none on a won or folded round, a three-seat Table's line).
 // The turn timer (timerSteps): no clock without a timer; the Table tab's Blitz and the fuse across the
 // hand, standing still while the clock is held; time running out on a picked drop, on nothing picked, at
 // the solo clock's own zero (no grace), on an answer and on Next (the full result and See the board's
@@ -1184,6 +1187,8 @@ export default async function smoke(page, { log, shot, audit, phone = false, url
   await tableFlows(page, { log, shot, audit, phone });
   await timerSteps(page, { log, shot, audit, phone });
   await lobbySteps(page, { log, shot, audit, phone, url });
+  // Phase 4's return loop (smoke-return.mjs), with this file's helpers passed in rather than imported back.
+  await returnLoop(page, { log, shot, audit, phone, url }, { until, idle, settle, skipIntro, clearCard, phoneFits, toTitle, helpClear, clearToasts });
 }
 
 /** Take down any toast still up (the ladder's six-second recruits toast, say), so it isn't in the next shots. */
@@ -3097,10 +3102,10 @@ export async function matchFrame(page, { log, shot, audit, phone }) {
     await shot('epilogue');
     await audit('epilogue');
     await page.keyboard.press('Enter');
-    await until(page, () => document.querySelector('.over .rounds li') && !window.__game.ui.card, null, 'the dossier after the epilogue');
+    await until(page, () => document.querySelector('.over .round-strip li') && !window.__game.ui.card, null, 'the case file after the epilogue');
     // The toast lives 6 s: read its text in the wait itself.
     await until(page, () => /^Recruited: Interrogator and Turncoat\. /.test(document.querySelector('.toast')?.textContent || ''), null, 'the recruits toast after the epilogue');
-    const ops = await page.evaluate(() => ({ id: window.__game.view.matchId, ops: [...document.querySelectorAll('.over .rounds li .op')].map((o) => o.textContent), rows: document.querySelectorAll('.over .rounds li').length }));
+    const ops = await page.evaluate(() => ({ id: window.__game.view.matchId, ops: [...document.querySelectorAll('.over .round-strip li .op')].map((o) => o.textContent), rows: document.querySelectorAll('.over .round-strip li').length }));
     if (!ops.rows || ops.ops.length !== ops.rows || ops.ops.join('|') !== ops.ops.map((_, i) => operation(ops.id, i).name).join('|')) fail(`each round of the dossier should start with its operation's name: ${JSON.stringify(ops)}`);
     await snap(page, shot, 'dossier-operations');
     await page.click('[data-action=title]');
@@ -3115,6 +3120,22 @@ export async function matchFrame(page, { log, shot, audit, phone }) {
   } finally {
     page.off('console', onConsole);
   }
+}
+
+/**
+ * Before the host presses Start (the lobbies already up): every guest page shows how a turn works, four lines each with
+ * its picture, and the host's page none. The first guest's guide is scrolled into view for its shot and audit, then the
+ * page goes back to the top. Counts only, no waits: the guide comes in the same render as the guest's seats.
+ */
+async function guidesBeforeStart(host, guests, { shot, audit }) {
+  const count = (p) => p.evaluate(() => ({ lines: document.querySelectorAll('.turn-guide li').length, art: document.querySelectorAll('.turn-guide svg').length, inLobby: document.querySelectorAll('.lobby.guest .turn-guide').length }));
+  const seen = { host: await count(host), guests: await Promise.all(guests.map(count)) };
+  if (seen.host.lines || seen.host.art || seen.guests.some((g) => g.lines !== 4 || g.art !== 4 || g.inLobby !== 1)) throw new Error(`every guest's lobby should show how a turn works (four lines, four pictures) and the host's none: ${JSON.stringify(seen)}`);
+  const [first] = guests;
+  await first.evaluate(() => document.querySelector('.turn-guide').scrollIntoView({ block: 'center' }));
+  await snap(first, shot, 'lobby-briefing');
+  await audit('lobby-briefing', first);
+  await first.evaluate(() => scrollTo(0, 0));
 }
 
 /**
@@ -3152,7 +3173,15 @@ export async function duo([host, guest], { url, log, shot, audit, live = false, 
   await audit('lobby-seats', host);
   await snap(guest, shot, 'lobby-guest');
   await audit('lobby-guest', guest);
-  log(`the guest sat down; the host's lobby offers "${lobbies.host.start}", the guest's says "${lobbies.guest.wait}"`);
+  // How a turn works: the guest waiting for the Start reads four illustrated lines; the host's lobby has none.
+  await guidesBeforeStart(host, [guest], { shot, audit });
+  // Help in either lobby offers no briefing (it would leave the room), and closing it leaves both there: the host
+  // still lists the guest.
+  await lobbyHelp(guest, { shot, audit, name: 'lobby-help' });
+  await lobbyHelp(host);
+  const seated = await host.evaluate(() => [...document.querySelectorAll('.lobby .seat')].map((x) => x.className.split(' ')[1]).join());
+  if (seated !== lobbies.host.seats) throw new Error(`after Help in both lobbies the host should still list the guest: ${seated}`);
+  log(`the guest sat down; the host's lobby offers "${lobbies.host.start}", the guest's says "${lobbies.guest.wait}"; Help in either has no briefing`);
   await host.click('[data-action=lobby-start]');
   await until(host, () => window.__game.ui.screen === 'play', null, 'the host’s table after Start');
   await until(guest, () => window.__game.ui.screen === 'play' && document.querySelector('.hand .card'), null, 'the guest table');
@@ -3484,7 +3513,9 @@ export async function table(pages, { url, log, shot, audit, live = false, code =
   await audit('lobby-full', host);
   await snap(a, shot, 'lobby-guest');
   await audit('lobby-guest', a);
-  log('2. two guests sat down at seats 1 and 2');
+  // How a turn works: every guest waiting for the Start has the four illustrated lines; the host's lobby none.
+  await guidesBeforeStart(host, [a, b], { shot, audit });
+  log('2. two guests sat down at seats 1 and 2, each with how a turn works');
 
   // 3. Start. Everyone holds a Sleeper (moved into each hand on the host's table, as a deal could have),
   // so face-down agents are on the board for the checks below; each drops it, and turn 1 resolves.

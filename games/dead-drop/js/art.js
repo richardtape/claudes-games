@@ -1155,3 +1155,110 @@ const film = () =>
   );
 /** The film canister (24 × 24): marks the city carrying the Microfilm. */
 export const filmSVG = () => make('film', 0.12, '0 0 24 24', film);
+
+// ---- how a turn works (viewBox 0 0 160 100): four lines for a friend waiting in the lobby ----
+/** Polygon p clipped to the convex polygon c (corners clockwise on screen), kept `off` inside c's edges. */
+const within = (p, c, off = 0) => {
+  let q = p;
+  for (let i = 0; i < c.length && q.length >= 6; i += 2) {
+    const j = (i + 2) % c.length;
+    q = clip(q, c[i], c[i + 1], c[j], c[j + 1], off);
+  }
+  return q;
+};
+/** Bounding box [x0, y0, x1, y1] of a flat polygon. */
+const box = (p) => {
+  const xs = p.filter((_, i) => i % 2 === 0);
+  const ys = p.filter((_, i) => i % 2 === 1);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+};
+/**
+ * The teal side's 45° hatch, as the game prints it, cut out of convex polygon c: slits w wide every `gap`,
+ * kept `off` inside its edges. The slits never touch, so they are safe as holes.
+ */
+const hatch = (c, gap, w, off) => {
+  const [x0, y0, x1, y1] = box(c);
+  const out = [];
+  for (let x = x0 - (y1 - y0); x < x1; x += gap) out.push(H(within(L(x, y1 + 4, x + (y1 - y0) + 8, y0 - 4, w), c, off)));
+  return out;
+};
+/** A "?" about s tall, centred on (cx, cy): the hook and the dot, apart (safe as holes). */
+const qmark = (cx, cy, s) => [
+  strip([...A(cx, cy - 0.17 * s, 0.2 * s, 0.19 * s, 192, 398, 9), cx + 0.02 * s, cy + 0.07 * s, cx + 0.02 * s, cy + 0.17 * s], 0.15 * s),
+  E(cx + 0.02 * s, cy + 0.35 * s, 0.09 * s, 0.09 * s, 8),
+];
+/** "×2" about s tall, centred on (cx, cy): the cross and a condensed 2, apart. */
+const times2 = (cx, cy, s) => {
+  const x = cx - 0.27 * s;
+  const a = 0.15 * s;
+  const t = cx + 0.2 * s;
+  return [
+    L(x - a, cy - a + 0.08 * s, x + a, cy + a + 0.08 * s, 0.11 * s),
+    L(x - a, cy + a + 0.08 * s, x + a, cy - a + 0.08 * s, 0.11 * s),
+    strip([...A(t, cy - 0.22 * s, 0.19 * s, 0.2 * s, 192, 375, 8), t - 0.2 * s, cy + 0.36 * s, t + 0.24 * s, cy + 0.36 * s], 0.13 * s),
+  ];
+};
+/** A card (w × h) centred on (cx, cy), turned rot degrees: a cut-paper quad, clockwise on screen. */
+const card = (cx, cy, w, h, rot = 0) => T(Q(-w / 2, -h / 2, w, h), cx, cy, 1, rot);
+
+const BRIEF = [
+  // 0. Pick one agent and a city: a card from your hand (its back, "?") slides into a city plate, its night
+  // skyline cut out of the ink; the plate gives the card a paper margin where it lies over it.
+  () => {
+    const plate = [84, 13, 151, 11, 152, 91, 82, 93];
+    const sky = [88, 83, 88, 66, 95, 66, 95, 55, 101, 55, 101, 66, 105, 66, 105, 63, ...A(112, 63, 7, 8, 180, 360, 6), 119, 63, 119, 70, 123.5, 70, 126, 44, 128.5, 70, 133, 70, 133, 59, 141, 59, 141, 67, 147, 67, 147, 83];
+    const c = card(70, 55, 36, 50, 11);
+    const halo = card(70, 55, 36 + 7, 50 + 7, 11);
+    return (
+      ink(plate, H(sky), H(within(halo, plate)), L(6, 40, 38, 38, 0.6, 4.2), L(2, 54, 34, 53, 0.6, 4.6), L(8, 68, 38, 69, 0.6, 4.2)) +
+      acc(c, qmark(70, 54, 30).map(H))
+    );
+  },
+  // 1. The drops flip together: two cards turning over side by side above the plate, yours red, the rival's
+  // in the teal side's hatch, each under a turning arrow, and a spark between them where a trick fires.
+  () => {
+    const plate = [10, 72, 151, 70, 152, 95, 8, 96];
+    const sky = [16, 90, 16, 83, 24, 83, 24, 78, 30, 78, 30, 84, 40, 84, ...A(48, 84, 8, 6, 180, 360, 6), 56, 84, 56, 80, 64, 80, 64, 86, 96, 86, 96, 79, 103, 79, 103, 74.5, 109, 74.5, 109, 81, 118, 81, 120, 76, 122, 81, 130, 81, 130, 84, 138, 84, 138, 78, 145, 78, 145, 90];
+    const red = [32, 16, 64, 23, 64, 57, 32, 64];
+    const teal = [96, 23, 128, 16, 128, 64, 96, 57];
+    const arrow = (x0, x1, dir) => {
+      const tip = dir > 0 ? x1 : x0;
+      return [B(x0, 13, (x0 + x1) / 2, -3, x1, 13, dir > 0 ? 1.2 : 4.4, dir > 0 ? 4.4 : 1.2), [tip - 5.5, 8.5, tip + 5.5, 8.5, tip, 17]];
+    };
+    const spark = [0, 45, 90, 135, 180, 225, 270, 315].map((a) => L(80 + Math.cos(a * RAD) * 5, 40 + Math.sin(a * RAD) * 5, 80 + Math.cos(a * RAD) * (a % 90 ? 10 : 14), 40 + Math.sin(a * RAD) * (a % 90 ? 10 : 14), 3.6, 0.8));
+    return ink(plate, H(sky), teal, hatch(teal, 7.5, 3.2, 3.2), arrow(34, 62, 1), arrow(98, 126, -1)) + acc(red, spark);
+  },
+  // 2. Hold the most cities: three plates, each under the band of the side that holds it, two of them yours.
+  () => {
+    const plates = [[9, 34, 52, 33, 53, 90, 8, 91], [59, 33, 101, 34, 102, 91, 58, 90], [108, 34, 151, 33, 152, 91, 107, 90]];
+    const g = 85;
+    const skies = [
+      [13, g, 13, 72, 19, 72, ...onion(26, 72, 12, 20), 33, 72, 33, 66, 41, 66, 41, 74, 48, 74, 48, g],
+      [62, g, ...cren(62, 76, 64, 4, 3), 76, 72, 80, 72, 82, 52, 84, 72, 88, 72, ...cren(88, 98, 68, 4, 2), 98, g],
+      [111, g, 111, 72, 116, 66, 121, 72, 121, 64, 128, 57, 135, 64, 135, 71, 141, 66, 147, 71, 147, g],
+    ];
+    const band = (p, y) => [p[0], y, p[2], y - 0.5, p[2], y + 9, p[0], y + 9.5];
+    const tealBand = band(plates[1], 18);
+    return (
+      ink(plates.map((p, i) => [p, H(skies[i])]), tealBand, hatch(tealBand, 6, 2.6, 1.6)) +
+      acc(band(plates[0], 18), band(plates[2], 18))
+    );
+  },
+  // 3. Escalate: the stake slip with a red "×2" stamped across it (the slip cut clear round the stamp), and the
+  // token chits beside it, one spent.
+  () => {
+    const at = (p) => T(p, 66, 50, 1, -4);
+    const slip = at(Q(-50, -27, 100, 54));
+    const lines = [at(Q(-41, -16, 24, 4.6)), at(Q(-41, -6, 16, 4.6)), at(Q(-41, 12, 30, 4.6))];
+    const st = (p) => T(p, 86, 50, 1, -11);
+    const stamp = st(Q(-27, -18, 54, 36));
+    const chit = (x, y) => [x + 6, y, x + 19, y, x + 13, y + 25, x, y + 25];
+    const spent = chit(139, 69);
+    return (
+      ink(slip, lines.map(H), H(within(st(Q(-30.5, -21.5, 61, 43)), slip))) +
+      acc(stamp, H(st(Q(-22.5, -13.5, 45, 27))), times2(0, 0, 23).map(st), chit(121, 69), spent, H([spent[0] + 3, spent[1] + 3.2, spent[2] - 2.4, spent[3] + 3.2, spent[4] - 3, spent[5] - 3.2, spent[6] + 2.4, spent[7] - 3.2]))
+    );
+  },
+];
+/** Illustration i (0 to 3) of how a turn works (160 × 100): the drop, the flip, the cities, the stake. */
+export const briefSVG = (i) => make('b:' + i, 0.5, '0 0 160 100', BRIEF[i]);

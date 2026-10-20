@@ -14,6 +14,8 @@ import { CODENAMES, EMOTES, MAX_SEATS, RIVALS, SEAT_NAMES, STAND_IN, samplesFor,
 import { away, fill as fillSeats, publicLobby, resize, seatOf, setSetup, setTimer, sit, start as startLobby, unfill } from './lobby.js';
 import { CLASSIC_SETUP, matchOptions } from './roster.js';
 import { arm as armClock, clear as clearClock, createClock, expired, viewOf } from './clock.js';
+import { recapOf } from './casefile.js';
+import { canStart, gotAway, newRecord, noteAct, noteEvents, recordTurn } from './replay.js';
 
 /**
  * 5: the host announces itself (`host`) and guests say hello, with their token for the room
@@ -49,6 +51,40 @@ export async function roomToken(token, code) {
 /** 8 lowercase base-36 characters; not derived from the match seed, so rematches and equal seeds differ. */
 const newMatchId = () => Array.from({ length: 8 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
 
+/**
+ * The state each round record (replay.js) was started on. A record is used only on that state object: a state
+ * put on a table without an act (__game.stage(), the thumbnail) must never be recorded as the old one's.
+ */
+const recordedOn = new WeakMap();
+
+/**
+ * `seat`'s one that got away in the round `rec` recorded, or null: a broken record (a hand-edited save) or anything
+ * unforeseen in an alternative gives no line, never a table stuck at a round's end.
+ */
+function lineFor(rec, seat, result) {
+  try {
+    return gotAway(rec, seat, { result });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The round's recap (casefile.js) from the record's events, or without its take-outs (outs null) when they can't be
+ * read: restoreTable checks only that a saved record's events are a list, and an event of an unknown kind or off the
+ * board must not freeze the round's end.
+ */
+function recapFor(state, events) {
+  try {
+    return recapOf(state, events);
+  } catch {
+    return recapOf(state, null);
+  }
+}
+
+/** A deep copy of what a view carries from the table (a line, a seat's list), so no view shares the table's. */
+const copy = (x) => JSON.parse(JSON.stringify(x));
+
 /** Resolve after the send settles or after `ms`, whichever is first; never rejects. */
 const settleWithin = (fn, ms = 400) =>
   new Promise((resolve) => {
@@ -67,15 +103,20 @@ const settleWithin = (fn, ms = 400) =>
  * turn timer in ms (0: off). `standIn` and `here` (per seat) are kept by an online host's session: who is
  * played by the stand-in, and whose player is connected (the host and bots always are). `clock` is the
  * turn clock's state (clock.js) while attachClock() runs one, read on `clockNow`; views carry it as `clock`.
+ * Phase 4: `replay` is the round's record (replay.js), started lazily at the round's first act while the round is
+ * clean, and cleared at its end; `gotAway` is `{ match, round, seats }` for the round just ended (each seat's one
+ * that got away, or null), until the next round begins; `missed` is every seat's lines this match,
+ * `[{ no, ...line }]` per seat. A view carries its own seat's line as `gotAway`, and at match-over its own list
+ * as `missed` (a spectator's is empty).
  */
-export function createTable({ seed = null, seats = 2, target = targetFor(seats), cities, names = SEAT_NAMES.slice(0, seats), setup = CLASSIC_SETUP, twistSeat = 1, timer = 0 } = {}) {
+export function createTable({ seed = null, seats = 2, target = targetFor(seats), cities, names = SEAT_NAMES.slice(0, seats), setup = CLASSIC_SETUP, twistSeat = 1, timer = 0, fixedDeals = false } = {}) {
   if (names.length !== seats) throw new Error('names must have one entry per seat');
   const none = () => Array(seats).fill(false);
   const listeners = new Set();
   const emoters = new Set();
   /** A match of the table's setup (the seed also draws a Mixed roster). Round 1 deals `cities`, if given. */
-  const newMatch = (matchSeed, matchTarget, matchCities) =>
-    E.newMatch({ seed: matchSeed, target: matchTarget, cities: matchCities, seats, ...matchOptions(table.setup, createRng(matchSeed === null ? randomSeed() : `${matchSeed}:setup`), twistSeat) });
+  const newMatch = (matchSeed, matchTarget, matchCities, fixed = false) =>
+    E.newMatch({ seed: matchSeed, target: matchTarget, cities: matchCities, seats, fixedDeals: fixed, ...matchOptions(table.setup, createRng(matchSeed === null ? randomSeed() : `${matchSeed}:setup`), twistSeat) });
   const table = {
     setup,
     state: null,
@@ -90,6 +131,11 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
     timer,
     clock: null,
     clockNow: Date.now,
+    replay: null,
+    gotAway: null,
+    missed: Array(seats).fill().map(() => []),
+    /** One recap per round this match (casefile.js), in order; views carry it only at match-over. */
+    recap: [],
     /** Call `cb(table)` after every change; `first` puts it before every listener so far (the clock arms before anyone reads a view). */
     onChange(cb, { first = false } = {}) {
       if (first) {
@@ -117,6 +163,8 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
       return true;
     },
     view(seat) {
+      const isSeat = Number.isInteger(seat) && seat >= 0 && seat < E.seatCount(table.state);
+      const line = isSeat && table.gotAway?.match === table.matchId && table.gotAway.round === table.state.roundNo ? (table.gotAway.seats[seat] ?? null) : null;
       return {
         ...E.viewFor(table.state, seat),
         names: table.names.slice(),
@@ -129,6 +177,8 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
         here: table.here.slice(),
         timer: table.timer,
         clock: table.clock ? viewOf(table.clock, table.clockNow()) : null,
+        gotAway: line && copy(line),
+        ...(table.state.phase === 'match-over' ? { missed: isSeat ? copy(table.missed[seat]) : [], recap: copy(table.recap) } : {}),
       };
     },
     /**
@@ -140,6 +190,13 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
       const S = table.state;
       if (!Number.isInteger(seat) || seat < 0 || seat >= E.seatCount(S)) return false;
       if ((a?.a === 'lock' || a?.a === 'unlock') && (a.round !== undefined || a.turn !== undefined) && (a.round !== S.roundNo || a.turn !== S.round?.turn)) return false;
+      // The round's record: this state's, this match's and this round's, or a new one if the round is still clean.
+      if (!table.replay || recordedOn.get(table.replay) !== S || table.replay.match !== table.matchId || table.replay.round !== S.roundNo) {
+        table.replay = canStart(S) ? newRecord(S, { match: table.matchId, round: S.roundNo }) : null;
+        if (table.replay) recordedOn.set(table.replay, S);
+      }
+      const rec = table.replay;
+      const planning = S.phase === 'plan';
       let ok = false;
       let resolved = false;
       switch (a?.a) {
@@ -156,12 +213,15 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
           break;
         case 'escalate':
           ok = E.escalate(S, seat);
+          if (ok && rec) noteAct(rec, seat, a);
           break;
         case 'respond':
           ok = E.respond(S, seat, !!a.accept);
+          if (ok && rec) noteAct(rec, seat, a);
           break;
         case 'fold':
           ok = E.fold(S, seat);
+          if (ok && rec) noteAct(rec, seat, a);
           break;
         case 'next':
           if (S.phase === 'round-over' && !table.ready[seat]) {
@@ -169,6 +229,7 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
             ok = true;
             if (table.ready.every(Boolean)) {
               table.ready = none();
+              table.gotAway = null;
               E.nextRound(S);
             }
           }
@@ -181,19 +242,39 @@ export function createTable({ seed = null, seats = 2, target = targetFor(seats),
               table.rematch = none();
               table.matchId = newMatchId();
               table.state = newMatch(null, S.target);
+              table.replay = null;
+              table.gotAway = null;
+              table.missed = table.missed.map(() => []);
+              table.recap = [];
             }
           }
           break;
       }
-      if (ok && E.ready(table.state)) resolved = !!E.resolveTurn(table.state);
+      if (ok && E.ready(S)) {
+        if (rec) recordTurn(rec, S);
+        const ev = E.resolveTurn(S);
+        resolved = !!ev;
+        if (rec && ev) noteEvents(rec, ev);
+      }
+      // The round ended during this act (the flip, or a fold): every seat's one that got away, from the record. Only a
+      // seat that lost at the flip in a round nobody folded in can have one (replay.js), so the rest skip the replay.
+      if (ok && planning && S.phase !== 'plan') {
+        const res = S.round.result;
+        const eligible = !!rec && res.folded === null && res.winner !== null && !S.round.folded.some(Boolean);
+        const seats = S.scores.map((_, s) => (eligible && s !== res.winner ? lineFor(rec, s, res) : null));
+        table.gotAway = { match: table.matchId, round: S.roundNo, seats };
+        seats.forEach((g, s) => g && table.missed[s].push({ no: S.roundNo, ...g }));
+        table.recap.push(recapFor(S, rec?.events ?? null));
+        table.replay = null;
+      }
       if (ok) table.touch(resolved);
       return ok;
     },
     toJSON() {
-      return { state: table.state, names: table.names, ready: table.ready, rematch: table.rematch, seq: table.seq, turnSeq: table.turnSeq, matchId: table.matchId, setup: table.setup, standIn: table.standIn, here: table.here, timer: table.timer };
+      return { state: table.state, names: table.names, ready: table.ready, rematch: table.rematch, seq: table.seq, turnSeq: table.turnSeq, matchId: table.matchId, setup: table.setup, standIn: table.standIn, here: table.here, timer: table.timer, replay: table.replay, gotAway: table.gotAway, missed: table.missed, recap: table.recap };
     },
   };
-  table.state = newMatch(seed, target, cities);
+  table.state = newMatch(seed, target, cities, fixedDeals);
   return table;
 }
 
@@ -227,6 +308,24 @@ export function restoreTable(saved) {
   table.standIn = flags(saved.standIn, false);
   table.here = flags(saved.here, true);
   table.timer = Number.isInteger(saved.timer) && saved.timer >= 0 ? saved.timer : 0;
+  // Phase 4 (a Phase 3 save has none of these): the round's record, the last round's lines, the match's lines.
+  // A record's entries are what replay.js reads: an act (a seat and a known act, an answer with its boolean) and
+  // a turn (its number, its acts, a plan object for every seat).
+  const isAct = (x) => !!x && typeof x === 'object' && Number.isInteger(x.seat) && (x.a === 'escalate' || x.a === 'fold' || (x.a === 'respond' && typeof x.accept === 'boolean'));
+  const isTurn = (T) => !!T && typeof T === 'object' && Number.isInteger(T.turn) && Array.isArray(T.acts) && T.acts.every(isAct) && Array.isArray(T.plans) && T.plans.length === n && T.plans.every((p) => !!p && typeof p === 'object');
+  const r = saved.replay;
+  const isRecord = !!r && typeof r === 'object' && typeof r.match === 'string' && Number.isInteger(r.round) && !!r.start?.round && typeof r.start.round === 'object' && [r.turns, r.open, r.events].every(Array.isArray) && r.turns.every(isTurn) && r.open.every(isAct);
+  table.replay = isRecord ? r : null;
+  if (table.replay) recordedOn.set(table.replay, table.state);
+  const isLine = (x) => !!x && typeof x === 'object' && Number.isInteger(x.turn) && !!x.was && typeof x.was === 'object' && !!x.instead && typeof x.instead === 'object';
+  const g = saved.gotAway;
+  table.gotAway = g && typeof g === 'object' && typeof g.match === 'string' && Number.isInteger(g.round) && Array.isArray(g.seats) && g.seats.length === n && g.seats.every((x) => x === null || isLine(x)) ? g : null;
+  const m = saved.missed;
+  table.missed = Array.isArray(m) && m.length === n && m.every((list) => Array.isArray(list) && list.every((x) => isLine(x) && Number.isInteger(x.no))) ? m : Array(n).fill().map(() => []);
+  const rc = saved.recap;
+  // A recap entry is what casefile.js reads: a round number, boards, and outs that are a list or null.
+  const isRecap = (x) => !!x && typeof x === 'object' && Number.isInteger(x.no) && Array.isArray(x.board) && x.board.every((c) => Array.isArray(c) && c.every((side) => Array.isArray(side) && side.every((a) => !!a && typeof a === 'object'))) && Array.isArray(x.cityWinners) && Array.isArray(x.escalated) && (x.outs === null || (Array.isArray(x.outs) && x.outs.every((o) => !!o && typeof o === 'object')));
+  table.recap = Array.isArray(rc) && rc.every(isRecap) ? rc : [];
   return table;
 }
 

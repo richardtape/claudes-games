@@ -9,7 +9,7 @@ export const GOLDEN_MAX_ROUNDS = 40;
 
 /** Keys Phase 2b-ii adds to state, views and calls. Classic play never sets them, but later code may
  *  write them with default values, so comparisons strip them at any depth. */
-export const NEW_KEYS = Object.freeze(['roster', 'cityPool', 'twist', 'taps', 'tapped', 'exposed', 'macau', 'partner', 'partnerOf', 'placed', 'down', 'free']);
+export const NEW_KEYS = Object.freeze(['roster', 'cityPool', 'twist', 'taps', 'tapped', 'exposed', 'macau', 'partner', 'partnerOf', 'placed', 'down', 'free', 'fixedDeals']);
 
 /** A deep copy of a JSON value without any object key in NEW_KEYS, everything else in order. */
 export function project(value) {

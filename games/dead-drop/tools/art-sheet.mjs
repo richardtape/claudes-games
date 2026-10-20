@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Dead Drop art contact sheet: every agent and city from js/art.js at the sizes the game uses,
-// on the mustard table and on night ink, so a new silhouette can be judged beside the old ones.
+// on the mustard table and on night ink, so a new silhouette can be judged beside the old ones,
+// and the four pictures of how a turn works (the lobby's guide) at 160 and 80 px on paper.
 //
 //   node games/dead-drop/tools/art-sheet.mjs [--shot]
 //
@@ -13,7 +14,7 @@
 // One Chrome, closed at the end: check `pgrep -fl "chrome.*headless"` first on a shared machine.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { agentSVG, citySVG } from '../js/art.js';
+import { agentSVG, briefSVG, citySVG } from '../js/art.js';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const OUT = `${ROOT}.tmp/`;
@@ -51,6 +52,8 @@ const cityCell = (id, cls) => `<div class="city ${cls}">${label(id)}<div class="
 
 const allAgents = [...AGENTS, ...NEW_AGENTS];
 const allCities = [...CITIES, ...NEW_CITIES];
+const BRIEFS = ['the drop', 'the flip', 'the cities', 'the stake'];
+const briefCell = (name, i) => `<div class="brief"><span class="id">${i}: ${name}</span><div class="b160">${briefSVG(i)}</div><div class="b80">${briefSVG(i)}</div></div>`;
 
 const section = (key, title) => `
 <section class="${key}">
@@ -95,11 +98,22 @@ const html = `<!doctype html>
   .c150 .box { position: relative; width: 150px; height: 60px; }
   .c300 .box::after { content: ''; position: absolute; left: 0; right: 0; top: 40%; border-top: 1px dashed currentColor; opacity: 0.35; }
   .box { outline: 1px solid rgb(127 127 127 / 0.25); }
+  .briefing { background: ${C.mustard}; color: ${C.ink}; }
+  .briefs { display: grid; grid-template-columns: repeat(4, 280px); gap: 12px; }
+  .brief { display: grid; grid-template-columns: 160px 80px; gap: 6px 14px; align-items: end; padding: 8px 10px 10px; background: ${C.paper}; }
+  .brief .id { grid-column: 1 / -1; }
+  .brief .ac { fill: ${C.red}; }
+  .b160 { width: 160px; height: 100px; }
+  .b80 { width: 80px; height: 50px; }
 </style>
 </head>
 <body>
 ${section('day', 'Day: the mustard table (ink, red accent)')}
 ${section('night', 'Night: ink (paper, mustard and teal accents)')}
+<section class="briefing">
+  <h2>Briefing: how a turn works (ink on paper, red accent; 160 and 80 px)</h2>
+  <div class="briefs" id="briefing">${BRIEFS.map(briefCell).join('')}</div>
+</section>
 </body>
 </html>
 `;
@@ -107,8 +121,8 @@ ${section('night', 'Night: ink (paper, mustard and teal accents)')}
 mkdirSync(OUT, { recursive: true });
 const file = `${OUT}dead-drop-art.html`;
 writeFileSync(file, html);
-const blanks = [...allAgents.filter((id) => empty(agentSVG(id))), ...allCities.filter((id) => empty(citySVG(id)))];
-console.log(`wrote ${file} (${allAgents.length} agents, ${allCities.length} cities)`);
+const blanks = [...allAgents.filter((id) => empty(agentSVG(id))), ...allCities.filter((id) => empty(citySVG(id))), ...BRIEFS.filter((_, i) => empty(briefSVG(i))).map((n) => `briefing ${n}`)];
+console.log(`wrote ${file} (${allAgents.length} agents, ${allCities.length} cities, ${BRIEFS.length} briefing pictures)`);
 if (blanks.length) console.log(`no art yet: ${blanks.join(', ')}`);
 
 if (shot) {
@@ -121,7 +135,7 @@ if (shot) {
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
     await page.goto(pathToFileURL(file).href, { waitUntil: 'load' });
     await page.screenshot({ path: `${OUT}dead-drop-art.png`, fullPage: true });
-    for (const id of ['day-agents', 'day-cities', 'day-cities-small', 'night-agents', 'night-cities', 'night-cities-small', 'night-plates']) {
+    for (const id of ['day-agents', 'day-cities', 'day-cities-small', 'night-agents', 'night-cities', 'night-cities-small', 'night-plates', 'briefing']) {
       await page.locator(`#${id}`).screenshot({ path: `${OUT}dead-drop-art-${id}.png` });
     }
     console.log(`wrote ${OUT}dead-drop-art.png and dead-drop-art-<section>.png`);

@@ -2,6 +2,7 @@
 // and the reveal flow that animates each turn's events before re-rendering from the new view.
 import { homeLink, markReady, onHidden, recordBest, recordPlay, reducedMotion, store } from '../../../shared/arcade.js';
 import { createSfx } from '../../../shared/sfx.js';
+import { createRng } from '../../../shared/rng.js';
 import { shake, toast as cgToast } from '../../../shared/juice.js';
 import { cleanCode, joinRoom, roomCode } from '../../../shared/net.js';
 import { AGENT, AGENTS, CITIES, CITY, CLASSIC_CITIES, CODENAMES, DECK, EMOTES, MAX_SEATS, MIN_SEATS, RIVALS, ROSTER, RULES, SEAT_COLOURS, SEAT_NAMES, TARGET, TIMERS, TURNS } from './data.js';
@@ -35,9 +36,14 @@ import {
 import { agentSVG, citySVG, spySVG } from './art.js';
 import { createAudio } from './audio.js';
 import { levelFor } from './music.js';
-import { countMatch, countWin, meet, migrateMeta } from './meta.js';
+import { countMatch, countWin, dailyBest, dailyPlayed, meet, migrateMeta, recordDaily } from './meta.js';
+import { dailyKey, dailyOperation, dailyResult } from './daily.js';
 import { CLASSIC_SETUP, MIXED_ALL, freeSetup, ladderSetup, network } from './roster.js';
 import { cable, DOSSIERS, EPILOGUE, operation, REMARKS, twistText } from './story.js';
+import { briefingHTML, caseFileHTML, coachHTML, dailyBestHTML, dailySlipHTML, dailySub, dayWords, featuredHTML, featuredLine, gotAwayHTML, gotAwayLine, sharedMissedOf, sharedSafe } from './loop-ui.js';
+import { afterFor, attachScript, canLock, coachFor, gateAllows, TUTORIAL, tutorialTable } from './tutorial.js';
+import { posterData } from './casefile.js';
+import { drawPoster, savePoster } from './poster.js';
 import { sightings, unseen } from './counting.js';
 
 const SLUG = 'dead-drop';
@@ -131,6 +137,8 @@ const ui = {
   reelKey: null, // the matchId whose full reel card was last due (it plays once per match)
   holdBoard: false, // a fold is playing out over the board as it stood: render() leaves #screen alone
   free: false, // solo: free play (Mixed from your network, no twist; a win recruits nothing), not the ladder
+  daily: null, // solo: today's operation (dailyOperation) while the daily is on the table, else null; it plays as free play
+  today: null, // __game.today(key): the day the daily plays as ('YYYY-MM-DD'), or null for the clock's (dailyKey)
   rivalsTab: 'ladder', // the rivals screen's switch: ladder | free | table
   tableSeats: 3, // the Table tab: how many seats (3 or 4)
   tablePicks: null, // the Table tab: the rival id chosen for each rival seat (null: the defaults, tableDefaults)
@@ -152,6 +160,10 @@ const ui = {
   unseenOpen: null, // the rival seat whose unseen strip is open (U), or null: a planning tool, closed by any reveal or result
   unseenEnter: false, // the strip has just been opened: its next render drops it in (once)
   remark: null, // the computer rival's remark on a round's result, said once: { key: `${matchId}:${roundNo}`, text }
+  gotAwaySaid: null, // `${matchId}:${roundNo}` of the last result whose one that got away the ticker has said (once a round)
+  gaHint: null, // the city a tap on the one that got away lit on the board (a city index), for GA_HINT_MS, or null
+  gaTimer: 0, // the timer that puts that city's light out
+  hintHeld: false, // __game.holdHint(): a tap's light stays on until released (a check's steady screenshot)
   typeNext: null, // a line just said (say()): the next render types it out in the ticker again
   calledKey: null, // `${matchId}:${roundNo}:${by}` of the last call whose answers card was due (three seats and more)
   sheetEnter: false, // a city dossier or a rival's file has just been opened: its next render slides it in (once)
@@ -160,6 +172,14 @@ const ui = {
   emoteOpen: false, // online at a seat: the row of emotes is open above the controls (the header's Emote)
   emoteEnter: false, // the row has just been opened: its next draw slides it in (once)
   bannerText: '', // the banner's words as #banner shows them (syncBanner), '' for none
+  caseShown: null, // the matchId whose case file has been drawn: its stamp drops on once, at the first draw
+  posterBusy: false, // Save as PNG is drawing or saving the poster: a second press waits for it
+  posterBreak: false, // __game.poster.breakArt(): every silhouette on the poster fails to load (a check of the text-alone slips)
+  // The briefing (startTutorial): a scripted first round against Agent Wren, or null. Never saved, counted or recorded;
+  // leaving a mode clears it (resetMatchUi), a fresh match screen keeps it (freshMatchUi).
+  tutorial: null, // null | { step }: the briefing's turn on screen
+  coachKey: null, // the coach's lesson as it began typing: { key: `${matchId}:${roundNo}:${turn}`, at: performance.now() }
+  quitTo: null, // the quit sheet's Leave goes to the title (null) or starts the briefing ('briefing', from Help's footer)
 };
 let table = null;
 let bots = []; // the computer rivals seated at the table (attachBot), one per rival seat
@@ -282,9 +302,12 @@ function watch(t) {
 }
 
 function persist() {
-  if (!table) return;
+  // The briefing is never saved: leaving it leaves nothing to continue.
+  if (!table || ui.tutorial) return;
+  // Today's operation saves to its own slot, so it never touches a saved ladder, free play or Table match.
+  if (ui.daily) saved.set('daily', { day: ui.daily.key, table: table.toJSON() });
   // A Table (solo at three or four seats) keeps its rivals, so Continue seats them again.
-  if (ui.mode === 'solo' || ui.mode === 'pass') saved.set('match', { mode: ui.mode, rival: ui.rival?.id ?? null, free: ui.mode === 'solo' && ui.free, ...(ui.mode === 'solo' && ui.tableRivals ? { rivals: ui.tableRivals } : {}), table: table.toJSON() });
+  else if (ui.mode === 'solo' || ui.mode === 'pass') saved.set('match', { mode: ui.mode, rival: ui.rival?.id ?? null, free: ui.mode === 'solo' && ui.free, ...(ui.mode === 'solo' && ui.tableRivals ? { rivals: ui.tableRivals } : {}), table: table.toJSON() });
   // The host saves its lobby (with the guests' tokens for this room, so a reload gives each their seat
   // back) and the table, once the match has started: before Start there is no table to save.
   if (ui.mode === 'host' && ui.net?.code && ui.net.session && ui.net.lobby?.started) saved.set(`host-${ui.net.code}`, { ...ui.net.session.toJSON(), at: Date.now(), roomTokens: true });
@@ -325,6 +348,11 @@ function freshMatchUi() {
   ui.unseenOpen = null;
   ui.unseenEnter = false;
   ui.remark = null;
+  ui.gotAwaySaid = null;
+  ui.caseShown = null;
+  ui.coachKey = null;
+  ui.quitTo = null;
+  endHint({ draw: false });
   ui.cityOpen = null;
   ui.tagOpen = null;
   ui.calledKey = null;
@@ -340,11 +368,13 @@ function freshMatchUi() {
 function resetMatchUi() {
   freshMatchUi();
   ui.free = false;
+  ui.daily = null;
   ui.remote = null;
   ui.tableRivals = null;
   ui.emotes = [];
   clearEmotes();
   ui.lobby = null;
+  ui.tutorial = null;
   stopBots();
 }
 
@@ -464,13 +494,19 @@ const pickReady = (v) => !!ui.selected && ui.target !== null && !(partnerPrompt(
 /**
  * Seat the computer rivals of a solo table, one per rival seat: the ladder's rival at seat 1, or a
  * Table's rivals (ui.tableRivals) in seat order. Call it once whatever holds them is up (beginMatch()
- * raises ui.updating): a bot's first tick checks its hold at once.
+ * raises ui.updating): a bot's first tick checks its hold at once. `rng` seeds the rival's own draws
+ * (the daily's, so its rival plays the day the same way); left out, each bot draws from the clock.
  */
-function seatBots() {
+function seatBots({ rng } = {}) {
   standDown();
   if (ui.mode !== 'solo' || !table) return;
+  // The briefing's Wren plays its script (acting at once, held as a computer rival is).
+  if (ui.tutorial) {
+    bots = [attachScript(table, 1, TUTORIAL.rival, { hold: botHold })];
+    return;
+  }
   const ids = ui.tableRivals ?? [ui.rival.id];
-  bots = ids.map((id, i) => attachBot(table, i + 1, RIVALS.find((r) => r.id === id) ?? RIVALS[0], { hold: botHold }));
+  bots = ids.map((id, i) => attachBot(table, i + 1, RIVALS.find((r) => r.id === id) ?? RIVALS[0], { hold: botHold, rng }));
 }
 
 /** A Table's rival names: a rung met twice is "{name} II" the second time, "{name} III" the third. */
@@ -527,18 +563,80 @@ function startTable({ seats = 3, rivals: ids = ['wren', 'magpie', 'heron'], setu
   seatBots();
 }
 
-/** Pass and play on one device for `seats` players: the Classic roster, or `setup` (the sheet's Mixed is MIXED_ALL). */
-function startPass({ seats = 2, setup = CLASSIC_SETUP, timer = 0, resume = null } = {}) {
+/**
+ * Pass and play on one device for `seats` players: the Classic roster, or `setup` (the sheet's Mixed is MIXED_ALL).
+ * `seed` and `cities` deal a chosen match (a check's), as at a Table.
+ */
+function startPass({ seats = 2, setup = CLASSIC_SETUP, timer = 0, resume = null, seed = null, cities = undefined } = {}) {
   leaveMatch({ keepSave: !!resume });
   resetMatchUi();
   ui.mode = 'pass';
   ui.rival = null;
   if (resume) restoreSaved(resume);
-  else table = createTable({ seats, names: SEAT_NAMES.slice(0, seats), setup, timer });
+  else table = createTable({ seats, names: SEAT_NAMES.slice(0, seats), setup, timer, seed, cities });
   watch(table);
   ui.seat = null;
   startClock();
   beginMatch();
+}
+
+/** The day the daily plays: the clock's ('YYYY-MM-DD', local), or the one a check set (__game.today). */
+function today() {
+  return ui.today ?? dailyKey();
+}
+
+/**
+ * A daily save from another day (or one this build can't restore) is no attempt to continue: it goes, quietly
+ * (no toast). Run at boot and on every title render, so the slip never offers to continue yesterday.
+ */
+function dropStaleDaily() {
+  const d = saved.get('daily', null);
+  if (d && (d.day !== today() || !canRestore(d.table))) saved.remove('daily');
+}
+
+/**
+ * Today's operation: one match against the day's rival, dealt the same for everyone that day (fixed deals,
+ * the day's seed and match id), Classic plus two featured agents and a city. It plays as free play (no
+ * dossier, no recruits, no Next rival) and saves to its own slot (persist). `resume` continues today's save.
+ */
+function startDaily({ resume = null } = {}) {
+  leaveMatch({ keepSave: true });
+  resetMatchUi();
+  const op = dailyOperation(today());
+  ui.mode = 'solo';
+  ui.seat = 0;
+  ui.daily = op;
+  ui.rival = op.rival;
+  ui.free = true;
+  if (resume) restoreSaved(resume);
+  else {
+    table = createTable({ seed: op.seed, setup: op.setup, names: [meta.codename, op.rival.name], fixedDeals: true });
+    table.matchId = op.matchId;
+  }
+  watch(table);
+  beginMatch();
+  // Seated once the table is up (as startSolo does), with the day's own draws.
+  seatBots({ rng: createRng(`${op.seed}:bot`) });
+}
+
+/**
+ * The briefing: one scripted round against Agent Wren (tutorial.js), C's coach slip above the hand each turn. It
+ * plays as free play with no timer, no intro or round card, and nothing saved or counted (persist, matchStarts and
+ * finishMatch skip it); a saved match stays as it was. Wren is the script's (seatBots), held as a computer rival is
+ * (botHold), and stands down with them (bots).
+ */
+function startTutorial() {
+  leaveMatch({ keepSave: true });
+  resetMatchUi();
+  ui.mode = 'solo';
+  ui.seat = 0;
+  ui.rival = RIVALS[0];
+  ui.free = true;
+  ui.tutorial = { step: 1 };
+  table = tutorialTable({ names: [meta.codename, RIVALS[0].name] });
+  watch(table);
+  beginMatch();
+  seatBots();
 }
 
 /**
@@ -849,6 +947,8 @@ function heardEmote({ seat, i }) {
 
 /** Bookkeeping as a match comes on screen: count it (once per match id). A match only watched isn't one you played. */
 function matchStarts(id) {
+  // The briefing is no match played: it isn't counted, and the title keeps offering it until it's finished.
+  if (ui.tutorial) return;
   if (!watching()) countOnce(id);
 }
 
@@ -882,7 +982,11 @@ function leaveMatch({ keepSave = false } = {}) {
   // Say goodbye before leaving the room, so the other side reads "left the table", not a lost
   // connection. bye() settles within 400 ms even if the message never goes out.
   if (room) Promise.resolve(session?.bye()).finally(() => (session ? session.close() : room.leave()));
-  if (!keepSave && (ui.mode === 'solo' || ui.mode === 'pass') && table && table.state.phase === 'match-over') saved.remove('match');
+  if (!keepSave && table && table.state.phase === 'match-over') {
+    // A finished daily takes only its own save with it.
+    if (ui.daily) saved.remove('daily');
+    else if (ui.mode === 'solo' || ui.mode === 'pass') saved.remove('match');
+  }
   table = null;
   audio.level(0);
   audio.hush(false);
@@ -1045,6 +1149,12 @@ async function showLatest() {
     const shown = v;
     await animateTurn(from, shown);
     if (!reread()) return;
+    // The briefing: C says what that turn showed, in the ticker (the coach slip has the next lesson).
+    if (ui.tutorial) {
+      const after = afterFor(from.round.turn);
+      if (after) say(after);
+      if (shown.phase === 'plan') ui.tutorial.step = shown.round.turn;
+    }
     // The board on screen is now the one the reveal ended on: a fold that arrived during the
     // reveal plays out over it, not over the board from before the turn.
     ui.view = shown;
@@ -1060,7 +1170,7 @@ async function showLatest() {
   // first time you meet them; then tonight's roster, unless it is Classic. What a card shows for the
   // first time is met (meta.met) as it shows, never while cards are skipped. Whatever arrives while
   // they are up is read afterwards, as for the round card.
-  if (v.phase === 'plan' && v.roundNo === 0 && v.round.turn === 1 && !v.round.plan && ui.introKey !== v.matchId) {
+  if (v.phase === 'plan' && v.roundNo === 0 && v.round.turn === 1 && !v.round.plan && ui.introKey !== v.matchId && !ui.tutorial) {
     ui.introKey = v.matchId;
     if (cardsShow()) {
       ui.view = v;
@@ -1074,7 +1184,7 @@ async function showLatest() {
       if (!isClassic(v.roster) && cardsShow()) {
         const fresh = meet(meta, { agents: v.roster }).agents;
         if (fresh.length) saveMeta();
-        await rosterCard(v, fresh);
+        await rosterCard(v, fresh, { featured: ui.daily?.featured ?? null });
         if (!upToDate()) return;
       }
     }
@@ -1143,7 +1253,7 @@ async function showLatest() {
   // A new round opens on its title card, once per round. The new table goes up behind it, and
   // whatever arrived while it showed (a rival locking in, say) is read afterwards.
   const roundKey = `${v.matchId}:${v.roundNo}`;
-  if (v.phase === 'plan' && v.round.turn === 1 && ui.roundKey !== roundKey) {
+  if (v.phase === 'plan' && v.round.turn === 1 && ui.roundKey !== roundKey && !ui.tutorial) {
     ui.roundKey = roundKey;
     ui.view = v;
     render();
@@ -1178,6 +1288,12 @@ async function showLatest() {
     const theirs = (s) => s !== null && s !== undefined && s !== me();
     const kind = theirs(res.folded) ? 'fold' : theirs(res.winner) ? 'won' : res.winner === me() ? 'lost' : null;
     ui.remark = { key: resultKey, text: kind ? remark(kind) : null };
+  }
+  // The one that got away, said once as the result comes up, after the remark (the ticker keeps the last line).
+  if (v.phase !== 'plan' && v.round.result && ui.gotAwaySaid !== resultKey) {
+    ui.gotAwaySaid = resultKey;
+    const ga = gotAwayShown(v);
+    if (ga) say(gotAwayLine(ga.g, cityIds(v), { who: ga.who }));
   }
   if (ui.mode === 'pass') {
     passCover(v);
@@ -1722,14 +1838,17 @@ const isClassic = (roster) => roster.length === DECK.length && DECK.every((id) =
 /**
  * A match that isn't Classic opens on its roster: the agents every player holds tonight, dealt onto
  * the card as small paper cards. Agents met for the first time (`fresh`) wear a New stamp, and their
- * text and fine print follow on slips under the deal.
+ * text and fine print follow on slips under the deal. On a daily, `featured` (the day's two agents and
+ * its city) adds a line under the subtitle, and the featured agents wear a Today stamp where they aren't New.
  */
-function rosterCard(v, fresh) {
+function rosterCard(v, fresh, { featured = null } = {}) {
+  const todays = featured?.agents ?? [];
   const minis = v.roster
     .map((id, i) => {
       const a = AGENT[id];
       const isNew = fresh.includes(id);
-      return `<div class="mc${isNew ? ' new' : ''}" style="--i:${i}"><b class="pow">${a.power}</b><span class="art" aria-hidden="true">${agentSVG(id)}</span><span class="nm">${esc(a.name)}</span>${isNew ? '<i class="new-tag">New</i>' : ''}</div>`;
+      const isToday = !isNew && todays.includes(id);
+      return `<div class="mc${isNew ? ' new' : ''}${isToday ? ' today' : ''}" style="--i:${i}"><b class="pow">${a.power}</b><span class="art" aria-hidden="true">${agentSVG(id)}</span><span class="nm">${esc(a.name)}</span>${isNew ? '<i class="new-tag">New</i>' : isToday ? '<i class="new-tag today-tag">Today</i>' : ''}</div>`;
     })
     .join('');
   const news = fresh
@@ -1743,12 +1862,13 @@ function rosterCard(v, fresh) {
   const extra = t?.id === 'extra' ? ` ${v.names?.[t.seat] ?? 'Your rival'} carries one more: an extra ${AGENT[t.kind].name}.` : '';
   const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <h2 class="big">${jitter('Tonight’s roster', 8)}</h2>
-    <p class="sub">Every deck at the table holds these ${v.roster.length} agents.${esc(extra)}</p>
+    <p class="sub">Every deck at the table holds these ${v.roster.length} agents.${esc(extra)}</p>${featured ? featuredHTML(featured) : ''}
     <div class="minis">${minis}</div>
     ${news ? `<div class="news">${news}</div>` : ''}`;
   const named = (ids) => ids.map((id) => AGENT[id].name).join(', ');
-  const label = `Tonight’s roster: ${named(v.roster)}.${fresh.length ? ` New to you: ${named(fresh)}.` : ''}`;
-  const ms = Math.min(ROSTER_MAX_MS, ROSTER_CARD_MS + NEW_AGENT_MS * fresh.length);
+  const label = `Tonight’s roster: ${named(v.roster)}.${fresh.length ? ` New to you: ${named(fresh)}.` : ''}${featured ? ` ${featuredLine(featured)}` : ''}`;
+  // The featured line is one more to read: it stays up as long again as for an agent met for the first time.
+  const ms = Math.min(ROSTER_MAX_MS, ROSTER_CARD_MS + NEW_AGENT_MS * (fresh.length + (featured ? 1 : 0)));
   const done = showCard(html, 'roster-card', ms, { label });
   if (ui.card) audio.drop();
   return done;
@@ -1842,6 +1962,19 @@ function flushRecruits() {
 }
 
 function finishMatch(v) {
+  // The briefing records nothing (it ends on its result, before any match is over).
+  if (ui.tutorial) return;
+  // Today's operation: the day's result goes on record (once), its save goes, and nothing else is touched (no
+  // ladder or Table save, no rival beaten, no best on the shelf).
+  if (ui.daily) {
+    const op = ui.daily;
+    const result = dailyResult(table ? table.state : v, 0);
+    recordDaily(meta, op.key, result, op.rival.id);
+    saveMeta();
+    saved.remove('daily');
+    (result.won ? audio.victory : audio.defeat)();
+    return;
+  }
   if (ui.mode === 'solo') {
     const won = v.winner === 0;
     // Only the ladder recruits: a win there adds the rival to your record, and its pack to your network.
@@ -1926,9 +2059,17 @@ function renderTop() {
   </header>`;
 }
 
+/** The saved solo or pass match the title's Continue resumes (one not yet over), or null. */
+function resumable() {
+  const m = saved.get('match', null);
+  return m && m.table?.state?.phase !== 'match-over' ? m : null;
+}
+
 function titleHTML() {
-  const resume = saved.get('match', null);
-  const canResume = resume && resume.table?.state?.phase !== 'match-over';
+  dropStaleDaily();
+  const day = today();
+  const resume = resumable();
+  const canResume = !!resume;
   const against = RIVALS.find((r) => r.id === resume?.rival)?.name || 'the computer';
   // A Table (three or four seats) names everyone you sit with.
   const atTable = canResume && Array.isArray(resume.rivals) && Array.isArray(resume.table?.names) ? andList(resume.table.names.slice(1)) : null;
@@ -1944,6 +2085,8 @@ function titleHTML() {
   const net = network(meta.beaten);
   const intro = !ui.introDone;
   ui.introDone = true;
+  // A first visit (nothing played, the briefing not yet finished) leads with the briefing.
+  const briefing = meta.matches === 0 && !meta.briefed;
   return `<div class="title-screen${intro ? ' intro' : ''}">
     <div class="poster">
       <div class="bars" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -1953,7 +2096,9 @@ function titleHTML() {
     </div>
     <nav class="menu" aria-label="Play">
       ${canResume ? `<button class="slip primary" data-action="continue">${esc(resumeLabel)}</button>` : ''}
-      <button class="slip ${canResume ? '' : 'primary'}" data-action="rivals">Play the computer</button>
+      ${briefing ? `<button class="slip briefing${canResume ? '' : ' primary'}" data-action="briefing">New here? Take the briefing <small>One scripted round against Agent Wren, about three minutes.</small></button>` : ''}
+      <button class="slip ${canResume || briefing ? '' : 'primary'}" data-action="rivals">Play the computer</button>
+      ${dailySlipHTML(dailyOperation(day), { played: dailyPlayed(meta, day), saved: !!saved.get('daily') })}
       <button class="slip" data-action="host">Play friends online</button>
       <button class="slip" data-action="pass">Pass and play</button>
       <form class="join" data-form="join">
@@ -1962,6 +2107,7 @@ function titleHTML() {
       </form>
       <p class="codename">You are <b>${esc(meta.codename)}</b> <button class="link" data-action="rename">Change codename</button></p>
       <p class="network">Network: <b>${net.agents.length}</b> of ${AGENTS.length} agents · <b>${net.cities.length}</b> of ${CITIES.length} cities</p>
+      ${dailyBestHTML(dailyBest(meta))}
     </nav>
   </div>`;
 }
@@ -2201,6 +2347,13 @@ function lobbyHTML() {
       <button class="slip quiet" data-action="title">Cancel</button>
     </div>`;
   }
+  // A friend waiting (to be let in, or for the host to start) reads how a turn works: the slips drop in on the
+  // first render of this join only, so the lobby redrawn as it changes never replays them.
+  const guide = () => {
+    const html = briefingHTML({ enter: !n.guided });
+    n.guided = true;
+    return html;
+  };
   // A guest, once welcomed: the host's lobby as it stands (read-only), or watching a full table.
   const L = n.status === 'joined' ? ui.lobby : null;
   if (L && !L.started) {
@@ -2216,6 +2369,7 @@ function lobbyHTML() {
     ${seatsHTML(L, spectator ? -1 : ui.seat)}
     <p class="lobby-terms">${L.size} seats · Timer ${esc(TIMER_LABELS[L.timer] ?? 'Off').toLowerCase()} · ${roster}</p>
     <p class="seg-note">${esc(rosterNote(L.roster))}</p>
+    ${guide()}
     <button class="slip quiet" data-action="title">Leave</button>
   </div>`;
   }
@@ -2232,6 +2386,7 @@ function lobbyHTML() {
     <p class="wait" role="status">${['connecting', 'searching', 'joined'].includes(n.status) ? '<i class="dots" aria-hidden="true"></i>' : ''}${msg}</p>
     ${n.slow ? `<p class="err">Still looking. Check that the host has the table open on the same link. Some office and school networks block direct connections: try mobile data or another Wi-Fi, or play pass and play on one device.</p>` : ''}
     ${n.error && n.status !== 'error' ? `<p class="err">${esc(n.error)}</p>` : ''}
+    ${n.status === 'connecting' || n.status === 'searching' ? guide() : ''}
     <button class="slip quiet" data-action="title">Cancel</button>
   </div>`;
 }
@@ -2335,7 +2490,8 @@ function planStatus(v, R, waiting, two, choosing) {
 
 /** Gentle teaching lines for the first couple of matches. */
 function hintText(v) {
-  if (meta.matches > 2 || v.phase !== 'plan' || v.roundNo > 1 || watching()) return '';
+  // The briefing's coach slip does the teaching there.
+  if (ui.tutorial || meta.matches > 2 || v.phase !== 'plan' || v.roundNo > 1 || watching()) return '';
   const t = v.round.turn;
   const two = seatCount(v) === 2;
   if (v.roundNo === 0 && t === 1) return `${two ? 'You and your rival both drop' : 'Everyone drops'} an agent in secret. Then the cards flip together, and the First flip token shows whose tricks go first.`;
@@ -2418,6 +2574,8 @@ function unseenOf(v, seat, viewer) {
 
 /** A rival's tools under its name: its twist as a stamped chip (a tap reads it out), and the unseen strip's toggle. */
 function intelHTML(v, seat, viewer) {
+  // The briefing keeps the table to what its lessons teach.
+  if (ui.tutorial) return '';
   const twist = twistOf(v, seat);
   const chip = twist ? `<button class="twist-chip" data-action="twist" data-seat="${seat}" aria-label="Twist: ${esc(twist)}" title="${esc(twist)}">Twist</button>` : '';
   const open = ui.unseenOpen === seat;
@@ -2512,9 +2670,13 @@ function controlsHTML(v) {
   const already = R.escalated.some(Boolean);
   const canEsc = left > 0 && !already && !R.pending;
   const escLabel = already ? 'Escalated this round' : left > 0 ? `Escalate: ${left} token${left === 1 ? '' : 's'} left` : 'Escalate: no tokens left';
+  // The briefing: Escalate only on the turn that teaches it (whose Lock in waits for it), and no Fold.
+  const brief = ui.tutorial ? coachFor(v) : null;
+  const lockable = !brief || canLock(v, brief.gate);
   // An Accomplice's drop waits for its partner (or Drop alone) before it can lock in.
   const ask = partnerPrompt(v);
-  const sel = ui.selected && ui.target !== null && (!ask || ui.partner !== null);
+  const sel = ui.selected && ui.target !== null && (!ask || ui.partner !== null) && lockable;
+  const status = escalateFirst(v) ? ESCALATE_FIRST : statusText(v);
   const lockBtn = myPlan(v)
     ? `<button class="slip" data-action="unlock" ${R.rivalLocked || !R.plan ? 'disabled' : ''}>Take back<kbd>Esc</kbd></button>`
     : `<button class="slip primary${sel ? ' ready' : ''}" data-action="lock" ${sel ? '' : 'disabled'}>Lock in<kbd>Enter</kbd></button>`;
@@ -2528,12 +2690,13 @@ function controlsHTML(v) {
     );
   }
   if (ask) choice.push(`<button class="slip quiet alone" data-action="alone" aria-pressed="${ui.partner === 'alone'}">Drop alone</button>`);
+  const escBtn = `<button class="slip esc${left > 0 ? '' : ' out'}" data-action="escalate" aria-label="${escLabel}" title="${escLabel}" ${canEsc ? '' : 'disabled'}><span>Escalate</span><small class="left">${left} left</small><kbd>E</kbd></button>`;
   return `<div class="controls">
-    <p class="status">${esc(statusText(v))}</p>
+    <p class="status${lockable ? '' : ' wait-esc'}">${esc(status)}</p>
     <div class="btns">
       ${choice.length ? `<span class="choice">${choice.join('')}</span>` : ''}
-      <button class="slip esc${left > 0 ? '' : ' out'}" data-action="escalate" aria-label="${escLabel}" title="${escLabel}" ${canEsc ? '' : 'disabled'}><span>Escalate</span><small class="left">${left} left</small><kbd>E</kbd></button>
-      <button class="slip" data-action="fold">Fold<kbd>F</kbd></button>
+      ${!brief || brief.gate?.escalate ? escBtn : ''}
+      ${brief ? '' : '<button class="slip" data-action="fold">Fold<kbd>F</kbd></button>'}
       ${lockBtn}
     </div>
   </div>`;
@@ -2674,6 +2837,23 @@ function syncFuse() {
   });
 }
 
+/** The round's city ids, as gotAwayText reads them. */
+const cityIds = (v) => v.round.cities.map((c) => c.id);
+/**
+ * The one that got away this result shows, as { g, who }, or null: the view's own line (solo, online; a spectator's
+ * view has none). Pass and play's shared screen (Decision 2): at two seats the loser's, named, only when it names
+ * no card still in their hand (sharedSafe); at three and four seats none.
+ */
+function gotAwayShown(v) {
+  const res = v?.round?.result;
+  if (!res) return null;
+  if (ui.mode !== 'pass') return v.gotAway ? { g: v.gotAway, who: null } : null;
+  if (!table || seatCount(v) !== 2 || res.winner === null || res.folded !== null || table.state.roundNo !== v.roundNo) return null;
+  const loser = 1 - res.winner;
+  const g = table.view(loser).gotAway;
+  return sharedSafe(g) ? { g, who: v.names[loser] } : null;
+}
+
 function resultHTML(v, bottom) {
   const res = v.round.result;
   if (!res) return '';
@@ -2742,6 +2922,9 @@ function resultHTML(v, bottom) {
     if (res.monaco !== null && res.monaco !== undefined) lines.push(`<span class="pts">+1 Monaco bonus to ${esc(label(res.monaco, v))}</span>`);
     if (macau !== null) lines.push(`<span class="pts">+${extra} Macau: ${esc(label(macau, v))} won the round holding it</span>`);
   }
+  // The one that got away (a lost flip round's): the single change that would have won it, on its telegram slip.
+  const ga = gotAwayShown(v);
+  if (ga) lines.push(gotAwayHTML(ga.g, cityIds(v), { who: ga.who }));
   // The Microfilm: a frame in the taker's colour beside who took a strip, or the canister (the
   // film stays in it) beside why nobody did.
   const film = filmLine(v, res);
@@ -2755,7 +2938,9 @@ function resultHTML(v, bottom) {
   const waiting = watching() || ((ui.mode === 'host' || ui.mode === 'guest') && v.ready[me()] && notReady.length > 0);
   const btn = over
     ? `<button class="slip primary" data-action="final">Final report<kbd>Enter</kbd></button>`
-    : waiting
+    : ui.tutorial
+      ? `<button class="slip primary" data-action="finish-briefing">Finish the briefing<kbd>Enter</kbd></button>`
+      : waiting
       ? `<p class="wait"><i class="dots" aria-hidden="true"></i>Waiting for ${notReady.length ? esc(andList(notReady.map((s) => label(s, v)))) : 'the next round'}…</p>`
       : `<button class="slip primary" data-action="next">Next round<kbd>Enter</kbd></button>`;
   const key = `${v.roundNo}:${v.scores.join(',')}`;
@@ -2848,7 +3033,8 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
   const busy = revealing || still;
   feedSightings(v);
   const choosing = !!ui.selected && !myPlan(v) && v.phase === 'plan' && !busy;
-  const legalCities = choosing ? R.legal.filter((d) => d.uid === ui.selected).map((d) => d.city) : [];
+  // The briefing's gate narrows the cities on offer to its own (gateOk).
+  const legalCities = choosing ? R.legal.filter((d) => d.uid === ui.selected && gateOk(v, { city: d.city })).map((d) => d.city) : [];
   // The drop being chosen, or locked in, as ghosts in its city: face down where it will land face down
   // (Casablanca as chosen), and an Accomplice's partner beside it.
   let ghost = null;
@@ -2870,7 +3056,7 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
   const tapFresh = !!tapKey && `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}` !== ui.tapShown;
   if (tapKey) ui.tapShown = `${v.matchId}:${v.roundNo}:${R.turn}:${tapKey}`;
   const settled = v.phase !== 'plan' && R.result && R.result.cityWinners;
-  const cities = R.cities.map((_, ci) => cityHTML(v, ci, b, { ghost, choosing, legalCities, tapFresh, won: settled ? R.result.cityWinners[ci] : undefined, neutral: watching() })).join('');
+  const cities = R.cities.map((_, ci) => cityHTML(v, ci, b, { ghost, choosing, legalCities, tapFresh, won: settled ? R.result.cityWinners[ci] : undefined, neutral: watching(), hint: !!settled && ci === ui.gaHint })).join('');
   const n = seatCount(v);
   const caption = busy ? ui.caption : ui.caption || inspectText(v) || hintText(v);
   // A line said just before this render types out again on the new ticker.
@@ -2878,18 +3064,151 @@ function renderPlay({ board = view(), hand = board, revealing = false, still = f
   ui.typeNext = null;
   syncNight();
   syncBanner(peerBanner(v));
-  $('#screen').innerHTML = `<div class="play${n > 2 ? ' many' : ''}${revealing ? ' revealing' : ''}${watching() ? ' watching' : ''}" data-bottom="${b}" data-seats="${n}">
+  // On the narrowest phones C's slip carries the ticker's line too (style.css): what to do before Lock in, else that line.
+  const coach = coachSlip(v, busy, busy ? '' : escalateFirst(v) ? ESCALATE_FIRST : caption);
+  $('#screen').innerHTML = `<div class="play${n > 2 ? ' many' : ''}${revealing ? ' revealing' : ''}${watching() ? ' watching' : ''}${ui.tutorial ? ' briefing' : ''}${coach ? ' coached' : ''}${ui.tutorial && !caption ? ' quiet-ticker' : ''}" data-bottom="${b}" data-seats="${n}">
     ${n > 2 ? tagbarHTML(v, b) : scorebarHTML(v, b)}
     <div class="board${myPlan(v) ? ' locked' : ''}" id="board">${cities}</div>
     <p class="ticker${typing ? ' typing' : ''}" id="ticker" role="status">${esc(caption)}</p>
     ${revealing ? `<div class="controls"><p class="status">Flip!</p><div class="btns"><button class="slip quiet" data-action="reveal-tap">${revealLabel()}</button></div></div>` : still ? '<div class="controls"><p class="status"></p></div>' : controlsHTML(v)}
+    ${coach}
     ${handHTML(hand, busy, busy ? '' : fuseHTML(v, 'hand'))}
     ${!busy && v.phase !== 'plan' ? resultHTML(v, b) : ''}
   </div>`;
   fitTags();
+  markCoach(v, busy);
   markDrag();
   syncEmoteRow(rowFocus);
   placeEmotes();
+}
+
+// ── the briefing on the table ───────────────────────────────────────────────
+
+/** How fast C's slip types (a key every COACH_KEY_MS), as the round card's cable does. */
+const COACH_KEY_MS = 12;
+/** A new lesson's stamp takes this long to land (style.css .coach.fresh .lesson). */
+const COACH_STAMP_MS = 400;
+
+/** What the status says while the briefing's Lock in waits for the escalation (and C's slip says on the narrowest phones). */
+const ESCALATE_FIRST = 'Escalate first: press Escalate or E.';
+
+/** The drop is picked, but the briefing's Lock in waits for the escalation (turn 4). */
+function escalateFirst(v) {
+  if (!ui.tutorial || v.phase !== 'plan' || myPlan(v) || !pickReady(v)) return false;
+  const coach = coachFor(v);
+  return !!coach && !canLock(v, coach.gate);
+}
+
+/** The briefing's gate this turn lets this pick through ({ uid } or { city }): always outside the briefing. */
+function gateOk(v, pickOf) {
+  if (!ui.tutorial || v.phase !== 'plan') return true;
+  const coach = coachFor(v);
+  return !coach || gateAllows(v, coach.gate, pickOf);
+}
+
+/**
+ * A pick the briefing's gate refuses: the ticker says what the lesson wants instead, with the dull note. Returns
+ * whether the pick may go ahead (true outside the briefing).
+ */
+function gateLets(v, pickOf) {
+  if (gateOk(v, pickOf)) return true;
+  const g = coachFor(v).gate;
+  say(pickOf.uid !== undefined ? `Follow the briefing: the ${AGENT[g.card].name} this turn.` : `Not there: ${cityName(v, g.city)} this turn.`);
+  audio.nobody();
+  render();
+  return false;
+}
+
+/**
+ * C's coach slip for the briefing turn on `v`'s board (coachHTML), or ''. A lesson types out the first time it
+ * shows: a render while it types (Wren locking in, a pick) carries on from where the keys had got to, and once
+ * typed (or with every animation skipped, under reduced motion, during the reveal) it stands as plain text. `note` is
+ * C's last word above it, shown only on the narrowest phones (where the ticker stands aside for the slip).
+ */
+function coachSlip(v, busy, note = '') {
+  const coach = ui.tutorial ? coachFor(v) : null;
+  if (!coach) return '';
+  const key = `${v.matchId}:${v.roundNo}:${v.round.turn}`;
+  const types = !busy && !ui.alwaysSkip && !reducedMotion() && !document.hidden;
+  if (ui.coachKey?.key !== key && !busy) {
+    ui.coachKey = { key, at: types ? performance.now() : -Infinity };
+    if (types) coachClatter(key, coach.text.length);
+  }
+  const gone = ui.coachKey?.key === key ? performance.now() - ui.coachKey.at : Infinity;
+  const textHTML = types && gone < coach.text.length * COACH_KEY_MS ? typedHTML(coach.text, { delay: -Math.round(gone), per: COACH_KEY_MS }) : esc(coach.text);
+  return coachHTML(coach, { step: v.round.turn, total: TURNS, textHTML, note });
+}
+
+/** The teleprinter's soft clatter while a lesson types: a key every other character, until it's typed or the lesson changes. */
+function coachClatter(key, chars) {
+  const keys = Math.ceil(chars / 2);
+  let i = 0;
+  const tick = () => {
+    if (ui.coachKey?.key !== key || ui.screen !== 'play' || ui.animating || document.hidden || i >= keys) return;
+    i++;
+    sfx.noise({ dur: 0.016, freq: 2800 + (i % 3) * 650, type: 'bandpass', q: 4, vol: 0.04 });
+    setTimeout(tick, COACH_KEY_MS * 2);
+  };
+  setTimeout(tick, 0);
+}
+
+/**
+ * The briefing's marks on the table just drawn (as markDrag's): the cards its gate refuses this turn dimmed (they
+ * still answer a tap, to say why: aria-disabled, not disabled), and until a card is picked the suggested card lifted
+ * with its Try this tab and the suggested city's plate aglow.
+ */
+function markCoach(v, busy) {
+  if (!ui.tutorial || busy || v.phase !== 'plan') return;
+  // A lesson just begun: its stamp lands, timed from the lesson's start (a redraw a moment later carries on with it).
+  const slip = $('#screen .coach');
+  const gone = ui.coachKey ? performance.now() - ui.coachKey.at : Infinity;
+  if (slip && gone < COACH_STAMP_MS) {
+    slip.classList.add('fresh');
+    slip.style.setProperty('--since', `${-Math.round(gone)}ms`);
+  }
+  if (myPlan(v) || !isSeat(v, me())) return;
+  const coach = coachFor(v);
+  if (!coach) return;
+  for (const el of document.querySelectorAll('#hand .card[data-action=pick]:not([disabled])')) {
+    if (gateAllows(v, coach.gate, { uid: el.dataset.uid })) continue;
+    el.classList.add('gated');
+    el.setAttribute('aria-disabled', 'true');
+  }
+  if (!coach.suggest || ui.selected) return;
+  const card = handCard(coach.suggest.uid);
+  if (card && !card.disabled) {
+    card.classList.add('suggest');
+    card.insertAdjacentHTML('beforeend', '<i class="try" aria-hidden="true">Try this</i>');
+  }
+  $(`#board .city[data-city="${coach.suggest.city}"]`)?.classList.add('suggest');
+}
+
+/** How long the briefing's end card stays up (skipped like every card), and how it types. */
+const BRIEFING_END_MS = 9000;
+const BRIEFING_KEY_MS = 22;
+const BRIEFING_PAUSE_MS = 380;
+
+/**
+ * The briefing's last word: C's cable on a telegram form ("That’s a round.", then whether you took it, what a match
+ * is, and Wren waiting on the ladder), typed out line by line over the table's mustard bars, and signed.
+ */
+function briefingCard(won) {
+  const E = TUTORIAL.end;
+  const said = [E.title, won ? E.won : E.lost, E.text];
+  let at = 350;
+  const starts = [];
+  const lines = said.map((line, i) => {
+    starts.push([at, line.length]);
+    const html = `<p class="eline${i === 0 ? ' head' : ''}">${typedHTML(line, { delay: at, per: BRIEFING_KEY_MS })}</p>`;
+    at += line.length * BRIEFING_KEY_MS + BRIEFING_PAUSE_MS;
+    return html;
+  }).join('');
+  const html = `<div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="telegram"><p class="form-head" aria-hidden="true"><span>Cable</span><span>The briefing</span></p>${lines}<p class="eline sig" aria-hidden="true">— C</p></div>`;
+  const done = showCard(html, 'epilogue-card briefing-card', BRIEFING_END_MS, { label: `${said.join(' ')} C.` });
+  const card = ui.card;
+  for (const [t, n] of starts) clatter(card, Math.ceil(n / 2), BRIEFING_KEY_MS * 2, t);
+  return done;
 }
 
 /**
@@ -2904,40 +3223,61 @@ function fitTags() {
   if ([...tags.querySelectorAll('.who')].some((w) => w.scrollWidth > w.clientWidth + 1)) tags.classList.add('short');
 }
 
-function overHTML() {
-  const v = view();
+/** Pass and play's lines for the shared case file (sharedMissedOf): at two seats each loser's safe ones, named. */
+const sharedMissed = (v) => sharedMissedOf(v, table?.missed);
+
+/**
+ * The case file for match-over view `v`, as the end screen and its poster draw it: posterData from the bottom seat
+ * (the winner's on a neutral screen: pass and play, a spectator), with the folder's typed label, the sub, each seat as
+ * the screen names it, the ladder's last line, the match id, and no highlights when the view has no recap (an older
+ * host's).
+ */
+function caseFile(v = view()) {
   const bottom = ui.mode === 'pass' ? 0 : bottomSeat(v);
   // Pass and play (and a spectator) see the match from nobody's side: it names the winner.
   const neutral = ui.mode === 'pass' || !isSeat(v, me());
   const won = v.winner === bottom;
-  const head = neutral ? `${v.names[v.winner]} wins` : won ? 'Mission accomplished' : 'Burned';
-  const reeled = v.winBy === 'reel';
   const order = turnOrder(seatCount(v), bottom);
   // The winner first, then everyone else in table order from the bottom seat: "You beat Teal and Cobalt, 11 to 6 and 4."
   const losers = order.filter((s) => s !== v.winner);
   const beat = (who) => `${who} beat ${andList(losers.map((s) => labelLower(s, v)))}${losers.length > 1 ? ',' : ''} ${v.scores[v.winner]} to ${andList(losers.map((s) => String(v.scores[s])))}.`;
-  const sub = reeled
-    ? !neutral && won ? 'You took the full reel.' : `${label(v.winner, v)} took the full reel.`
-    : neutral ? (order.length === 2 ? 'The other spymaster is reassigned to a lighthouse.' : 'The other spymasters are reassigned to a lighthouse.') : beat(label(v.winner, v));
-  // Each side's strips of film, as frames under its score.
-  const reel = (seat) =>
-    v.reel > 0
-      ? `<span class="reel own-${seat}" role="img" aria-label="${v.strips[seat]} of ${v.reel} film strips">${Array.from({ length: v.reel }, (_, i) => `<i class="fr${i < v.strips[seat] ? ' got' : ''}"></i>`).join('')}</span>`
-      : '';
-  const rounds = v.history
-    .map((h, i) => {
-      const who = h.winner === null ? 'nobody' : label(h.winner, v);
-      const how = h.folded !== null ? `${label(h.folded, v)} folded` : h.winner === null ? 'dead heat' : `${h.cityWinners.filter((w) => w === h.winner).length} of 3 cities`;
-      // A round that gave a strip of film: a frame in the taker's colour, beside the film city.
-      const strip = h.strip !== null && h.strip !== undefined && h.film !== null && h.film !== undefined;
-      const frame = (ci) => {
-        if (!strip || ci !== h.film) return '';
-        const said = `${label(h.strip, v)} took a strip of film from ${CITY[h.cities[ci]].name}`;
-        return `<i class="fr got own-${h.strip}" role="img" aria-label="${esc(said)}" title="${esc(said)}"></i>`;
-      };
-      return `<li class="w-${h.winner === null ? 'none' : `${h.winner === bottom ? 'me' : 'them'} own-${h.winner}`}"><span class="n">${i + 1}</span><span class="cities"><span class="op">${esc(operation(v.matchId, i).name)}</span>${h.cities.map((c, ci) => `${esc(CITY[c].name)}${frame(ci)}`).join(', ')}</span><span class="how">${esc(how)}</span><b>${h.winner === null ? '—' : `+${h.points}`} ${esc(who)}</b></li>`;
-    })
-    .join('');
+  // Today's operation says the margin it goes on record with: "You beat Mr Heron by 4."
+  const daily = ui.mode === 'solo' && ui.daily && v.phase === 'match-over' ? ui.daily : null;
+  const sub = daily
+    ? dailySub(dailyResult(v, bottom), daily.rival.name)
+    : v.winBy === 'reel'
+      ? !neutral && won ? 'You took the full reel.' : `${label(v.winner, v)} took the full reel.`
+      : neutral ? (order.length === 2 ? 'The other spymaster is reassigned to a lighthouse.' : 'The other spymasters are reassigned to a lighthouse.') : beat(label(v.winner, v));
+  const focus = neutral && v.winner !== null ? v.winner : bottom;
+  const data = posterData(ui.mode === 'pass' ? { ...v, missed: sharedMissed(v) } : v, focus, { label: (s) => label(s, v), neutral });
+  const date = daily ? `${dayWords(daily.key)} ${daily.key.slice(0, 4)}` : data.date;
+  const last = ui.mode === 'solo' && !ui.free && won && ui.rival?.id === RIVALS[RIVALS.length - 1].id;
+  return {
+    ...data,
+    date,
+    neutral,
+    matchId: v.matchId,
+    labels: allSeats(v).map((s) => label(s, v)),
+    label: daily ? `Today’s operation · ${dayWords(daily.key)}` : `CASE FILE · ${v.names.join(' vs ')} · ${date}`,
+    sub,
+    coda: last ? 'You beat Control. There is nobody left to fool.' : null,
+    highlights: Array.isArray(v.recap) ? data.highlights : null,
+  };
+}
+/** How the poster inks the case file of view `v`: each seat's colour as the screen has it, the art, and __game's breakArt. */
+const posterOpts = (v) => ({ colours: seatColours(v).map((c) => getComputedStyle(document.body).getPropertyValue(`--${c}`).trim()), agentSVG, breakArt: ui.posterBreak });
+/** The case file's stamp lands this far into its first draw (style.css .cf-stamp.land), with the slam. */
+const CASE_STAMP_MS = 600;
+
+function overHTML() {
+  const v = view();
+  const bottom = ui.mode === 'pass' ? 0 : bottomSeat(v);
+  const won = v.winner === bottom;
+  const data = caseFile(v);
+  const daily = ui.mode === 'solo' && ui.daily && v.phase === 'match-over' ? ui.daily : null;
+  // The stamp drops on at the case file's first draw only, not at every redraw (a rival accepting a rematch).
+  const land = ui.caseShown !== v.matchId;
+  ui.caseShown = v.matchId;
   const ri = ui.rival ? RIVALS.findIndex((r) => r.id === ui.rival.id) : -1;
   // The ladder goes on to the next rival; free play doesn't climb it.
   const nextRival = ui.mode === 'solo' && !ui.free && won && ri >= 0 && ri < RIVALS.length - 1 ? RIVALS[ri + 1] : null;
@@ -2950,7 +3290,8 @@ function overHTML() {
   const rivalLeft = online && ui.net?.peer === 'left' && (ui.mode === 'guest' || seatCount(v) === 2);
   // A spectator neither won nor lost, and has no rematch to offer or accept: only the way out.
   const watcher = watching();
-  const rematchBtn = watcher
+  // One attempt a day: the daily offers no rematch.
+  const rematchBtn = watcher || daily
     ? ''
     : rivalLeft
       ? `<p class="wait">${esc(ui.net.leftName || 'Your rival')} left the table.</p>`
@@ -2959,31 +3300,15 @@ function overHTML() {
         : `<button class="slip ${nextRival ? '' : 'primary'}" data-action="rematch">${rivalWants ? 'Accept rematch' : 'Rematch'}</button>`;
   return `<div class="over${watcher ? '' : won || ui.mode === 'pass' ? ' won' : ' lost'}">
     <div class="dossier">
-      <p class="stamp-line">Dossier · ${esc(v.names.join(' vs '))}</p>
-      <h2>${jitter(head, 9)}</h2>
-      <p class="sub">${esc(sub)}</p>
-      ${finalLine(v, order, reel)}
-      <ol class="rounds">${rounds}</ol>
-      ${ui.mode === 'solo' && !ui.free && won && ri === RIVALS.length - 1 ? '<p class="sub">You beat Control. There is nobody left to fool.</p>' : ''}
+      ${caseFileHTML(data, { neutral: data.neutral, agentSVG, jitter, land })}
     </div>
     <div class="actions">
+      <button class="slip save" data-action="save-poster">Save as PNG</button>
       ${nextRival ? `<button class="slip primary" data-action="rival" data-id="${nextRival.id}">Next rival: ${esc(nextRival.name)}</button>` : ''}
       ${rematchBtn}
-      <button class="slip ${watcher ? 'primary' : 'quiet'}" data-action="title">Title screen</button>
+      <button class="slip ${watcher || daily ? 'primary' : 'quiet'}" data-action="title">Title screen</button>
     </div>
   </div>`;
-}
-
-/**
- * The dossier's final score: at two seats "You 11 to 6 Teal", each score over its strips; at more,
- * every seat's name, score and strips in table order (`order`) from the bottom seat.
- */
-function finalLine(v, order, reel) {
-  if (order.length === 2) {
-    const [bottom, other] = order;
-    return `<p class="final"><span>${esc(label(bottom, v))}</span><span class="score-film"><b>${v.scores[bottom]}</b>${reel(bottom)}</span><i>to</i><span class="score-film"><b>${v.scores[other]}</b>${reel(other)}</span><span>${esc(label(other, v))}</span></p>`;
-  }
-  return `<p class="final many">${order.map((s) => `<span class="seat own-${s}${s === v.winner ? ' lead' : ''}"><span class="nm">${esc(label(s, v))}</span><span class="score-film"><b>${v.scores[s]}</b>${reel(s)}</span></span>`).join('')}</p>`;
 }
 
 const HELP_TABS = [
@@ -2997,13 +3322,18 @@ function helpRules() {
   const v = ['play', 'cover', 'over'].includes(ui.screen) ? view() : null;
   const reel = v ? v.reel : RULES.reel;
   const target = v ? v.target : TARGET;
+  // The roster on screen (a daily's holds its two featured agents too), else a match's usual size.
+  const roster = v?.roster?.length ?? ROSTER.size;
+  const daily = !!v && ui.mode === 'solo' && !!ui.daily && roster > DECK.length;
   return [
     'You run a station in the winter of 1963. Each round is an operation: a package passes through three dead drops, and holding two of the three gets it.',
     'Three cities are up for grabs. Each turn, you and your rival secretly drop one agent into a city, then both cards flip together.',
     'After six drops, whoever has the higher total in a city holds it. Hold two of the three to win the round.',
     'Two to four can play. With three or four, the round goes to whoever holds the most cities; a fold puts your stake in the pot and the others play on for it. Your mark (the swatch on your tag) is whose drop counts as ‘your rival’s drop’ for Double Agent and Impostor; marks rotate each round.',
     'Agents have tricks. Flip tricks fire as the card turns over: the player holding the First flip token goes first, and the token passes across every turn. Face-down agents have no tricks, except the Tripwire and the Decoy.',
-    `Every match deals the same roster of ${ROSTER.size} agents to everyone: the Classic ${DECK.length}, or a Mixed draw. The Agents tab lists tonight’s, with every agent’s fine print.`,
+    daily
+      ? `Today’s operation deals the same roster of ${roster} agents to everyone: the Classic ${DECK.length} and the day’s ${counted(roster - DECK.length, 'featured agent')}. The Agents tab lists them, with every agent’s fine print.`
+      : `Every match deals the same roster of ${roster} agents to everyone: the Classic ${DECK.length}, or a Mixed draw. The Agents tab lists tonight’s, with every agent’s fine print.`,
     `Each player has ${counted(RULES.tokens, 'escalation token')} for the whole match. Escalate (once per round, by whoever calls it first) to spend one and double the stake: your rival must fold or play on. You can fold any time; whoever wins the round takes the stake and everything in the pot. If the round reaches the final flip, the stake doubles again.`,
     'A dead heat scores nothing: the stake and the pot roll over into the next round.',
     ...(reel > 0
@@ -3012,6 +3342,7 @@ function helpRules() {
         ]
       : []),
     reel > 0 ? `First to ${target} points, or the full reel, wins the match.` : `First to ${target} points wins the match.`,
+    'Today’s operation is one match a day against a set rival, dealt the same for everyone that day, with two featured agents and a city from the ladder. Your best margin stays on the title.',
   ];
 }
 /** Keys tab: [keys, what they do]. The text reads as one line joined with " · ". */
@@ -3081,7 +3412,8 @@ function helpBodyHTML(tab) {
 
 /**
  * The help sheet: a header with the tabs (an ARIA tablist), one scrolling body (the tabpanel)
- * and a footer. Only the body scrolls, so the sheet's cut corners never cross its text.
+ * and a footer. Only the body scrolls, so the sheet's cut corners never cross its text. Online (a
+ * lobby, a table, its case file) the footer has no Play the briefing: it would leave the room.
  */
 function helpHTML() {
   const tabs = helpTabs();
@@ -3095,9 +3427,12 @@ function helpHTML() {
         .join('')}</div>
     </header>
     <div class="sheet-body" id="help-panel" role="tabpanel" aria-labelledby="help-tab-${tab}" tabindex="0">${helpBodyHTML(tab)}</div>
-    <footer class="btns"><button class="slip primary" data-action="close-modal">Back to the table</button></footer>
+    <footer class="btns">${inRoom() ? '' : '<button class="slip" data-action="briefing">Play the briefing</button>'}<button class="slip primary" data-action="close-modal">Back to the table</button></footer>
   </div></div>`;
 }
+
+/** In a room online, as a host or a guest: its lobby, its table or its case file. */
+const inRoom = () => ui.mode === 'host' || ui.mode === 'guest' || !!ui.net;
 
 /** Open a help tab and keep keyboard focus on it (the re-render replaces the old button). */
 function showHelpTab(id) {
@@ -3135,6 +3470,7 @@ function modalHTML() {
   const v = view();
   if (ui.modal === 'help') return helpHTML();
   if (ui.modal === 'pass') return passSheetHTML();
+  if (ui.modal === 'briefed') return briefedHTML();
   if (!v) return '';
   const R = v.round;
   // The escalation prompt comes before a city dossier or a rival's file (render() closes those for it).
@@ -3169,11 +3505,28 @@ function modalHTML() {
   if (ui.modal === 'quit') {
     return `<div class="modal" data-action="close-modal"><div class="sheet small" role="dialog" aria-label="Leave" data-stop>
       <h2>${jitter('Leave the table?', 4)}</h2>
-      <p>${watching() ? 'You stop watching. The match goes on without you.' : ui.mode === 'host' || ui.mode === 'guest' ? 'The online match ends for both of you.' : 'Your match is saved; you can continue it from the title screen.'}</p>
-      <div class="btns"><button class="slip" data-action="title">Leave</button><button class="slip primary" data-action="close-modal">Stay</button></div>
+      <p>${watching() ? 'You stop watching. The match goes on without you.' : ui.mode === 'host' || ui.mode === 'guest' ? 'The online match ends for both of you.' : ui.tutorial ? 'The briefing stops here. Help has it whenever you want it again.' : 'Your match is saved; you can continue it from the title screen.'}</p>
+      <div class="btns"><button class="slip" data-action="${ui.quitTo === 'briefing' ? 'start-briefing' : 'title'}">${ui.quitTo === 'briefing' ? 'Leave for the briefing' : 'Leave'}</button><button class="slip primary" data-action="close-modal">Stay</button></div>
     </div></div>`;
   }
   return '';
+}
+
+/**
+ * After the briefing's end card: on to the ladder's first rival, or back to the title. With a match saved to continue
+ * (the briefing from Help over one), Continue your match comes first, and Play Agent Wren says it starts a new one
+ * (its save would replace that match's).
+ */
+function briefedHTML() {
+  const wren = esc(RIVALS[0].name);
+  const play = resumable()
+    ? `<button class="slip primary" data-action="continue">Continue your match</button><button class="slip" data-action="rival" data-id="${RIVALS[0].id}"><span>Play ${wren} <span class="whole">(starts a new match)</span></span></button>`
+    : `<button class="slip primary" data-action="rival" data-id="${RIVALS[0].id}">Play ${wren}</button>`;
+  return `<div class="modal"><div class="sheet small briefed" role="dialog" aria-label="Briefed" data-stop>
+      <h2>${jitter('Briefed', 6)}</h2>
+      <p>The rules, every agent and every city are under ? at the top, whenever you need them.</p>
+      <div class="btns">${play}<button class="slip quiet" data-action="title">Title screen<kbd>Esc</kbd></button></div>
+    </div></div>`;
 }
 
 /**
@@ -3499,6 +3852,7 @@ function pick(uid) {
   const v = view();
   if (!v || v.phase !== 'plan' || myPlan(v) || ui.animating) return;
   if (!v.round.legal.some((d) => d.uid === uid)) return;
+  if (!gateLets(v, { uid })) return;
   ui.inspect = null;
   if (ui.selected === uid) clearPick();
   else {
@@ -3517,6 +3871,7 @@ function chooseCity(ci) {
   const v = view();
   if (!v || !ui.selected || myPlan(v) || ui.animating) return;
   if (!v.round.legal.some((d) => d.uid === ui.selected && d.city === ci)) return;
+  if (!gateLets(v, { city: ci })) return;
   // Another city: the partner and the face are asked afresh.
   if (ui.target !== ci) {
     ui.partner = null;
@@ -3560,6 +3915,12 @@ function lockIn() {
   const v = view();
   if (!v || v.phase !== 'plan' || outOfRound(v) || myPlan(v) || !ui.selected || ui.target === null) return;
   if (partnerPrompt(v) && ui.partner === null) return; // a partner, or Drop alone, first
+  // The briefing's escalation turn: the status says to escalate first.
+  if (ui.tutorial && !canLock(v, coachFor(v)?.gate)) {
+    audio.nobody();
+    render();
+    return;
+  }
   const plan = { a: 'lock', uid: ui.selected, city: ui.target };
   const mate = partnerUid(v);
   if (mate) plan.partner = mate;
@@ -3584,11 +3945,15 @@ const DRAG_CLICK_MS = 300;
 let press = null; // { uid, id, x, y, dx, dy }: a pointer down on a playable card, until it lifts
 let dragEndedAt = -Infinity; // performance.now() when the last drag ended
 
-/** A drag may start, or go on: the table is up, nothing covers it, and I still have a drop to make. */
-function canDrag() {
+/**
+ * A drag may start, or go on: the table is up, nothing covers it, and I still have a drop to make (with card `uid`,
+ * when given: one the briefing's gate lets through).
+ */
+function canDrag(uid = null) {
   const v = view();
   if (ui.screen !== 'play' || ui.modal || ui.card || ui.animating || ui.holdBoard || !v || v.phase !== 'plan' || outOfRound(v) || myPlan(v)) return false;
   if (ui.mode === 'pass' && ui.seat === null) return false;
+  if (uid !== null && !gateOk(v, { uid })) return false;
   return v.round.legal.length > 0;
 }
 
@@ -3676,7 +4041,7 @@ document.addEventListener('pointerdown', (ev) => {
   if (ui.drag || !ev.isPrimary || ev.button !== 0) return;
   // A card offered as an Accomplice's partner is tapped, not dragged.
   const card = ev.target.closest?.('.hand .card[data-action=pick]:not([disabled])');
-  if (!card || !canDrag()) return;
+  if (!card || !canDrag(card.dataset.uid)) return;
   const r = card.getBoundingClientRect();
   press = { uid: card.dataset.uid, id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top };
   // A touch is captured by the card it lands on, and picking re-renders that card. Let it go,
@@ -3747,6 +4112,32 @@ function togglePeek() {
   if (panel && !reducedMotion()) panel.animate([{ opacity: 0, translate: ui.peek ? '0 24px' : '0 -12px' }, { opacity: 1, translate: '0 0' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
 }
 
+const GA_HINT_MS = 1500;
+/**
+ * A tap on the one that got away: the result folds down to See the board's strip, and the city the line names
+ * (and at three and four seats your row in it) lights up for GA_HINT_MS.
+ */
+function hintCity(ci) {
+  if (!Number.isInteger(ci) || !view()?.round.cities[ci]) return;
+  const refocus = document.activeElement?.dataset?.action === 'got-away';
+  clearTimeout(ui.gaTimer);
+  ui.gaHint = ci;
+  ui.gaTimer = ui.hintHeld ? 0 : setTimeout(endHint, GA_HINT_MS);
+  if (ui.peek) {
+    audio.place();
+    render();
+  } else togglePeek();
+  if (refocus) $('#screen .result [data-action=peek]')?.focus({ preventScroll: true });
+}
+/** Put the got-away light out (and draw the board without it, unless `draw` is false). */
+function endHint({ draw = true } = {}) {
+  clearTimeout(ui.gaTimer);
+  ui.gaTimer = 0;
+  if (ui.gaHint === null) return;
+  ui.gaHint = null;
+  if (draw && ui.screen === 'play') render();
+}
+
 /**
  * U, or its button: open the unseen strip for `seat` (the rival across the table), or close it.
  * Planning only. At three seats and more a rival's file holds the list instead: U opens the first
@@ -3754,7 +4145,8 @@ function togglePeek() {
  */
 function toggleUnseen(seat = view() ? rivals(view(), bottomSeat())[0] : null) {
   const v = view();
-  if (ui.screen !== 'play' || !v || v.phase !== 'plan' || ui.animating || ui.holdBoard) return;
+  // The briefing has no unseen strip.
+  if (ui.screen !== 'play' || !v || v.phase !== 'plan' || ui.animating || ui.holdBoard || ui.tutorial) return;
   if (seatCount(v) > 2) {
     const list = rivals(v);
     const next = ui.modal === 'tag' ? list[list.indexOf(ui.tagOpen) + 1] : list[0];
@@ -3845,7 +4237,46 @@ const actions = {
     else if (Array.isArray(m.rivals)) startTable({ rivals: m.rivals, resume: m.table });
     else startSolo(m.rival, { free: m.free === true, resume: m.table });
   },
+  // Today's operation: today's save continues it, else it starts. Played already, it waits for tomorrow.
+  daily: () => {
+    dropStaleDaily();
+    const day = today();
+    if (dailyPlayed(meta, day)) return render();
+    const d = saved.get('daily', null);
+    if (d?.day === day && canRestore(d.table)) startDaily({ resume: d.table });
+    else startDaily();
+  },
   host: () => startHost(),
+  // The briefing, from the title or Help's footer. With a solo or pass match on the table, the quit sheet asks first
+  // (that match's save stays); the briefing itself (nothing to lose) starts again at once, and so does a finished
+  // match's case file.
+  briefing: () => {
+    // Online, Help offers no briefing: starting one would leave the room (and close a host's table).
+    if (inRoom()) return;
+    if ((ui.screen === 'play' || ui.screen === 'cover') && table && !ui.tutorial) {
+      ui.modal = 'quit';
+      ui.quitTo = 'briefing';
+      render();
+      return;
+    }
+    audio.place();
+    startTutorial();
+  },
+  'start-briefing': () => startTutorial(),
+  // The briefing's round is over: C's end card, then the way on (the ladder's first rival, or the title).
+  'finish-briefing': async () => {
+    const v = view();
+    if (!ui.tutorial || ui.tutorial.done || !v || v.phase === 'plan') return;
+    ui.tutorial.done = true;
+    meta.briefed = true;
+    saveMeta();
+    audio.place();
+    const id = v.matchId;
+    await briefingCard(v.round.result?.winner === me());
+    if (!ui.tutorial || ui.screen !== 'play' || view()?.matchId !== id) return;
+    ui.modal = 'briefed';
+    render();
+  },
   pass: () => {
     ui.modal = 'pass';
     render();
@@ -3919,6 +4350,7 @@ const actions = {
   },
   quit: () => {
     ui.modal = 'quit';
+    ui.quitTo = null;
     render();
   },
   help: () => {
@@ -3929,6 +4361,7 @@ const actions = {
     ui.modal = null;
     ui.cityOpen = null;
     ui.tagOpen = null;
+    ui.quitTo = null;
     render();
   },
   // A rival's tag opens its file; the city's plate (not a drop target) opens the city dossier.
@@ -3987,11 +4420,14 @@ const actions = {
   escalate: () => {
     const v = view();
     if (!v || v.phase !== 'plan' || !isSeat(v, me()) || outOfRound(v) || v.round.escalated.some(Boolean) || v.round.pending || !(v.tokens[me()] >= 1)) return;
+    // The briefing escalates on the turn that teaches it, and no other.
+    if (ui.tutorial && !coachFor(v)?.gate?.escalate) return;
     act({ a: 'escalate' });
   },
   fold: () => {
     const v = view();
-    if (!v || v.phase !== 'plan' || !isSeat(v, me()) || outOfRound(v)) return;
+    // The briefing has no Fold.
+    if (!v || v.phase !== 'plan' || !isSeat(v, me()) || outOfRound(v) || ui.tutorial) return;
     ui.modal = 'fold';
     render();
   },
@@ -4004,6 +4440,7 @@ const actions = {
     act({ a: 'respond', accept: el.dataset.accept === '1' });
     render();
   },
+  'got-away': (el) => hintCity(Number(el.dataset.city)),
   next: () => {
     // A spectator waits for the players to start the next round.
     if (watching()) return;
@@ -4021,11 +4458,28 @@ const actions = {
     }
     ui.screen = 'over';
     render();
+    // The case file's stamp slams on (at once under reduced motion, where it simply lands).
+    const id = view()?.matchId;
+    setTimeout(() => ui.screen === 'over' && view()?.matchId === id && audio.slam(), reducedMotion() ? 0 : CASE_STAMP_MS);
     flushRecruits();
+  },
+  // The case file as a PNG poster (poster.js). A second press while it's drawing waits for the first.
+  'save-poster': async () => {
+    const v = view();
+    if (ui.posterBusy || ui.screen !== 'over' || !v) return;
+    ui.posterBusy = true;
+    audio.place();
+    $('#screen [data-action=save-poster]')?.setAttribute('aria-busy', 'true');
+    try {
+      if ((await savePoster(caseFile(v), posterOpts(v))) === 'failed') toast('That browser could not make the picture.');
+    } finally {
+      ui.posterBusy = false;
+      $('#screen [data-action=save-poster]')?.removeAttribute('aria-busy');
+    }
   },
   // Every mode: the new match id reaches onUpdate(), which clears the dossier for the table.
   rematch: () => {
-    if (watching()) return;
+    if (watching() || ui.daily) return;
     act({ a: 'rematch' });
     render();
   },
@@ -4070,6 +4524,12 @@ document.addEventListener('click', (ev) => {
   // card off. (A quick tap on a city right after a drop still chooses it.)
   if (performance.now() - dragEndedAt < DRAG_CLICK_MS && ev.target.closest('.card')) return;
   const el = ev.target.closest('[data-action]');
+  // The briefing: a tap on a city its gate shuts (with a card picked) says which city the lesson wants.
+  if (!el && ui.tutorial && ui.selected && !ui.modal) {
+    const city = ev.target.closest('#board .city:not(.target)');
+    if (city) chooseCity(Number(city.dataset.city));
+    return;
+  }
   if (!el || el.disabled) return;
   if (el.dataset.action === 'close-modal' && ev.target.closest('[data-stop]') && ev.target.closest('[data-action]') !== el) return;
   if (el.classList.contains('modal') && ev.target !== el) return;
@@ -4152,6 +4612,8 @@ document.addEventListener('keydown', (ev) => {
     if (k === 'Escape') {
       ev.preventDefault();
       if (['help', 'fold', 'quit', 'pass', 'city', 'tag'].includes(ui.modal)) actions['close-modal']();
+      // After the briefing, Escape is Title screen.
+      if (ui.modal === 'briefed') actions.title();
     }
     // U steps through the rivals' files (and closes the last).
     if (ui.modal === 'tag' && (k === 'u' || k === 'U')) {
@@ -4202,10 +4664,11 @@ document.addEventListener('keydown', (ev) => {
       return;
     }
     if (k === 'Enter') {
-      // On a focused See the board / Back to the result button, Enter presses that button.
-      if (document.activeElement?.dataset?.action === 'peek') return;
+      // On a focused See the board / Back to the result button, or the one that got away, Enter presses that button.
+      if (['peek', 'got-away'].includes(document.activeElement?.dataset?.action)) return;
       ev.preventDefault();
       if (v.phase === 'match-over') actions.final();
+      else if (ui.tutorial) actions['finish-briefing']();
       else actions.next();
     }
     if (k === 'b' || k === 'B') togglePeek();
@@ -4262,6 +4725,8 @@ const clearOld = (key) => {
 {
   const m = saved.get('match', null);
   if (m && !canRestore(m.table)) clearOld('match');
+  // Yesterday's daily save goes quietly: it is no attempt to continue today.
+  dropStaleDaily();
 }
 
 /** A host's save (`host-CODE`) reopens its table for this long; older ones are cleared. */
@@ -4391,10 +4856,58 @@ markReady({
   get view() {
     return ui.view;
   },
+  /** The one that got away in the view on screen (this seat's, for the round just ended), or null. */
+  get gotAway() {
+    return ui.view?.gotAway ?? null;
+  },
+  /** Draw the screen again from ui (a check that edits ui.view, as a stripped view from an older host would arrive). */
+  render: () => render(),
+  /**
+   * The case file's poster for the view on screen: draw() makes it as Save as PNG does (a canvas; nothing downloads),
+   * breakArt(true) makes every silhouette fail to load (false loads them again), busy is Save as PNG at work.
+   */
+  poster: {
+    draw: () => drawPoster(caseFile(view()), posterOpts(view())),
+    breakArt(on = true) {
+      ui.posterBreak = !!on;
+    },
+    get busy() {
+      return ui.posterBusy;
+    },
+  },
+  /** Keep a tap's got-away light on (true) for a steady screenshot, or let it go out as in play (false: after GA_HINT_MS). */
+  holdHint(on = true) {
+    ui.hintHeld = !!on;
+    if (!on && ui.gaHint !== null && !ui.gaTimer) ui.gaTimer = setTimeout(endHint, GA_HINT_MS);
+  },
   meta,
   startSolo: (id = 'wren', opts = {}) => startSolo(id, opts),
+  /** The briefing, through its own path (as the title's slip starts it). */
+  startTutorial: () => startTutorial(),
+  /**
+   * For the smoke: a profile as on a first visit (no matches played, the briefing not finished, nobody beaten, no
+   * daily played), saved; the title, if up, draws it again.
+   */
+  freshProfile() {
+    meta.matches = 0;
+    meta.briefed = false;
+    meta.beaten = [];
+    meta.daily = { results: {}, best: null };
+    saveMeta();
+    if (ui.screen === 'title') render();
+  },
+  /** Today's operation, through the slip's own path: { resume } continues a saved table (the slip passes today's save). */
+  startDaily: (opts = {}) => startDaily(opts),
+  /** Play the daily as day `key` ('YYYY-MM-DD'), or as the clock's day again (null); the title, if up, draws it again. */
+  today(key = null) {
+    ui.today = key;
+    if (ui.screen === 'title') render();
+    return today();
+  },
+  /** The operation for day `key` (today's when left out), as the slip and startDaily read it. */
+  dailyOperation: (key = today()) => dailyOperation(key),
   stage,
-  /** Pass and play for `seats` (2-4) on one device: { seats, setup, timer, resume }. */
+  /** Pass and play for `seats` (2-4) on one device: { seats, setup, timer, resume, seed, cities }. */
   startPass: (opts = {}) => startPass(opts),
   /** Solo at a Table of three or four: { seats, rivals, setup, timer, names, resume } (Task 10 adds its screen). */
   startTable: (opts = {}) => startTable(opts),

@@ -176,12 +176,14 @@ export const canisterHTML = ({ label = true } = {}) =>
  * (`tapFresh`: it has just appeared, so it comes in once). `won` (after a round's flip) is the
  * city's winner, or null for nobody. `neutral` (a spectator, who has no side) colours a won city by its
  * winner's seat (`won-them` with `data-them`), even when the winner is the seat drawn at the bottom.
+ * `hint` (a round's result) marks the city the one that got away names, with class `ga-hint` (main.js lights it
+ * for a moment after a tap on the line); without it the HTML is exactly as before.
  *
  * Two seats: the rival's full row above the plate and yours below. Three and more: a thin lane per
  * rival above the plate (table order after you), their totals as badges along the plate's top edge,
  * and your full row below; a plate that isn't a drop target opens the city dossier (city-sheet).
  */
-export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false, won = undefined, neutral = false } = {}) {
+export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCities = [], tapFresh = false, won = undefined, neutral = false, hint = false } = {}) {
   const city = view.round.cities[ci];
   const def = CITY[city.id];
   const n = seatCount(view);
@@ -200,6 +202,7 @@ export function cityHTML(view, ci, me, { ghost = null, choosing = false, legalCi
   if (target) cls.push('target');
   if (closedNow) cls.push('closed');
   if (leader !== null && leader !== undefined) cls.push(leader === me ? 'lead-me' : 'lead-them');
+  if (hint) cls.push('ga-hint');
   // At three seats and more, "them" is a particular rival: the one who won the city, or else leads it.
   const them = won !== undefined && won !== null && !wonMine ? won : leader !== null && leader !== undefined && leader !== me ? leader : null;
   const themAttr = (many || neutral) && them !== null ? ` data-them="${them}"` : '';

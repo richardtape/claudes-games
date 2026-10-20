@@ -1,0 +1,47 @@
+{
+ "commit": "46299fe",
+ "options": {
+  "matches": 300,
+  "samples": 8,
+  "seats": 2,
+  "roster": "classic",
+  "seed": "dd",
+  "parallel": 4
+ },
+ "seconds": 74,
+ "rounds": 1879,
+ "flipRounds": 1320,
+ "replayedAsPlayed": "1320 of 1320",
+ "roundsWithAFold": 559,
+ "lostSeatRounds": 1273,
+ "eligible": 1273,
+ "found": 1072,
+ "foundOfEligible": "84.2% ±2.0",
+ "foundOfLost": "84.2% ±2.0",
+ "foundByTurn": [
+  60,
+  78,
+  187,
+  174,
+  286,
+  287
+ ],
+ "kinds": {
+  "cityOnly": 399,
+  "cardOnly": 435,
+  "both": 238,
+  "faceOrPartner": 0
+ },
+ "msPerRound": {
+  "mean": 0.85,
+  "p95": 2.17,
+  "max": 3.27
+ },
+ "sentences": [
+  "match 2 (seed dd:2), round 0, seat 1: Turn 2: Handler to Hong Kong instead of Istanbul would have won the round.",
+  "match 3 (seed dd:3), round 0, seat 1: Turn 4: the Handler to Tangier instead of the Jammer would have won the round.",
+  "match 1 (seed dd:1), round 1, seat 1: Turn 1: the Veteran to Istanbul instead of the Impostor to Monaco would have won the round.",
+  "match 0 (seed dd:0), round 1, seat 0: Turn 4: the Getaway to Hong Kong instead of the Tripwire would have won the round.",
+  "match 2 (seed dd:2), round 1, seat 1: Turn 5: the Jammer to Moscow instead of the Getaway would have won the round."
+ ]
+}

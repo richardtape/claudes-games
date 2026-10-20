@@ -105,3 +105,24 @@ test('the First flip coin sits with the first seat still in from the holder (a f
   assert.ok(!coinHTML(v, 1, { label }).includes('first-flip'));
   assert.ok(coinHTML(v, 2, { label }).includes('aria-label="First flip: Cobalt"'));
 });
+
+test('the one that got away: a hinted city adds ga-hint to its section, and without the hint its HTML is unchanged (two and four seats)', () => {
+  for (const seats of [2, 4]) {
+    const s = E.newMatch({ seed: 5, seats, cities: ['monaco', 'berlin', 'istanbul'] });
+    // Two turns of first legal drops, so the rows hold chips.
+    for (let t = 0; t < 2; t++) {
+      for (let seat = 0; seat < seats; seat++) assert.ok(E.lock(s, seat, E.legalDrops(s, seat)[0]));
+      E.resolveTurn(s);
+    }
+    const v = E.viewFor(s, 0);
+    for (let ci = 0; ci < 3; ci++) {
+      for (const opts of [{}, { won: 1 }, { won: null, neutral: true }]) {
+        const plain = cityHTML(v, ci, 0, opts);
+        assert.equal(cityHTML(v, ci, 0, { ...opts, hint: false }), plain, `${seats} seats, city ${ci}: hint false is byte-identical`);
+        const hinted = cityHTML(v, ci, 0, { ...opts, hint: true });
+        assert.match(hinted, /^<section class="city [^"]*\bga-hint\b/, `${seats} seats, city ${ci}: the section carries ga-hint`);
+        assert.equal(hinted.replace(' ga-hint', ''), plain, `${seats} seats, city ${ci}: nothing else changes`);
+      }
+    }
+  }
+});

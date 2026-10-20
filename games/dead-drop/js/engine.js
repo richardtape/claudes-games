@@ -114,7 +114,8 @@ function mintUid(state, seat) {
  * ladder matches. `feature` (ids from the pool) makes round 1 deal one of them. `twist` is a ladder rival's
  * twist ({ ...TWISTS[id], seat }) or null. `cities` deals those three ids in round 1 instead (tests, the sim).
  */
-export function newMatch({ seed = null, seats = 2, target = targetFor(seats), cities = null, film = null, roster = DECK, pool = CLASSIC_CITIES, feature = null, twist = null } = {}) {
+export function newMatch({ seed = null, seats = 2, target = targetFor(seats), cities = null, film = null, roster = DECK, pool = CLASSIC_CITIES, feature = null, twist = null, fixedDeals = false } = {}) {
+  if (fixedDeals && seed === null) throw new RangeError('fixed deals need a seed');
   if (!Number.isInteger(seats) || seats < MIN_SEATS || seats > MAX_SEATS) throw new RangeError(`seats must be ${MIN_SEATS} to ${MAX_SEATS}, got ${seats}`);
   if (film !== null && !(Number.isInteger(film) && film >= 0 && film <= 2)) throw new RangeError(`film must be null or 0 to 2, got ${film}`);
   if (!roster.length || !roster.every((id) => AGENT[id])) throw new RangeError(`unknown agent in roster: ${roster}`);
@@ -141,6 +142,8 @@ export function newMatch({ seed = null, seats = 2, target = targetFor(seats), ci
     cityPool: pool.slice(),
     twist: twist ? { ...twist } : null,
   };
+  // The daily: every round reseeds from the seed and its number (see startRound). Last, and absent otherwise.
+  if (fixedDeals) state.fixedDeals = true;
   startRound(state, { cities, film, feature });
   return state;
 }
@@ -183,6 +186,7 @@ export function upgradeState(state) {
  * match's twist, if any (setUpTwist).
  */
 export function startRound(state, { cities = null, film = null, feature = null } = {}) {
+  if (state.fixedDeals) state.rng = hashString(`${state.seed}:round:${state.roundNo}`);
   const no = state.roundNo;
   const n = seatCount(state);
   // A Classic pool is CITIES' first 11 in 2b-i's order, so this shuffle draws exactly as 2b-i's did.

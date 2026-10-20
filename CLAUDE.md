@@ -419,6 +419,11 @@ document it here rather than burying it in the game.
 - A measured round at three seats with quick human-paced play and one stand-in took 158 s
   (ROUND_MINUTES[3] assumes 165 s), so the minutes-a-match estimates in the SIMLOG hold.
 
+- A hindsight line's hit rate depends on the table size more than on skill: Dead Drop's single-change
+  got-away (`tools/gotaway.mjs`, B46) exists after 84% of lost flip rounds at two seats, 62% at three
+  and 50% at four (fewer turns are yours to change, and a fold blocks the line), at 12 ms p95 a round
+  at four seats.
+
 ## Deploying
 
 The repo is `richardtape/claudes-games` (GitHub Pages from `main`, root). `scripts/deploy.mjs`
@@ -681,11 +686,49 @@ and new files.
   that reached the host after its turn resolved became the next turn's drop. Stamp actions with
   the round and turn they were made for and drop stale ones at the table (`table.act`).
 
+- A replay must log every action that changes what a later one may do, not only the moves. Dead Drop's
+  first "one that got away" design replayed drops alone, but a Blackmailer's call blocks the next turn
+  until it is answered, and an escalation decides whether a later Blackmailer escalates at all. The
+  round record (`js/replay.js`) keeps each turn's escalations, answers and folds in order, then the
+  drops; replaying it matched every flip round (3,768 of 3,768). Prototype a replay against the real
+  engine before planning around it: a scratch driver measured fidelity, hit rate and cost in minutes.
+- Start a per-round record lazily, at the round's first action, and tie it to the state object it
+  began on (a `WeakMap`): Dead Drop's debug `stage()` and the rematch put new states on the table
+  without going through `act`, so a snapshot taken when the table was built went stale.
+- A hindsight feature that replays with one change must skip, never throw, when the change breaks a
+  later action, and guard the whole computation (`lineFor` wraps each seat's line in a try/catch): a
+  hand-edited or older save with a malformed record otherwise threw at the round's end, after the
+  engine had ended the round, and froze that save on every reload.
+- Public per-round summaries leak in quiet ways. Dead Drop's recap first carried every seat's
+  got-away (which can name a card in hand) and a fold-ended round's face-down cards (the bluff the
+  folder never saw). Keep private lines in their seat's own view, mask anything still face down,
+  and send a summary only when its one reader needs it (the case file, at match-over).
+- A daily seeded "the same for everyone" must reseed every round, not only the match: one random
+  draw during play (a Getaway's re-key) moved every later deal. And independent daily draws clump
+  (the Turncoat was featured five days running): walk the schedule from an epoch, each day leaving
+  out the day before's (`dailyOperation` in Dead Drop's `js/daily.js`).
+- Give a daily its own save slot: Dead Drop's `finishMatch` cleared the one `match` save for every
+  solo match, so a finished daily would have deleted a saved ladder match.
+- A scripted tutorial is data plus gates, tested by playing its own suggestions and pinning every
+  promise ("the Assassin takes out the Veteran", 5 to 0). Walk the script through the real engine
+  before writing copy: the planned turn-5 tip (a Handler in Istanbul) would have been jammed by the
+  rival's Jammer there. Gate every turn whose later coach lines state facts, or the lines lie as soon
+  as a newcomer plays off script.
+- Name classes for what they are across features: Dead Drop's lobby guide was planned as `.briefing`,
+  which the scripted briefing already used on the play screen and its title slip.
+- Offer nothing from Help that leaves a room without the quit sheet: "Play the briefing" from a guest
+  lobby left the room silently and stripped `#join=CODE`, so a reload couldn't rejoin.
+- A smoke file past a few thousand lines can grow in a sibling module without circular imports: Dead
+  Drop's `smoke-return.mjs` exports `returnLoop(page, ctx, h)` and the default smoke passes its helpers
+  in `h` (`until`, `idle`, `settle`, `phoneFits`…), so `check.mjs`'s cache-busted import of `smoke.mjs`
+  never loads a second copy. A "wiring only" rule for a 4,500-line `main.js` still let it grow by 500
+  lines in one phase: split the screens out before the next feature, not after.
+
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
 |---|---|---|---|---|---|
 | 1 | press-run | word | Word roguelite (Balatro-style Ink × Pressure scoring, shop, bosses) | Letterpress: walnut, maple wood type, gunmetal dingbats, CMY process colours; Alfa Slab One + Libre Caslon | Rich: "SUPER fun". Pure engine + run simulator; daily seeded run; "the one that got away"; broadside poster at the end |
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
-| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live. Part B (2026-10-20): the turn timer (Off, 30 s, Blitz) on the host's clock with a fuse across the hand and auto-Next; six emotes as paper slips; four tags at 320px, bottom sheets, night at four seats; spectators neutral |
+| 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live. Part B (2026-10-20): the turn timer (Off, 30 s, Blitz) on the host's clock with a fuse across the hand and auto-Next; six emotes as paper slips; four tags at 320px, bottom sheets, night at four seats; spectators neutral. Phase 4 (2026-10-20): the return loop: today's operation (one match a day dealt the same for everyone,  Classic plus two featured agents and a city, its own save, the best margin on the title); "the one that  got away" after a lost round, private to its seat, at two to four seats (an action-log replay, B46); the  case file as a manila folder with evidence slips and a PNG poster; a scripted briefing against Agent Wren  with C's coach; four illustrated lines for a friend in the lobby |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |

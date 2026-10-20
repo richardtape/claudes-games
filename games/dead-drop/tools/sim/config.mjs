@@ -1,6 +1,7 @@
 // Simulation configuration: who plays, with which seed, under which data patches, dealing which agents and cities.
 import { AGENT, BLACKMAILER_COPY, CITY, RIVALS, RULES, STAKES, TWISTS, samplesFor, targetFor } from '../../js/data.js';
 import { CLASSIC_SETUP, MIXED_ALL, ladderSetup } from '../../js/roster.js';
+import { dailyOperation } from '../../js/daily.js';
 import { hashString } from '../../../../shared/rng.js';
 
 /** 4: rosters, ladder setups and twists (Phase 2b-ii). */
@@ -32,7 +33,11 @@ function checkForce(force) {
   for (const id of force) if (!AGENT[id]) throw new Error(`unknown agent: ${id}`);
   return force;
 }
+const DAILY = /^daily:(\d{4}-\d{2}-\d{2})$/;
+/** The date of a 'daily:YYYY-MM-DD' setup, else null. */
+const dailyDate = (setup) => (typeof setup === 'string' ? DAILY.exec(setup)?.[1] ?? null : null);
 function checkSetup(setup) {
+  if (dailyDate(setup)) return setup;
   if (setup !== null && !RIVALS.some((r) => r.id === setup)) throw new Error(`unknown rival setup: ${setup}`);
   return setup;
 }
@@ -47,10 +52,14 @@ function checkTwist(twist) {
  * rival's ladder setup (its pool, featured cities and twist, held by bot B) instead of `roster`. `twist`: 'off'
  * plays a setup without its twist.
  */
-export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'heron', c = 'heron', d = 'heron', seats = 2, samples = null, target = null, pin = [], set = {}, roster = 'classic', force = [], setup = null, twist = 'on' } = {}) {
+export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = null, c = 'heron', d = 'heron', seats = 2, samples = null, target = null, pin = [], set = {}, roster = 'classic', force = [], setup = null, twist = 'on' } = {}) {
   if (!Number.isInteger(Number(seats)) || Number(seats) < 2 || Number(seats) > 4) throw new Error('seats must be 2 to 4');
   const s = samples === null ? null : Number(samples);
-  const bots = [a, b, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s, Number(seats)));
+  checkSetup(setup ?? null);
+  // Played as a daily, bot B is the day's rival (at its own samples) unless `b` was given.
+  const day = dailyDate(setup);
+  const bId = b ?? (day ? dailyOperation(day).rival.id : 'heron');
+  const bots = [a, bId, c, d].slice(0, Number(seats)).map((id) => rivalBot(id, s, Number(seats)));
   return {
     name, seed: String(seed), samples: s, target: Number(target ?? targetFor(Number(seats))), targetGiven: target !== null, pin: checkPin([...pin]), set: { ...set }, bots,
     roster: checkRoster(roster), force: checkForce([...force]), setup: checkSetup(setup ?? null), twist: checkTwist(twist),
@@ -63,6 +72,7 @@ export function resolveConfig({ name = 'base', seed = 'dd', a = 'heron', b = 'he
  * a twist setting (`control.count`) reaches the setup.
  */
 export function setupOf(config) {
+  if (dailyDate(config.setup)) return dailyOperation(dailyDate(config.setup)).setup;
   if (config.setup) {
     const s = ladderSetup(config.setup);
     return config.force.length ? { ...s, must: [...new Set([...s.must, ...config.force])] } : s;

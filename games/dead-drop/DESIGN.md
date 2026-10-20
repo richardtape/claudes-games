@@ -17,6 +17,10 @@ Since Phase 3, two to four can play: online, each on their own phone, with compu
 seats and a stand-in for a dropped line; solo at a Table against two or three rivals; or pass and
 play on one device (The table for three and four).
 
+Since Phase 4 there are reasons to come back every day: today's operation, dealt the same for
+everyone; "the one that got away" after a lost round; a case file to save at the end; and a scripted
+briefing for newcomers (The return loop).
+
 ## The three loops
 
 - **The moment (seconds):** pick an agent, pick a city, lock in. Both cards fly in face down
@@ -28,7 +32,9 @@ play on one device (The table for three and four).
   bluffer), each with a dossier, an announced rule twist and a pack of new agents and cities.
   Beating one recruits its pack into your network ("Network: 14 of 20 agents · 13 of 20 cities"),
   the network opens free play on Mixed rosters, and beating Control reveals who signed the cables.
-  Rematches with a friend.
+  Today's operation: one match a day against the day's rival, dealt the same for everyone, with your
+  best margin on the title. After a lost round, the one that got away shows the drop that would have
+  won it; at the end, a case file worth saving. Rematches with a friend.
 
 ## Rules
 
@@ -871,6 +877,97 @@ own path, and `__game.holdClock(on)` holds it. None of them touch the real trans
   reduced motion counts the seconds; Continue keeps the timer; and pass and play's fuse burns only once a
   hand is uncovered, with Next for the table.
 
+## The return loop (Phase 4)
+
+Four reasons to come back, built on the table without changing the rules: a daily operation, "the one
+that got away", the case file, and a briefing for newcomers (plus four lines for a friend in the lobby).
+The engine gained one optional key (`fixedDeals`); everything else lives on the table (`js/session.js`)
+and in new pure modules (`js/replay.js`, `js/daily.js`, `js/casefile.js`, `js/tutorial.js`), with the
+screens' HTML in `js/loop-ui.js` and the poster in `js/poster.js`. PROTOCOL stays 5: views only gained
+fields, and a Phase 3 browser on either end ignores or defaults them.
+
+### Today's operation
+
+- **One match a day, the same for everyone.** `dailyOperation(key)` draws, from `daily:YYYY-MM-DD`, the
+  day's rival (any of the five, its bot settings, no twist), two featured agents from the eight new ones
+  and one featured city from the nine. The roster is Classic plus the two (a 14-card deck), the pool
+  Classic plus the city, featured in round 1. No featured agent or city repeats on consecutive days: the
+  draw walks from `DAILY_EPOCH` (2026-10-01), each day leaving out the day before's (independent draws
+  had featured the Turncoat five days running).
+- **Fixed deals.** A daily match sets `state.fixedDeals`, and `startRound` reseeds the deal from
+  `${seed}:round:${n}` each round. A Getaway's re-key is the only random draw during play, so without
+  the reseed two players' later rounds would differ. The rival's bot is seeded from the day too.
+- **One attempt.** The title's slip starts it ("Operation {name} · {rival}'s day · {date}"), continues it
+  ("Continue today's operation"), or shows the result once played ("won by 4", "lost by the reel") with
+  "Tomorrow brings another." The daily has its own save slot (`daily`), so it never touches a saved
+  ladder match; a daily save from another day is dropped without a toast. It plays as free play: no
+  dossier, no recruits, no Next rival, no Rematch, and the shelf's best stays the ladder's. The roster
+  card says what's featured: "They're a taste of the ladder: playing them recruits nobody."
+- **The record.** `meta.daily` keeps the last 60 results and the best margin, shown on the title ("Best
+  daily: +7 (21 October, against Mr Heron)").
+
+### The one that got away
+
+- **What it is.** After a round you lost at the flip, one line on the result: "Turn 6: Heavy to Berlin
+  instead of Moscow would have won the round." It is the single change to one of your drops (another
+  card, another city, or both) that would have won, with everyone else's drops as they were. A tap
+  lights the city on the board. It is a telegram slip inside the result, never a modal, and never
+  between you and Next round.
+- **How.** The table logs each round as it is played: a deep copy of the round's start, then per turn the
+  escalations, answers and folds in order and every seat's drop (`replay.js`). The log starts lazily at
+  a round's first action, because debug helpers and the rematch put new states on the table without a
+  hook. Replaying the log reproduces the round exactly; each alternative replays it with one drop
+  changed, and wherever your later drops used the alternative's card, the card you really played stands
+  in (the swap rule). An alternative under which any later action is refused is skipped, never thrown.
+  Ranking: the latest turn first, then the same card to another city, then another card to the same
+  city, then both, then the most cities held.
+- **Privacy.** A line can name a card from your hand, which your rivals never saw, so it goes only in
+  your own view (`gotAway`, and the match's list `missed` at the end). There is no line in a round where
+  anyone folded: a folded player's face-down agents leave the board unrevealed, and a line computed
+  over them could hint at them. Pass and play shows it on the shared screen only at two seats and only
+  when the card and its partner are unchanged; at three and four seats it shows none.
+- **Numbers** (SIMLOG B46, Heron bots): found after 84% of lost flip rounds at two seats, 62% at three,
+  50% at four; every flip round replayed exactly (3,768 of 3,768); p95 12 ms a round at four seats.
+
+### The case file
+
+- The end screen is a manila folder: a typed label ("CASE FILE · Agent Badger vs Agent Wren · 20 October
+  2026"), a red CLOSED or BURNED stamp, the score in cut type over its film frames (every seat at three
+  and four), a round strip of operation names in the winners' colours with a pin on rounds that got
+  away, and evidence slips: the best takedown, escalations won ("You never went loud."), the agent of
+  the match (cities held), the biggest round. Save as PNG draws a 1200 × 1600 poster of the same thing.
+- **The recap.** At each round's end the table keeps a public recap (`casefile.js`): the winner, points,
+  stake, escalations, city winners, the take-outs with who did them, and the board. A card still face
+  down after a fold is recorded without its kind (the bluff the folder never saw stays secret). Views
+  carry the recap only at match-over. A take-out is credited to the seat that dropped the agent (its
+  drop event), so neither a Glienicke crossing nor a Getaway's re-key moves the credit.
+- A pass-and-play or spectator screen is neutral: the winner's name in the heading and the winner's
+  highlights.
+
+### The briefing
+
+- **A scripted first round against Agent Wren** (`tutorial.js`), offered on the title until you've played
+  a match ("New here? Take the briefing") and always from Help. Classic, Istanbul, Monaco and Berlin,
+  set decks, no Microfilm, never timed. C's coach slip above the hand gives one idea a turn: the drop
+  (the Heavy to Istanbul), the flip trick (the Assassin takes out Wren's Veteran in Monaco), the
+  face-down card (the Sleeper in Berlin), escalate (then the Mole to Berlin), read the board (the
+  Jammer shores up Monaco), the final flip (the Veteran retakes Monaco 7 to 6). The suggested card
+  lifts and the city glows; turns 1 to 5 refuse anything else and say why; turn 6 is free. The
+  suggested line sweeps the three cities, 5 to 0. Wren is a scripted rival (`attachScript`) that plays
+  on when called and never escalates or folds.
+- Nothing is saved, counted or recorded; finishing sets `meta.briefed` and offers Agent Wren on the
+  ladder, or "Continue your match" first when one is saved (Help can start the briefing mid-match,
+  through the quit sheet). Every turn fits a 320 × 640 phone: below 360px the coach carries C's latest line and the
+  ticker steps aside while you plan.
+
+### The lobby's four lines
+
+- A friend waiting in a guest lobby (or still connecting) sees "How a turn works": four paper slips, each
+  with a small cut-paper drawing (`briefSVG` in `js/art.js`): the secret drop, the flip with a trick's
+  spark, holding two of three cities, and the stake slip with its ×2. The host's lobby doesn't show it,
+  and Help offers no briefing while you're in a room (it would leave the room).
+
+
 ## Ways to play
 
 - **Computer:** a ladder of five rival services (Monte Carlo bots with personalities, packs and
@@ -885,6 +982,9 @@ own path, and `__game.holdClock(on)` holds it. None of them touch the real trans
   Every match carries an id, so Rematch brings everyone back to a fresh table and the matches-played
   count takes each match once, however often a player reloads. Leaving says goodbye: the others see
   "Agent X left the table". The host picks the roster in the lobby (Classic by default).
+- **Today's operation:** one match a day from the title, the same deal for everyone (The return loop).
+- **The briefing:** a scripted first round against Agent Wren, offered until you've played a match and
+  always from Help.
 - **Pass and play:** one device for two to four; a sheet picks the players, Classic or Mixed and the
   timer, and a cover screen hides each player's choice (a wiretapped mark plays before its
   wiretapper).

@@ -98,7 +98,7 @@ function buildConfigs(o) {
       }
     return list;
   }
-  const base = withSets(resolveConfig({ ...common, name: 'base', a: o.a ?? 'heron', b: o.b ?? 'heron', c: o.c ?? 'heron', d: o.d ?? 'heron', seats: o.seats ?? 2 }));
+  const base = withSets(resolveConfig({ ...common, name: 'base', a: o.a ?? 'heron', b: o.b, c: o.c ?? 'heron', d: o.d ?? 'heron', seats: o.seats ?? 2 }));
   list.push(base);
   const variants = new Map();
   for (const v of o.variant) {

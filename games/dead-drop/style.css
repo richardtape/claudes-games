@@ -512,6 +512,84 @@ body[data-screen='title'] .mark {
   font-weight: 400;
   color: var(--mustard);
 }
+/* Today's operation: a telegram on the title, typed on paper, the day's date stamped in red at its right end.
+   It wraps to two or three lines, so its cut is in px. Played, it stays at full strength (a record, not an
+   unavailable button) with a check stamped where the date was. */
+.menu .slip.daily {
+  position: relative;
+  display: grid;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 5px;
+  padding: 12px 84px 11px 18px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  clip-path: var(--cut-2-px);
+}
+.slip.daily > span {
+  font: 26px/1 var(--display);
+  letter-spacing: 0.03em;
+}
+.slip.daily small {
+  font: 700 12.5px/1.35 var(--type);
+  letter-spacing: 0;
+}
+.slip.daily .daily-stamp {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  translate: 0 -50%;
+  padding: 5px 7px 2px;
+  border: 2px solid var(--red);
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--red);
+  color: var(--red);
+  font: 21px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  rotate: -8deg;
+}
+.menu .slip.daily:focus-visible {
+  clip-path: none;
+}
+.slip.daily:disabled {
+  opacity: 1;
+}
+.slip.daily:disabled .daily-stamp {
+  padding: 3px 10px 1px;
+  font: 700 26px/1 'Apple Symbols', 'Segoe UI Symbol', 'Noto Sans Symbols 2', 'DejaVu Sans', sans-serif;
+  rotate: -12deg;
+}
+/* The best daily: a typed paper tab under the network's ink one, the margin in red. */
+.daily-best {
+  width: fit-content;
+  margin: -6px 0 0;
+  padding: 6px 12px 5px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  clip-path: var(--cut);
+}
+.daily-best b {
+  font: 20px/1 var(--display);
+  font-weight: 400;
+  color: var(--red);
+}
+/* The title comes in: the day's stamp lands on its slip, and the best daily's tab slides out from under the network's. */
+.intro .slip.daily .daily-stamp {
+  animation: stamp 0.4s cubic-bezier(0.3, 0, 0.35, 1.3) 0.55s both;
+}
+.intro .daily-best {
+  animation: tab-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) 0.7s both;
+}
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    translate: 0 -12px;
+  }
+}
 
 /* ── rivals, lobby, cover ───────────────────────────────────────────────── */
 .rivals-screen,
@@ -923,6 +1001,100 @@ body[data-screen='title'] .mark {
   margin: 0;
   font: 24px/1 var(--display);
   letter-spacing: 0.03em;
+}
+/* How a turn works, for a friend waiting in the lobby: four paper slips laid on the table two by two (one column on a
+   narrow phone), each with its cut-paper picture (80px, ink with the red accent) beside its typed line and its step
+   number stamped in red. The lobby is always by day. The slips drop in once, on the join's first render (.enter). */
+.turn-guide {
+  margin-top: 6px;
+}
+.turn-guide h3 {
+  margin: 0 0 10px;
+  font: 26px/1 var(--display);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.turn-guide ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  counter-reset: turn-step;
+}
+.turn-guide li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 14px 14px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  clip-path: var(--cut-2);
+  counter-increment: turn-step;
+  rotate: -0.4deg;
+}
+.turn-guide li:nth-child(2n) {
+  clip-path: var(--cut);
+  rotate: 0.5deg;
+}
+.turn-guide li::before {
+  content: counter(turn-step);
+  position: absolute;
+  top: 5px;
+  left: 9px;
+  color: var(--red);
+  font: 17px/1 var(--display);
+}
+.turn-guide .art {
+  display: block;
+  width: 80px;
+  aspect-ratio: 160 / 100;
+  color: var(--ink);
+}
+.turn-guide .art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.turn-guide .art .ac {
+  fill: var(--red);
+}
+.turn-guide p {
+  margin: 0;
+  font: 13px/1.4 var(--type);
+}
+.turn-guide.enter li {
+  animation: guide-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.turn-guide.enter li:nth-child(2) {
+  animation-delay: 0.08s;
+}
+.turn-guide.enter li:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.turn-guide.enter li:nth-child(4) {
+  animation-delay: 0.24s;
+}
+@keyframes guide-in {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+@media (max-width: 479px) {
+  .turn-guide ol {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+}
+/* Under reduced motion the slips are simply there. */
+@media (prefers-reduced-motion: reduce) {
+  .turn-guide.enter li {
+    animation: none;
+  }
 }
 /* The Table tab: your seat and a slip per rival seat, each rival chosen from the open rungs. */
 .table-pick {
@@ -2368,6 +2540,425 @@ body[data-screen='title'] .mark {
   padding: 8px 14px 6px;
 }
 
+/* The one that got away: a telegram pasted into a lost round's result. An ink form, the line typed on paper
+   tape (one strip per line, as a wire office pasted them), and the red stamp on a paper label hanging over its
+   top edge. The reticle at its right end says a tap shows where: it lights the city on the board. */
+.result .lines:has(.got-away) {
+  justify-self: stretch;
+}
+.result .lines p:has(> .got-away) {
+  margin: 16px 0 10px;
+}
+.got-away {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 20px 46px 11px 14px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: 700 14px/1.95 var(--type);
+  text-align: left;
+  cursor: pointer;
+  rotate: -0.6deg;
+  transition: translate 0.12s ease;
+}
+/* The form: ink with the game's cut edges, drawn behind so the stamp can hang over it unclipped. */
+.got-away::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--ink);
+  clip-path: var(--cut-px);
+}
+/* The reticle: a mustard ring and cross, the table's own colour, at the form's right end. */
+.got-away::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+  background: radial-gradient(circle, transparent 0 6px, var(--mustard) 6px 8.5px, transparent 9px), linear-gradient(var(--mustard), var(--mustard)) center / 2px 100% no-repeat,
+    linear-gradient(var(--mustard), var(--mustard)) center / 100% 2px no-repeat;
+}
+.got-away > span {
+  padding: 3px 7px 2px;
+  background: var(--paper);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.got-away .ga-stamp {
+  position: absolute;
+  top: -12px;
+  left: 10px;
+  padding: 4px 7px 1px;
+  background: var(--paper);
+  color: var(--red);
+  font: 19px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 2px solid var(--red);
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--red), 0 2px 0 rgb(0 0 0 / 0.3);
+  rotate: -4deg;
+}
+/* It is stamped on once, as the result comes in (the x2 stamp's landing, a beat later). */
+.result.enter .got-away .ga-stamp {
+  animation: stamp 0.4s cubic-bezier(0.3, 0, 0.35, 1.3) 0.32s both;
+}
+/* Hover only where there is a pointer to hover with (a tap leaves a touch screen's hover stuck on). */
+@media (hover: hover) {
+  .got-away:hover {
+    translate: 0 -2px;
+  }
+  .got-away:hover::after {
+    background: radial-gradient(circle, transparent 0 6px, var(--paper) 6px 8.5px, transparent 9px), linear-gradient(var(--paper), var(--paper)) center / 2px 100% no-repeat,
+      linear-gradient(var(--paper), var(--paper)) center / 100% 2px no-repeat;
+  }
+}
+.got-away:active {
+  translate: 0 1px;
+}
+.got-away:focus-visible {
+  outline: 3px solid var(--line);
+  outline-offset: 3px;
+}
+/* The city it names, lit for a moment after the tap: a ring and a glow inside the plate, pulsing in colour
+   (mustard to paper) and never in size; at three and four seats your own row in it too. */
+.city.ga-hint .plate {
+  box-shadow: inset 0 0 0 6px var(--mustard), inset 0 0 36px 6px rgb(224 160 48 / 0.85);
+  animation: ga-glow 0.45s ease-in-out infinite alternate;
+}
+@keyframes ga-glow {
+  to {
+    box-shadow: inset 0 0 0 6px var(--paper), inset 0 0 36px 6px rgb(240 226 196 / 0.7);
+  }
+}
+.play.many .city.ga-hint > .row:not(.lane) {
+  outline: 3px dashed var(--line);
+  outline-offset: 2px;
+  animation: ga-row 0.45s ease-in-out infinite alternate;
+}
+@keyframes ga-row {
+  to {
+    outline-color: var(--red);
+  }
+}
+@media (max-width: 760px) {
+  .got-away {
+    padding: 19px 42px 10px 12px;
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .got-away::after {
+    right: 11px;
+  }
+  .got-away .ga-stamp {
+    font-size: 18px;
+  }
+}
+/* Under reduced motion the stamps are simply there (the got-away's, and the case file's without the drop or the
+   folder's thud), and the lit city keeps a steady ring (and your row a steady
+   outline), with no pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .cf-stamp.land,
+  .case-file:has(.cf-stamp.land),
+  .result.enter .got-away .ga-stamp,
+  .city.ga-hint .plate,
+  .play.many .city.ga-hint > .row:not(.lane) {
+    animation: none !important;
+  }
+  .got-away,
+  .got-away:hover,
+  .got-away:active {
+    translate: none;
+  }
+}
+
+/* ── the briefing: a scripted first round against Agent Wren ─────────────── */
+/* C's coach slip, pinned above the hand while you plan: a torn-off length of teleprinter paper, its top edge
+   perforated where it came off the roll, the lesson stamped in red over that edge and C's words typed on it. The
+   paper is drawn behind (::before) so the stamp can hang over its edge unclipped. */
+.coach {
+  position: relative;
+  isolation: isolate;
+  align-self: center;
+  width: min(100%, 720px);
+  margin: 6px 0 0;
+  padding: 15px 18px 7px 16px;
+  color: var(--ink);
+  font: 700 13px/1.42 var(--type);
+  text-align: left;
+  rotate: -0.4deg;
+}
+.coach::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--paper);
+  /* The perforation: the top 3px of the slip punched through, a hole every 9px. */
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px) top / 100% 3px no-repeat, linear-gradient(#000 0 0) bottom / 100% calc(100% - 3px) no-repeat;
+  mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px) top / 100% 3px no-repeat, linear-gradient(#000 0 0) bottom / 100% calc(100% - 3px) no-repeat;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 3px) 100%, 6px calc(100% - 2px));
+}
+.coach p {
+  margin: 0;
+}
+/* C's last word above the lesson: only on the narrowest phones (below), where it stands in for the ticker. */
+.coach .note {
+  display: none;
+}
+/* The lesson, a red rubber stamp hanging over the perforation (the one that got away's, in C's hand). */
+.coach .lesson {
+  position: absolute;
+  top: -12px;
+  left: 10px;
+  padding: 4px 7px 1px;
+  background: var(--paper);
+  color: var(--red);
+  font: 17px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 2px solid var(--red);
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--red), 0 2px 0 rgb(0 0 0 / 0.3);
+  /* Tilted from its left end, so that end never drops onto the first line. */
+  transform-origin: 0 50%;
+  rotate: -3deg;
+}
+/* A new lesson: its stamp lands as the words begin to type (markCoach times it from the lesson's start, so a redraw
+   mid-way carries on rather than stamping again). */
+.coach.fresh .lesson {
+  animation: stamp 0.4s cubic-bezier(0.3, 0, 0.35, 1.3) var(--since, 0ms) both;
+}
+/* The suggestion: the card lifts with a red Try this flag on its corner, and the city's plate glows (colour only,
+   mustard to paper, as the one that got away lights a city). Both go once a card is picked. */
+.hand .card.suggest {
+  translate: 0 -6px;
+}
+.card .try {
+  position: absolute;
+  top: -10px;
+  right: -6px;
+  padding: 3px 6px 1px;
+  background: var(--red);
+  color: var(--paper);
+  font: 14px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  clip-path: var(--cut);
+  rotate: 6deg;
+  pointer-events: none;
+}
+.city.suggest .plate {
+  box-shadow: inset 0 0 0 4px var(--mustard), inset 0 0 32px 4px rgb(224 160 48 / 0.7);
+  animation: suggest-glow 0.9s ease-in-out infinite alternate;
+}
+@keyframes suggest-glow {
+  to {
+    box-shadow: inset 0 0 0 4px var(--paper), inset 0 0 32px 4px rgb(240 226 196 / 0.5);
+  }
+}
+/* Cards the lesson's gate holds back this turn: dimmed as a disabled card is, but a tap still says why. */
+.hand .card.gated {
+  cursor: default;
+  filter: saturate(0.6);
+  opacity: 0.6;
+}
+.hand .card.gated:nth-child(odd):hover {
+  transform: rotate(-1deg);
+}
+.hand .card.gated:nth-child(even):hover {
+  transform: rotate(1.2deg);
+}
+/* The briefing's ticker carries C's one-line reports: it keeps a line, not two, so the hand stays on screen. Its
+   hand sits a little closer under the slip. */
+.play.briefing .ticker {
+  min-height: 1.35em;
+}
+.play.briefing .hand {
+  min-height: 180px;
+  padding-top: 10px;
+}
+/* Lock in waits for the escalation: the status says so in red. */
+.controls .status.wait-esc {
+  color: var(--red);
+}
+/* The final drop, by night: the slip catches the warning lamp, as the hand does, and the flag turns to paper. */
+body[data-night='1'] .coach {
+  filter: drop-shadow(0 0 14px rgb(200 50 31 / 0.5));
+}
+body[data-night='1'] .card .try {
+  background: var(--paper);
+  color: var(--red);
+}
+body[data-night='1'] .controls .status.wait-esc {
+  color: var(--paper);
+}
+/* The title's slip on a first visit: red, leading the menu, with what it is in fine print under it. */
+.menu .slip.briefing {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  padding: 12px 18px 11px;
+  text-align: left;
+  clip-path: var(--cut-2-px);
+}
+.slip.briefing small {
+  font: 700 12.5px/1.35 var(--type);
+  letter-spacing: 0;
+}
+.menu .slip.briefing:focus-visible {
+  clip-path: none;
+}
+/* The end card: C's cable on the epilogue's telegram form, over the table's own mustard bars. */
+.epilogue-card.briefing-card {
+  --own: var(--mustard-deep);
+  background: rgb(29 26 23 / 0.94);
+}
+.epilogue-card.briefing-card .bars i:nth-child(4) {
+  background: var(--teal);
+}
+.briefing-card .telegram .eline.head {
+  font-size: 21px;
+}
+/* Then the way on: the ladder's first rival, or the title. */
+.sheet.briefed .btns .slip {
+  flex: 1 1 auto;
+}
+/* "(starts a new match)" stays on one line (the label is one span, one flex item): on a phone it breaks before the
+   bracket, not inside it. */
+.sheet.briefed .slip .whole {
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .coach {
+    margin-top: 6px;
+    padding: 15px 12px 6px 11px;
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+  .coach .lesson {
+    top: -12px;
+    font-size: 16px;
+  }
+  /* The phone's ticker keeps its own height (a reveal's lines never move the hand). With no Fold, and Escalate on one
+     turn only, the status and Lock in share a row; on the escalation turn the status takes a row of its own. */
+  .play.briefing .ticker {
+    min-height: 3.1em;
+  }
+  .play.briefing .hand {
+    min-height: 168px;
+    padding-top: 10px;
+  }
+  .play.briefing .controls .status {
+    flex: 1 1 150px;
+  }
+  .play.briefing .controls .btns {
+    width: auto;
+    margin-left: auto;
+  }
+  .play.briefing .controls .slip {
+    flex: none;
+    padding-inline: 18px;
+  }
+  .card .try {
+    top: -9px;
+    right: -4px;
+    font-size: 12px;
+  }
+  .briefing-card .telegram .eline.head {
+    font-size: 17px;
+  }
+}
+/* The narrowest phones: C speaks in one place. While you plan, the slip carries the ticker's line (what the turn just
+   flipped showed, or a correction) above the lesson, and the ticker and the status line stand aside, so the buttons
+   take the row; a reveal brings the ticker back for its own lines. The stamp says which turn it is, so the scorebar
+   drops its turn line (and each side's marks fit beside its score). The slip is a size down, and the hand's cards go
+   without their rule text, as a hand of six does here. */
+@media (max-width: 360px) {
+  .coach {
+    padding: 15px 9px 5px 9px;
+    font-size: 11.5px;
+    line-height: 1.36;
+  }
+  /* Its stamp hangs 10px over the top (the gap above is 11), clear of the buttons. */
+  .coach .lesson {
+    top: -10px;
+    font-size: 15px;
+  }
+  .play.briefing {
+    gap: 5px;
+  }
+  .play.briefing:not(.revealing) .coach .note {
+    display: block;
+    margin: 0 0 4px;
+    padding-bottom: 4px;
+    border-bottom: 1.5px dashed rgb(29 26 23 / 0.35);
+    font-size: 10.5px;
+    line-height: 1.3;
+    color: rgb(29 26 23 / 0.82);
+  }
+  .play.briefing .scorebar .turn {
+    display: none;
+  }
+  .play.briefing .ticker {
+    min-height: 0;
+  }
+  .play.briefing.quiet-ticker .ticker {
+    margin-bottom: -6px;
+  }
+  .play.briefing.coached:not(.revealing) > .ticker,
+  .play.briefing.coached:not(.revealing) .controls .status {
+    display: none;
+  }
+  .play.briefing.coached .controls .btns {
+    width: 100%;
+    margin-left: 0;
+  }
+  .play.briefing.coached .controls .slip {
+    flex: 1;
+  }
+  .play.briefing .controls .slip {
+    min-height: 42px;
+    padding-inline: 14px;
+  }
+  .play.briefing .hand {
+    min-height: 0;
+    padding-top: 9px;
+  }
+  .play.briefing .hand .tx {
+    display: none;
+  }
+  .play.briefing .hand .card {
+    grid-template-rows: 36px auto;
+    height: 80px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No glow: a steady outline round the suggested city. The stamp is simply there. */
+  .city.suggest .plate {
+    animation: none !important;
+    box-shadow: none;
+    outline: 3px dashed var(--mustard);
+    outline-offset: -7px;
+  }
+  .coach.fresh .lesson {
+    animation: none !important;
+  }
+}
+
 /* Flashes (escalate and fold) and title cards share the Saul Bass bars. */
 @keyframes flash-in {
   from {
@@ -3166,35 +3757,135 @@ body[data-screen='title'] .mark {
   color: var(--paper);
 }
 
-/* Match over: the dossier */
+/* Match over: the case file. The folder on the table, by day, with the actions under it. */
 .over {
   flex: 1;
   width: 100%;
-  max-width: 720px;
+  max-width: 760px;
   margin: 0 auto;
   padding: 8px 18px 32px;
   display: grid;
-  gap: 18px;
+  gap: 20px;
   align-content: start;
-}
-.dossier {
-  position: relative;
-  padding: 26px 28px 22px;
-  background: var(--manila);
-  color: var(--ink);
-  /* A 14px folder tab, sized in px so a tall dossier on a phone keeps the same small tab. */
-  clip-path: polygon(0 14px, 26% 14px, calc(26% + 16px) 0, calc(56% - 14px) 0, 56% 14px, 100% 14px, calc(100% - 4px) 100%, 3px calc(100% - 8px));
-  box-shadow: 0 8px 0 rgb(0 0 0 / 0.18);
-}
-.stamp-line {
-  margin: 10px 0 0;
-  font-size: 13px;
 }
 .over > * {
   min-width: 0;
 }
-.dossier h2 {
-  margin: 6px 0 4px;
+/* The folder's shadow on the table (a drop shadow follows its cut edge and tab, where a box shadow would be clipped). */
+.dossier {
+  position: relative;
+  filter: drop-shadow(0 9px 0 rgb(0 0 0 / 0.2));
+}
+/* A manila folder: its tab in px (a tall file on a phone keeps the same small tab), the crease under it, and the
+   paper slips (--slip) typed and taped onto it. */
+.case-file {
+  --slip: #f7efd9;
+  position: relative;
+  padding: 36px 30px 26px;
+  background:
+    linear-gradient(rgb(80 50 10 / 0.08) 0 0) 0 30px / 100% 3px no-repeat,
+    radial-gradient(circle at 85% 10%, rgb(255 255 255 / 0.22), transparent 45%),
+    var(--manila);
+  color: var(--ink);
+  clip-path: polygon(0 18px, 24% 18px, calc(24% + 18px) 0, calc(54% - 16px) 0, 54% 18px, 100% 18px, calc(100% - 4px) 100%, 3px calc(100% - 8px));
+  /* The stamp starts its drop at 2.6 times its size: clipped to the folder, it never widens a phone's page. */
+  overflow: clip;
+}
+/* On a wide screen the evidence is filed down the right of the folder, beside the score and the rounds. */
+@media (min-width: 900px) {
+  .over:has(.evidence) {
+    max-width: 1040px;
+  }
+  .case-file:has(.evidence) {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    column-gap: 40px;
+    align-items: start;
+  }
+  .case-file:has(.evidence) > * {
+    grid-column: 1 / -1;
+  }
+  /* The heading rises beside the stamp's lower edge (it ends well short of it at this width). */
+  .case-file:has(.evidence) > .cf-head {
+    margin-bottom: -26px;
+  }
+  .case-file:has(.evidence) > :is(.score-line, .round-strip) {
+    grid-column: 1;
+  }
+  .case-file > .evidence {
+    grid-column: 2;
+    grid-row: 4 / span 2;
+    grid-template-columns: minmax(0, 1fr);
+    margin: 4px 0 0;
+  }
+}
+/* The stamp lands: the folder takes the blow. */
+.case-file:has(.cf-stamp.land) {
+  animation: cf-thud 0.2s 0.6s ease-out;
+}
+@keyframes cf-thud {
+  40% {
+    translate: 0 3px;
+  }
+}
+.cf-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+/* The typed label: a paper strip stuck on a little crooked. */
+.case-file .label {
+  margin: 0;
+  padding: 7px 12px 5px;
+  background: var(--slip);
+  font: 700 13px/1.45 var(--type);
+  rotate: -0.6deg;
+  box-shadow: 2px 2px 0 rgb(0 0 0 / 0.1);
+}
+/* The stamp: red rubber, a double rule, rotated, the ink worn in specks (manila dots over it, three sizes so they never
+   line up). It drops on once (.land) at the first draw; under reduced motion it is simply there. */
+.cf-stamp {
+  position: relative;
+  flex: none;
+  margin: 6px -4px 0 0;
+  padding: 7px 16px 2px 19px;
+  border: 4px solid var(--red);
+  box-shadow: inset 0 0 0 3px var(--manila), inset 0 0 0 5px var(--red);
+  color: var(--red);
+  font: 54px/1 var(--display);
+  font-style: normal;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  rotate: -6deg;
+  opacity: 0.93;
+}
+.cf-stamp::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  background:
+    radial-gradient(circle at 30% 40%, var(--manila) 0 1.1px, transparent 1.7px) 0 0 / 13px 11px,
+    radial-gradient(circle at 70% 60%, var(--manila) 0 0.9px, transparent 1.5px) 3px 2px / 17px 7px,
+    radial-gradient(circle at 50% 50%, var(--manila) 0 1.6px, transparent 2.3px) 5px 9px / 29px 23px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.cf-stamp.land {
+  animation: cf-slam 0.42s 0.35s cubic-bezier(0.3, 0, 0.35, 1.3) both;
+}
+@keyframes cf-slam {
+  from {
+    scale: 2.6;
+    rotate: -20deg;
+    opacity: 0;
+  }
+  55% {
+    opacity: 0.93;
+  }
+}
+.case-file h2 {
+  margin: 12px 0 6px;
   font: clamp(46px, 12vw, 104px) / 0.86 var(--display);
   text-transform: uppercase;
 }
@@ -3204,80 +3895,246 @@ body[data-screen='title'] .mark {
 .over .sub {
   margin: 0 0 10px;
 }
-.final {
+.case-file .coda {
+  margin: 16px 0 0;
+}
+/* The score in cut type, each in its seat's colour, over its strips of film. At two seats it reads as a line ("You 10
+   to 4 Agent Wren": the second seat's name follows its score); at three and four every seat stands over its score
+   under a rule in its colour and pattern, the winner's thicker. */
+.score-line {
   display: flex;
   align-items: baseline;
-  gap: 12px;
   flex-wrap: wrap;
-  margin: 8px 0 14px;
+  gap: 8px 18px;
+  margin: 14px 0 22px;
   font-weight: 700;
 }
-.final b {
-  font: 72px/0.9 var(--display);
+.score-line .seat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 16px;
+}
+.score-line:not(.many) .seat:last-child {
+  flex-direction: row-reverse;
+}
+.score-line b {
+  color: var(--own);
+  font: clamp(80px, 16vw, 124px) / 0.86 var(--display);
   font-weight: 400;
 }
-.final i {
+.score-line .to {
   font-style: normal;
 }
-/* Each side's strips of film hang under its score: the scorebar's frames, a size up. The score
-   keeps the line's baseline, so the line is no wider than before. */
+/* Each side's strips of film hang under its score: the scorebar's frames, a size up. The score keeps the line's
+   baseline, so the line is no wider than before. */
 .score-film {
   display: inline-grid;
   justify-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-.final .fr {
-  width: 22px;
-  height: 22px;
+.score-line .fr {
+  width: 24px;
+  height: 24px;
 }
-.final .fr::before {
-  inset: 5px 3px;
+.score-line .fr::before {
+  inset: 6px 3px;
 }
-.rounds {
+.score-line.many {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+.score-line.many .seat {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  min-width: 0;
+}
+.score-line.many .seat::before {
+  content: '';
+  justify-self: stretch;
+  height: 5px;
+  margin-bottom: 3px;
+  background: var(--own-pat), var(--own);
+}
+/* The winner's: a thicker rule. (Not `.top`: that is the page header's grid.) */
+.score-line.many .seat.lead::before {
+  height: 10px;
+  margin-bottom: 0;
+}
+.score-line.many .nm {
+  max-width: 100%;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.score-line.many b {
+  font-size: 80px;
+}
+.case-file.n4 .score-line.many b {
+  font-size: 66px;
+}
+.score-line.many .score-film {
+  justify-items: start;
+}
+/* The round strip: one row a round, banded down the left in the winner's colour and pattern (by seat, so a guest's
+   own rounds are red on their screen too), its operation over its cities. */
+.round-strip {
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
-  gap: 6px;
   font-size: 13px;
 }
-.rounds li {
+.round-strip li {
+  position: relative;
   display: grid;
-  grid-template-columns: 28px 1fr auto auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: baseline;
-  padding: 4px 0 4px 10px;
-  border-left: 6px solid var(--paper-2);
+  padding: 6px 4px 6px 20px;
+  border-bottom: 1px dashed rgb(29 26 23 / 0.22);
 }
-/* The winner's colour by seat (own-N), so a guest's own rounds are red on their screen too. */
-.rounds li.w-me,
-.rounds li.w-them {
-  border-color: var(--own);
+.round-strip li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 8px;
+  background: var(--paper-2);
 }
-.rounds .n {
+.round-strip li:is(.w-me, .w-them)::before {
+  background: var(--own-pat), var(--own);
+}
+.round-strip .n {
   font: 22px var(--display);
 }
-.rounds b {
+.round-strip .op {
+  display: block;
+  font: 18px/1.05 var(--display);
+  letter-spacing: 0.03em;
+}
+.round-strip b {
   font: 20px var(--display);
   font-weight: 400;
   white-space: nowrap;
 }
 /* A round that gave a strip of film: a small frame in the taker's colour beside the film city. */
-.rounds .fr {
+.round-strip .fr {
   display: inline-block;
   width: 13px;
   height: 13px;
   margin-left: 4px;
   vertical-align: -2px;
 }
-.rounds .fr::before {
+.round-strip .fr::before {
   inset: 3px 2px;
+}
+/* The one that got away: a red pin in the row's corner, its line in the pin's title. */
+.ga-pin {
+  position: absolute;
+  top: -5px;
+  right: -9px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 32%, rgb(255 255 255 / 0.55) 0 2px, transparent 3px), var(--red);
+  box-shadow: 1px 3px 0 rgb(0 0 0 / 0.28);
+  cursor: help;
+}
+/* The evidence: paper slips taped to the folder, each a little crooked, a silhouette (48px) or a figure beside the
+   line. The takedown's victim is struck through in red; the agent of the match wears the seat's colour. */
+.evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
+  margin: 22px 0 4px;
+}
+.slip-ev {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  padding: 15px 14px 12px;
+  background: var(--slip);
+  box-shadow: 2px 3px 0 rgb(0 0 0 / 0.12);
+  font-size: 13px;
+  line-height: 1.4;
+  rotate: -0.6deg;
+}
+.slip-ev:nth-child(2n) {
+  rotate: 0.7deg;
+}
+.slip-ev::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 66px;
+  height: 17px;
+  translate: -50% 0;
+  rotate: -3deg;
+  background: rgb(255 250 232 / 0.62);
+  box-shadow: 0 0 0 1px rgb(29 26 23 / 0.05);
+}
+.slip-ev b {
+  display: block;
+  margin-bottom: 2px;
+  font: 19px/1.05 var(--display);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+}
+.ev-art {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  color: var(--ink);
+}
+.ev-art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ev-art .ac {
+  fill: var(--paper-2);
+}
+.ev-art:is(.own-0, .own-1, .own-2, .own-3) .ac {
+  fill: var(--own);
+}
+.slip-ev.takedown .ev-art::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: calc(50% - 2px);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--red);
+  rotate: -40deg;
+}
+.ev-art.glyph {
+  display: grid;
+  place-items: center;
+  color: var(--red);
+  font: 34px/1 var(--display);
+}
+.slip-ev.quiet .ev-art.glyph {
+  color: var(--paper-2);
 }
 .over .actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+.over .slip.save[aria-busy='true'] {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .toast {
@@ -3486,6 +4343,26 @@ body[data-screen='title'] .mark {
   background: var(--ink);
   font: 700 14px/1.3 var(--type);
   clip-path: var(--cut);
+}
+/* A daily's featured agents and city: typed on a paper slip under the ink one, ruled in red at its left like the
+   title's daily slip. The featured agents wear an ink Today stamp (red is for New). */
+.roster-card .featured {
+  position: relative;
+  max-width: min(600px, calc(100vw - 32px));
+  margin: -8px 0 0;
+  padding: 7px 14px 6px 16px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 13.5px/1.35 var(--type);
+  box-shadow: inset 5px 0 0 var(--red);
+  clip-path: var(--cut-2-px);
+}
+.mc.today {
+  border-top-color: var(--ink);
+}
+.mc .today-tag {
+  border-color: var(--ink);
+  color: var(--ink);
 }
 .roster-card .minis {
   position: relative;
@@ -3808,12 +4685,6 @@ body:has(.modal.hot) .unseen-panel {
   font-style: italic;
 }
 
-/* The dossier names each round's operation. */
-.rounds .op {
-  display: block;
-  font: 18px/1.05 var(--display);
-  letter-spacing: 0.03em;
-}
 
 /* ── the table at three and four seats ─────────────────────────────────── */
 /* At three seats and more (.play.many) the scorebar becomes the tag bar, each rival gets a thin lane
@@ -4479,38 +5350,6 @@ body:has(.modal.hot) .unseen-panel {
 .city-line.w-them:is(.own-0, .own-1, .own-2, .own-3) {
   border-color: var(--own);
 }
-/* The dossier's final score at three seats and more: every seat's name over its score and strips. */
-.final.many {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
-  align-items: end;
-  gap: 10px;
-}
-.final.many .seat {
-  display: grid;
-  justify-items: start;
-  gap: 4px;
-  padding-top: 6px;
-  border-top: 4px solid var(--own);
-}
-/* The winner's: a thicker rule. (Not `.top`: that is the page header's grid.) */
-.final.many .seat.lead {
-  border-top-width: 8px;
-}
-.final.many .nm {
-  max-width: 100%;
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.final.many b {
-  font-size: 56px;
-}
-.final.many .score-film {
-  justify-items: start;
-}
-
 /* ── flows at three and four seats ──────────────────────────────────────── */
 
 /* The answers card (main.js answersCard): every answer to a call, revealed together. The bars come
@@ -4901,11 +5740,11 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   .reel-card .small {
     font-size: 15px;
   }
-  .final .fr {
+  .score-line .fr {
     width: 18px;
     height: 18px;
   }
-  .final .fr::before {
+  .score-line .fr::before {
     inset: 4px 2px;
   }
   .title-card .notes p {
@@ -5167,19 +6006,58 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   .sheet-body {
     font-size: 14px;
   }
-  .dossier {
-    padding: 22px 16px 18px;
+  /* The case file fills the width; the stamp a size down beside the label; the operation names end in an ellipsis
+     and how a round went drops under its cities; the slips stack. */
+  .over {
+    padding-left: 10px;
+    padding-right: 10px;
   }
-  .final b {
-    font-size: 56px;
+  .case-file {
+    padding: 32px 16px 18px;
   }
-  .rounds li {
-    grid-template-columns: 22px 1fr auto;
+  .cf-head {
+    gap: 10px;
+  }
+  .case-file .label {
+    font-size: 12px;
+  }
+  .cf-stamp {
+    margin-top: 4px;
+    padding: 5px 10px 1px 12px;
+    border-width: 3px;
+    box-shadow: inset 0 0 0 2px var(--manila), inset 0 0 0 4px var(--red);
+    font-size: 34px;
+  }
+  .score-line {
+    gap: 6px 12px;
+  }
+  .score-line .seat {
+    gap: 10px;
+  }
+  .score-line b {
+    font-size: 76px;
+  }
+  .round-strip li {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
     gap: 2px 8px;
+    padding-left: 16px;
   }
-  .rounds .how {
+  .round-strip .how {
     grid-column: 2;
     grid-row: 2;
+  }
+  .round-strip .op {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ga-pin {
+    top: -9px;
+    right: -10px;
+  }
+  .evidence {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
   }
   .flash .small {
     font-size: 15px;
@@ -5270,6 +6148,9 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
     font-size: 13px;
   }
   .roster-card .sub {
+    font-size: 12.5px;
+  }
+  .roster-card .featured {
     font-size: 12.5px;
   }
   .roster-card .minis {
@@ -5492,8 +6373,15 @@ body[data-night='1'] .play.revealing > .tagbar.film-in:not(#board) {
   .tag-score .score {
     font-size: 44px;
   }
-  .final.many b {
-    font-size: 44px;
+  .score-line.many b {
+    font-size: 50px;
+  }
+  /* Four seats on a phone: two rows of two. */
+  .case-file.n4 .score-line.many {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .case-file.n4 .score-line.many b {
+    font-size: 54px;
   }
   /* The answers card's slips a size down, so a long codename and its answer share a line. */
   .answers-card .ans {

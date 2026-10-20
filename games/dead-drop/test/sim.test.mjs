@@ -5,6 +5,7 @@ import { playMatch, playBatch } from '../tools/sim/play.mjs';
 import { emptyStats, addMatch, mergeStats, margin, summarize, compare, formatSummary } from '../tools/sim/stats.mjs';
 import { AGENT, CLASSIC_CITIES, RULES, ROUND_MINUTES, TARGET, TARGETS, TWISTS } from '../js/data.js';
 import { ladderSetup } from '../js/roster.js';
+import { dailyOperation } from '../js/daily.js';
 
 const tiny = (o = {}) => resolveConfig({ samples: 2, target: 4, ...o });
 
@@ -380,4 +381,27 @@ test('summaries read folds in answer on token escalations alone, beside every an
   assert.deepEqual([sum.tokenFoldInAnswer.n, sum.tokenFoldInAnswer.pct], [n, n ? (100 * k) / n : null]);
   assert.ok(compare(sum, sum).some((r) => r.key === 'tokenFoldInAnswer'));
   assert.match(formatSummary(sum), /answers were folds [\d.]+% ±[\d.]+ \(to token escalations [\d.]+% ±[\d.]+\)/);
+});
+
+test('the CLI seats heron as bot B unless a daily setup or --b says otherwise', () => {
+  const bots = (...args) => sim('--workers', '1', '--run', 'test-sim-b', '--rounds', '1', ...args).runs.base.config.bots.map((b) => b.id);
+  assert.deepEqual(bots(), ['heron', 'heron']);
+  assert.deepEqual(bots('--setup', 'magpie'), ['heron', 'heron']);
+  assert.deepEqual(bots('--b', 'wren'), ['heron', 'wren']);
+  const day = dailyOperation('2026-10-21');
+  assert.deepEqual(bots('--setup', 'daily:2026-10-21'), ['heron', day.rival.id]);
+});
+
+test('a daily setup seats the day’s rival as bot B and deals Classic plus two agents and a city', async () => {
+  const { dailyOperation } = await import('../js/daily.js');
+  const { setupOf } = await import('../tools/sim/config.mjs');
+  const c = resolveConfig({ setup: 'daily:2026-10-21' });
+  const day = dailyOperation('2026-10-21');
+  assert.equal(c.bots[1].id, day.rival.id);
+  assert.equal(setupOf(c).agents.length, 14);
+  assert.equal(resolveConfig({ setup: 'daily:2026-10-21', b: 'wren' }).bots[1].id, 'wren');
+  assert.notEqual(configHash(c), configHash(resolveConfig({ setup: 'daily:2026-10-22' })));
+  assert.throws(() => resolveConfig({ setup: 'daily:nope' }));
+  const m = playMatch(tiny({ setup: 'daily:2026-10-21' }), 1);
+  assert.ok(m.winner === 0 || m.winner === 1);
 });

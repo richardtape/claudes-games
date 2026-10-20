@@ -45,7 +45,7 @@ window.GAMES = [
     "thumb": "games/dead-drop/thumb.jpg",
     "title": "Dead Drop",
     "tagline": "A spy card game for two to four: drop agents in secret, flip together, call the bluff.",
-    "pitch": "Run a network of agents against rival services: each turn everyone drops an agent in secret, the cards flip together, and you can escalate to double the stake and dare the others to fold. Up to three friends join online on their own phones, computer rivals fill the empty seats, and a stand-in covers anyone whose line goes dead until they're back. Or climb a ladder of five rivals with announced twists and new agents and cities to recruit, sit at a table of three or four against the computer, or pass one device around.",
+    "pitch": "Run a network of agents against rival services: each turn everyone drops an agent in secret, the cards flip together, and you can escalate to double the stake and dare the others to fold. Up to three friends join online on their own phones, computer rivals fill the empty seats, and a stand-in covers anyone whose line goes dead until they're back. Or climb a ladder of five rivals with announced twists and new agents and cities to recruit, sit at a table of three or four against the computer, or pass one device around. A daily operation dealt the same for everyone, a briefing for newcomers, and a case file to save when the match is done.",
     "controls": "Tap a card, then a city, then Lock in. Keys: 1–7 pick a card (or an Accomplice's partner), A S D a city, V face up or down in Casablanca, Enter locks in, E escalates, F folds.",
     "number": 3,
     "created": "2026-10-16",

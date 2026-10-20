@@ -65,7 +65,48 @@ export function migrateMeta(raw, { codenames, rivals, fresh, agents = AGENT_IDS,
     counted: ids(m.counted),
     wonIds: ids(m.wonIds),
     met: cleanMet(m.met, { agents, cities, rivals }),
+    daily: cleanDaily(m.daily),
+    briefed: !!m.briefed,
   };
+}
+
+// ── the daily (Phase 4): one scored attempt a day, the newest 60 days kept ──────
+export const DAILY_KEEP = 60;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const goodResult = (r) => isObject(r) && Number.isInteger(r.margin) && typeof r.won === 'boolean' && typeof r.by === 'string' && Number.isInteger(r.rounds) && typeof r.rival === 'string';
+const goodBest = (b) => isObject(b) && Number.isInteger(b.margin) && DAY.test(b.key) && typeof b.rival === 'string';
+
+/** `meta.daily` as migrateMeta keeps it: results under valid day keys only (the newest 60), best valid or null. */
+function cleanDaily(d) {
+  const raw = isObject(d) ? d : {};
+  const results = {};
+  if (isObject(raw.results)) {
+    for (const k of Object.keys(raw.results).filter((x) => DAY.test(x) && goodResult(raw.results[x])).sort().slice(-DAILY_KEEP)) results[k] = raw.results[k];
+  }
+  return { results, best: goodBest(raw.best) ? { margin: raw.best.margin, key: raw.best.key, rival: raw.best.rival } : null };
+}
+
+/** The day's recorded result ({ margin, won, by, rounds, rival }), or null. */
+export function dailyPlayed(meta, key) {
+  return (isObject(meta.daily) && isObject(meta.daily.results) && meta.daily.results[key]) || null;
+}
+
+/** The best margin over all days played, { margin, key, rival }, or null. */
+export function dailyBest(meta) {
+  return isObject(meta.daily) && goodBest(meta.daily.best) ? meta.daily.best : null;
+}
+
+/** Record a day's result once. False when the key is already recorded. Keeps the newest 60 days. */
+export function recordDaily(meta, key, result, rivalId) {
+  if (!isObject(meta.daily)) meta.daily = { results: {}, best: null };
+  if (!isObject(meta.daily.results)) meta.daily.results = {};
+  if (meta.daily.results[key]) return false;
+  meta.daily.results[key] = { ...result, rival: rivalId };
+  const keys = Object.keys(meta.daily.results).sort();
+  for (const k of keys.slice(0, Math.max(0, keys.length - DAILY_KEEP))) delete meta.daily.results[k];
+  const best = dailyBest(meta);
+  if (!best || result.margin > best.margin) meta.daily.best = { margin: result.margin, key, rival: rivalId };
+  return true;
 }
 
 // ── first meetings (spec 2.6) ───────────────────────────────────────────────

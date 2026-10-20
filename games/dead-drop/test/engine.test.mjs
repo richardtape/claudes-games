@@ -373,3 +373,19 @@ test('the default target follows the seat count; two players stay at 10', () => 
   assert.equal(TARGETS[2], 10);
   assert.equal(E.newMatch({ seats: 3, target: 5 }).target, 5);
 });
+
+test('fixed deals: every round deals the same whatever happened before; without the flag the key is absent', () => {
+  const a = E.newMatch({ seed: 'daily:2026-10-21', fixedDeals: true });
+  const b = E.newMatch({ seed: 'daily:2026-10-21', fixedDeals: true });
+  assert.equal(a.fixedDeals, true);
+  assert.equal(Object.keys(a).at(-1), 'fixedDeals');
+  assert.equal(typeof a.rng, 'number');
+  assert.ok(!('fixedDeals' in E.newMatch({ seed: 1 })));
+  assert.throws(() => E.newMatch({ fixedDeals: true }), RangeError);
+  // Burn RNG in `a` only (as a Getaway's mint would), then start round 2 in both.
+  a.rng = (a.rng + 12345) >>> 0;
+  for (const s of [a, b]) { s.phase = 'round-over'; E.nextRound(s); }
+  const deal = (s) => JSON.stringify([s.round.hands, s.round.decks, s.round.cities.map((c) => c.id), s.round.film]);
+  assert.equal(deal(a), deal(b));
+  assert.notEqual(deal(E.newMatch({ seed: 'x', fixedDeals: true })), deal(E.newMatch({ seed: 'x' })), 'the reseed moves round 1 too');
+});

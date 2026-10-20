@@ -40,15 +40,17 @@ test('a win with no match id still counts (an old view), and an old meta starts 
 });
 
 import { CODENAMES, RIVALS } from '../js/data.js';
-import { META_VERSION, TOKEN_VERSION, meet, migrateMeta } from '../js/meta.js';
+import { META_VERSION, TOKEN_VERSION, meet, migrateMeta, recordDaily, dailyPlayed, dailyBest } from '../js/meta.js';
+import { dailyKey } from '../js/daily.js';
 
 test('migrateMeta keeps the codename, token, rivals beaten and counts, cleans the rest and stamps v2', () => {
   const opts = { codenames: CODENAMES, rivals: RIVALS.map((r) => r.id), fresh: { codename: 'Agent Owl', token: 'ffffffffffffffff' } };
   const v1 = { v: 1, codename: 'Agent Fox', beaten: ['wren', 'magpie'], token: '0123456789abcdef', tokenV: 1, matches: 7, onlineWins: 2, counted: ['abcd1234'], wonIds: ['zzzz9999'], later: { x: 1 } };
   assert.deepEqual([META_VERSION, TOKEN_VERSION], [2, 1]);
   const met = { agents: [], cities: [], rivals: [] };
-  assert.deepEqual(migrateMeta(v1, opts), { ...v1, v: 2, met });
-  const clean = { v: 2, codename: 'Agent Owl', beaten: [], token: 'ffffffffffffffff', tokenV: 1, matches: 0, onlineWins: 0, counted: [], wonIds: [], met };
+  const daily = { results: {}, best: null };
+  assert.deepEqual(migrateMeta(v1, opts), { ...v1, v: 2, met, daily, briefed: false });
+  const clean = { v: 2, codename: 'Agent Owl', beaten: [], token: 'ffffffffffffffff', tokenV: 1, matches: 0, onlineWins: 0, counted: [], wonIds: [], met, daily, briefed: false };
   assert.deepEqual(migrateMeta({}, opts), clean);
   assert.deepEqual(migrateMeta({ codename: '<b>Hi</b>', beaten: ['magpie', 'nobody', 'wren', 'wren'], token: 'short', tokenV: 1, matches: -3, onlineWins: 'x', counted: 'no', wonIds: [1] }, opts), { ...clean, beaten: ['wren', 'magpie'] });
 });
@@ -87,4 +89,28 @@ test('migrateMeta cleans met: known ids only, once each, missing lists filled', 
   assert.deepEqual(m.met, { agents: ['courier'], cities: [], rivals: ['magpie', 'control'], later: 1 });
   assert.deepEqual(migrateMeta({ met: ['courier'] }, metOpts).met, { agents: [], cities: [], rivals: [] });
   assert.deepEqual(migrateMeta({ met: { rivals: ['wren'] } }, metOpts).met, { agents: [], cities: [], rivals: ['wren'] });
+});
+
+test('a day records once; the best margin is kept with its day and rival; sixty days are remembered', () => {
+  const meta = migrateMeta({}, metOpts);
+  assert.equal(recordDaily(meta, '2026-10-21', { margin: 3, won: true, by: 'points', rounds: 5 }, 'heron'), true);
+  assert.equal(recordDaily(meta, '2026-10-21', { margin: 9, won: true, by: 'points', rounds: 5 }, 'heron'), false, 'one attempt a day');
+  assert.deepEqual(dailyPlayed(meta, '2026-10-21').margin, 3);
+  assert.equal(dailyPlayed(meta, '2026-10-22'), null);
+  recordDaily(meta, '2026-10-22', { margin: -4, won: false, by: 'reel', rounds: 4 }, 'wren');
+  assert.deepEqual(dailyBest(meta), { margin: 3, key: '2026-10-21', rival: 'heron' });
+  recordDaily(meta, '2026-10-23', { margin: 7, won: true, by: 'points', rounds: 6 }, 'control');
+  assert.deepEqual(dailyBest(meta), { margin: 7, key: '2026-10-23', rival: 'control' });
+  for (let i = 0; i < 70; i++) recordDaily(meta, dailyKey(new Date(2027, 0, 1 + i)), { margin: 0, won: false, by: 'points', rounds: 1 }, 'wren');
+  assert.ok(Object.keys(meta.daily.results).length <= 60);
+  assert.equal(dailyBest(meta).margin, 7, 'the best survives the trim');
+});
+
+test('migrateMeta cleans the daily record and keeps briefed', () => {
+  const m = migrateMeta({ daily: { results: { '2026-10-21': { margin: 2, won: true, by: 'points', rounds: 5, rival: 'wren' }, bad: 'x' }, best: { margin: 'no' } }, briefed: 1 }, metOpts);
+  assert.deepEqual(Object.keys(m.daily.results), ['2026-10-21']);
+  assert.equal(m.daily.best, null);
+  assert.equal(m.briefed, true);
+  assert.deepEqual(migrateMeta({}, metOpts).daily, { results: {}, best: null });
+  assert.equal(migrateMeta({}, metOpts).briefed, false);
 });
