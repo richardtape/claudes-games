@@ -16,6 +16,7 @@
     "deploy": "node scripts/deploy.mjs",
     "verify-live": "node scripts/verify-live.mjs",
     "types": "node scripts/types.mjs",
-    "random": "node scripts/types.mjs --random"
+    "random": "node scripts/types.mjs --random",
+    "drive": "node scripts/drive.mjs"
   }
 }

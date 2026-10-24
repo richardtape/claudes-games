@@ -5,6 +5,7 @@
 //   sfx.noise({ dur: 0.15, freq: 800 });            // thud / whoosh / hit
 //   sfx.arp([523, 659, 784], { step: 0.06 });       // little fanfare
 //   sfx.tone({ freq: 110, at: sfx.now() + 0.5 });    // on the audio clock (see shared/seq.js)
+//   const roar = sfx.hold({ kind: 'noise', freq: 500 }); roar?.set({ vol: 0.3 }); roar?.stop();
 //   muteButton.onclick = () => sfx.toggleMute();
 //
 // The AudioContext is created lazily and unlocked on the first pointer/key press, so calls
@@ -70,14 +71,17 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
     osc.stop(t0 + dur + 0.02);
   }
 
+  function ensureNoise() {
+    if (noiseBuf) return;
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+
   /** Filtered white noise: thuds (low freq), hiss/whoosh (high freq, `to` sweeps the filter). */
   function noise({ dur = 0.15, vol = 0.3, freq = 1200, to = null, q = 1, type = 'lowpass', delay = 0, attack = 0.002, at = null } = {}) {
     if (!ready()) return;
-    if (!noiseBuf) {
-      noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-      const d = noiseBuf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    }
+    ensureNoise();
     const t0 = at ?? ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = noiseBuf;
@@ -98,6 +102,65 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
     freqs.forEach((f, i) => tone({ freq: f, type, dur, vol, delay: delay + i * step }));
   }
 
+  /**
+   * A sustained sound you steer while it plays (a burner, an engine, wind): `kind` 'noise'
+   * (looped white noise through a `type` filter at `freq`) or an oscillator type ('sine', ...).
+   * Returns { set({ vol, freq }, ramp), stop(release) }, or null before the first gesture.
+   * It starts silent; mute still applies (it goes through the master gain).
+   */
+  function hold({ kind = 'noise', freq = 800, q = 1, type = 'lowpass' } = {}) {
+    if (!unlocked || !ensure()) return null;
+    ensureNoise();
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, 0);
+    let src;
+    let filter = null;
+    if (kind === 'noise') {
+      src = ctx.createBufferSource();
+      src.buffer = noiseBuf;
+      src.loop = true;
+      filter = ctx.createBiquadFilter();
+      filter.type = type;
+      filter.Q.value = q;
+      filter.frequency.value = freq;
+      src.connect(filter).connect(g);
+    } else {
+      src = ctx.createOscillator();
+      src.type = kind;
+      src.frequency.value = freq;
+      src.connect(g);
+    }
+    g.connect(master);
+    src.start();
+    let stopped = false;
+    return {
+      set({ vol = null, freq: f = null } = {}, ramp = 0.08) {
+        if (stopped) return;
+        const t = ctx.currentTime;
+        if (vol !== null) {
+          g.gain.cancelScheduledValues(t);
+          g.gain.setValueAtTime(g.gain.value, t);
+          g.gain.linearRampToValueAtTime(Math.max(0, vol), t + ramp);
+        }
+        if (f !== null) {
+          const param = filter ? filter.frequency : src.frequency;
+          param.cancelScheduledValues(t);
+          param.setValueAtTime(param.value, t);
+          param.linearRampToValueAtTime(f, t + ramp);
+        }
+      },
+      stop(release = 0.15) {
+        if (stopped) return;
+        stopped = true;
+        const t = ctx.currentTime;
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.linearRampToValueAtTime(0, t + release);
+        src.stop(t + release + 0.05);
+      },
+    };
+  }
+
   function setMuted(m) {
     muted = !!m;
     saved.set('muted', muted);
@@ -108,6 +171,7 @@ export function createSfx(slug, { volume = 0.5 } = {}) {
     tone,
     noise,
     arp,
+    hold,
     setMuted,
     toggleMute: () => (setMuted(!muted), muted),
     /** Audio-clock time in seconds, or null before the first gesture / while muted. */

@@ -114,6 +114,7 @@ families at most. The `frontend-design` skill lists the generic looks to avoid.
 | `npm run check [-- slug]` | Headless Chrome, served under `/claudes-games/` like Pages: errors, ready signal, DOM audit, thumbnail, `smoke.mjs`, phone pass, front page |
 | `npm run gallery` | Rebuild `games.js` from every `games/*/game.json` |
 | `npm run words` | Rebuild `shared/words/*.txt` (downloads missing sources into `shared/words/src/`) |
+| `npm run drive -- slug [--phone]` | One headless page kept open (run in the background); `curl -s 127.0.0.1:8650 -d "<js>"` evaluates in it and screenshots `.tmp/drive.png`. For playing by hand, one decision at a time |
 | `npm run deploy [-- --dry-run]` | Test + check, stage a clean copy in `.site/`, scan for secrets/personal data, push to GitHub Pages |
 | `npm run verify-live` | After the Pages build finishes, load the live front page and every game in headless Chrome |
 
@@ -168,9 +169,11 @@ shell, so pick the game's signature colour), `emoji` (fallback art), `draft`, an
 
 - `arcade.js`: `store(slug)` (`get`, `set`, `remove`, `keys()` to prune old saves), `recordPlay`,
   `recordBest`, `loadStats`, `homeLink`, `markReady`, `reducedMotion`, `onHidden`.
-- `sfx.js`: `createSfx(slug)` → `tone`, `noise`, `arp`, `toggleMute`, `now()`; `note(semitones)`.
+- `sfx.js`: `createSfx(slug)` → `tone`, `noise`, `arp`, `hold`, `toggleMute`, `now()`; `note(semitones)`.
   Synthesize every sound; no audio files needed. Unlocks on first gesture automatically.
-  `tone`/`noise` take `at` (an absolute audio-clock time from `now()`) for sequencing.
+  `tone`/`noise` take `at` (an absolute audio-clock time from `now()`) for sequencing. `hold({ kind,
+  freq, type, q })` is a sustained sound you steer while it plays (`set({ vol, freq }, ramp)`, `stop()`;
+  null before the first gesture): First Light's burner roar and wind (`js/audio.js`).
 - `seq.js`: `createSequencer(sfx, { bpm, steps, onStep(step, at) })` → `start`, `stop`, `bpm`.
   Sixteenth-note steps scheduled ahead on the audio clock (no wobble). Background music:
   stop it when the page is hidden and never start it into a hidden tab (Dead Drop's audio.js).
@@ -208,7 +211,16 @@ document it here rather than burying it in the game.
   offscreen layer incrementally from a history list in the state, so it can be redrawn at
   any size (resize, end-screen poster).
 - **3D:** three.js through an import map with an exact pinned version from cdn.jsdelivr.net
-  (check the version exists first). Keep draw calls low; test on the phone pass.
+  (check the version exists first; First Light pins 0.170.0, whose API is well known, rather than the
+  newest). Keep draw calls low; test on the phone pass. Headless Chrome on Rich's Mac renders WebGL on
+  the real GPU (ANGLE Metal), so `npm run check` needs no flags. What worked in First Light: one
+  non-indexed, flat-shaded, vertex-coloured terrain mesh whose triangles match the engine's height
+  lookup exactly (`groundAt` splits each cell on the same diagonal); `InstancedMesh` for 1,500
+  chimneys, trees and other balloons (about 20 draw calls); a shader sky sphere and a far-mountain
+  ring that follow the camera; a tiling grain texture on world UVs so low views aren't bare triangles;
+  vertex colours converted to linear (`Color.setRGB(r, g, b, SRGBColorSpace)`); a pixel ratio capped at
+  1.5 on touch screens and dropped once if frames run slow. `camera.setViewOffset` shifts the picture
+  clear of a title card.
 - **Physics:** a pinned CDN build of matter-js/planck, or hand-rolled for simple cases.
 - **Music:** `shared/seq.js` on `sfx.tone`. Keep it muteable, separately from effects.
 - **Data:** download raw sources into their own folder under `shared/<topic>/src/` (or the
@@ -263,7 +275,9 @@ document it here rather than burying it in the game.
   runs it with two pages in one browser joined over BroadcastChannel (`?net=local`), so the
   check never depends on public relays; `npm run verify-live` runs it again on the live
   site in two separate browsers through the real relays. Assert the guest's view never holds
-  the host's secrets.
+  the host's secrets. The duo must honour `ctx.live` (no `?net=local`, longer waits): separate
+  browsers share no BroadcastChannel, so a duo that always adds `?net=local` passes the check and
+  can never connect live (Sushi Raft's first draft).
 - **Multiplayer games may export `table(pages, ctx)` and `tablePages = { local, live }`** for
   three players and more. `npm run check` opens `tablePages.local` pages (default 3) in one
   context after the duo (`ctx.shot(name, page)`, `ctx.audit(label, page)`, shots
@@ -288,6 +302,12 @@ document it here rather than burying it in the game.
   first),
   and wait for screens rather than sleeping a fixed time. Before a screenshot, wait for
   entrance animations to finish (Dead Drop's `settle()`), or shots catch half-faded panels.
+- **Play it by hand, one decision at a time** (`npm run drive -- <slug> --phone`, then curl JS that
+  holds an input for N seconds on the manual clock and returns a summary; read `.tmp/drive.png`).
+  First Light's two hand flights found what the bot and sim never showed: the burner was sluggish,
+  the chase camera faced the drift while the cross sat off-screen, the coach box covered the ground
+  being aimed at, photos showed mostly the player's own balloon, landing at once earned 870 points
+  of leftover propane, and a basket resting against a chimney racked up 16 scrapes and never landed.
 - **Real-time games: play a whole run headless** with a bot on the manual clock and
   screenshot the key moments (`games/night-stitch/tools/night-shots.mjs`). The short smoke
   test never reached 2 AM, where the accumulated embroidery had made live moths unreadable.
@@ -796,6 +816,28 @@ and new files.
   Raft's computer Kelp stood still (correctly: it waits for fish over the pass), which looked broken
   until the night opened with "you have the fish and the boards: set things on the middle counter".
 
+- A Python edit script that opens the file for writing before its text is final can wipe it: a
+  stray trailing comma made `s` a tuple, `open(p, 'w')` truncated `hud.js`, then `write()` threw. Build
+  and check the new text first (`assert isinstance(s, str)`), then write; commit milestones early.
+- zsh doesn't split unquoted variables into words: `for s in "3 1 0"; do set -- $s` passes one
+  argument. Write the calls out.
+- Synthetic `PointerEvent`s (and real ones whose pointer is already gone) make `setPointerCapture`
+  throw. First Light's burner handler threw before syncing input, so the button did nothing: capture
+  last, in a try/catch (`capture()` in `games/first-light/js/main.js`).
+- A chase camera hides what matters behind the player's own model. First Light takes photos from the
+  basket (`render.photo(from, to)`: own balloon hidden, a 4:3 crop, then the chase view restored),
+  swings round to look at a cross when one is in range, and lifts so the sunrise clears the envelope.
+- Rewards for what's left over (propane, time, lives) can make quitting at once pay: gate them on
+  finishing the objectives (leftover propane counts only once every marker is down).
+- Resting contact flickers: count a collision only when moving into the thing (`vn < -0.7`), and
+  decide "settled" by clearance with some slack, not by an `onGround` flag that toggles every step.
+- A scrolling grid inside a flex-column dialog needs `min-height: 0` and `grid-auto-rows:
+  max-content`; otherwise children with `overflow: hidden` (whose minimum size is 0) are squashed and
+  the album's captions vanished on the phone.
+- Title demos read better already under way: First Light pre-flies its demo balloon 30 s with the bot
+  before showing the title, and keeps the demo's sun below the ridge so the real flight's sunrise
+  stays a surprise.
+
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
@@ -805,3 +847,4 @@ and new files.
 | 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live. Part B (2026-10-20): the turn timer (Off, 30 s, Blitz) on the host's clock with a fuse across the hand and auto-Next; six emotes as paper slips; four tags at 320px, bottom sheets, night at four seats; spectators neutral. Phase 4 (2026-10-20): the return loop: today's operation (one match a day dealt the same for everyone,  Classic plus two featured agents and a city, its own save, the best margin on the title); "the one that  got away" after a lost round, private to its seat, at two to four seats (an action-log replay, B46); the  case file as a manila folder with evidence slips and a PNG poster; a scripted briefing against Agent Wren  with C's coach; four illustrated lines for a friend in the lobby |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |
 | 5 | sushi-raft | management | Co-op kitchen for two phones: tap stations to queue your otter, plate sushi onto rafts round a canal; a week of five nights with rent, a morning market (dishes, upgrades) and announced twists, the split kitchen passing over the counter | A harbour pier at dusk: hinoki counters, indigo noren, vermilion lanterns, teal canal, bamboo rafts, cute harbour animals; Mochiy Pop One + Zen Maru Gothic | Real-time co-op over shared/net.js with 15 Hz host snapshots; solo with a computer Kelp (the sim's bot); characters and food drawn by a subagent to a signature contract (`js/art.js`); closing time stacks the night's plates by rim colour, stamps the rent and floats the otters home holding paws |
+| 6 | first-light | exploration-3d | Hot-air balloon at dawn: steer by height through five veering wind layers; drop markers on three crosses, photograph landmarks, land before the propane runs out; daily flight | Dawn over Cappadocia: low-poly tuff strata (cream, apricot, rose), basalt-capped fairy chimneys, red river, Erciyes on the horizon, striped envelopes; Marcellus + Atkinson Hyperlegible Next | First three.js game (0.170.0, ~20 draw calls); pure engine with node tests; the sunrise turns gold when you climb above the rim and the camera swings to face it; basket photos fill a 12-page album; flight certificate with route map; bot pilot for demo and sim; `npm run drive` for hand play; made for Rich's phone on holiday |

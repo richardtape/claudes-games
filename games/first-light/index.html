@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>First Light</title>
+    <meta name="description" content="Fly a hot-air balloon at dawn over the fairy chimneys of Cappadocia. Each height has its own wind, so you steer by climbing and sinking." />
+    <meta name="theme-color" content="#1f2350" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎈</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;800&family=Marcellus&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="app" data-screen="title">
+      <canvas id="view" aria-label="The valley from your balloon"></canvas>
+      <div id="labels" aria-hidden="true"></div>
+      <div id="bloom" aria-hidden="true"></div>
+      <div id="flash" aria-hidden="true"></div>
+
+      <header class="hud top">
+        <div class="home-slot"></div>
+        <div class="readouts">
+          <div class="readout score"><span class="k">Score</span><b id="score">0</b></div>
+          <div class="readout propane"><span class="k">Propane</span><b id="propane">100%</b><i class="gauge"><i id="propane-bar"></i></i></div>
+          <div class="readout clock"><span class="k">Time</span><b id="clock">06:04</b></div>
+        </div>
+        <div class="toggles">
+          <button class="icon" data-action="music" aria-label="Music on" aria-pressed="true" title="Music (N)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.6" fill="currentColor"/><circle cx="16.5" cy="16" r="2.6" fill="currentColor"/></svg></button>
+          <button class="icon" data-action="sound" aria-label="Sound on" aria-pressed="true" title="Sound (M)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button class="icon" data-action="help" aria-label="How to play" title="How to play (H)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.3 9.4a2.8 2.8 0 1 1 3.9 2.6c-.8.4-1.2 1-1.2 1.8v.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.3" fill="currentColor"/></svg></button>
+        </div>
+      </header>
+
+      <div class="hud side">
+        <canvas id="minimap" width="240" height="240" aria-label="Map"></canvas>
+        <canvas id="ladder" width="140" height="640" aria-label="Wind at each height"></canvas>
+      </div>
+
+      <div id="coach" class="hud" role="status" aria-live="polite"></div>
+      <div id="toasts" class="hud" aria-hidden="true"></div>
+
+      <div class="hud controls">
+        <button id="vent" class="ctl vent" data-hold="vent"><span>Vent</span><kbd>↓</kbd></button>
+        <div class="mid">
+          <button id="photo" class="ctl photo" data-action="photo" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2.5h6L17 8h3v11H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.6" fill="none" stroke="currentColor" stroke-width="2"/></svg><span id="photo-label">Photo</span><kbd>P</kbd></button>
+          <button id="drop" class="ctl drop" data-action="drop" hidden><span id="drop-label">Drop marker</span><kbd>D</kbd></button>
+        </div>
+        <button id="burn" class="ctl burn" data-hold="burn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c1.6 3.4 5.5 5.6 5.5 10.4a5.5 5.5 0 0 1-11 0c0-2.6 1.4-4.2 2.6-5.6.2 1.8 1 2.9 2.2 3.4-.4-3.2.1-5.8.7-8.2z" fill="currentColor"/></svg><span>Burner</span><kbd>Space</kbd><i class="ring" aria-hidden="true"></i></button>
+      </div>
+
+      <div id="moment" aria-hidden="true"></div>
+
+      <section id="title" class="overlay title-screen">
+        <div class="title-card enter">
+          <h1 class="wordmark">First Light</h1>
+          <p class="lede">A hot-air balloon at dawn over the fairy chimneys of Cappadocia. The wind blows a different way at every height: climb and sink to steer.</p>
+          <div class="menu">
+            <button class="btn primary" data-action="daily"><span>Today’s flight</span><small id="daily-note">Same winds for everyone today</small></button>
+            <button class="btn" data-action="continue" hidden><span>Continue your flight</span><small id="continue-note"></small></button>
+            <button class="btn" data-action="free"><span>Free flight</span><small>New winds, new crosses</small></button>
+            <div class="row">
+              <button class="btn small" data-action="album"><span>Album</span><small id="album-count">0 of 12</small></button>
+              <button class="btn small" data-action="help"><span>How to play</span></button>
+            </div>
+          </div>
+          <p class="best" id="best-line"></p>
+        </div>
+      </section>
+
+      <section id="cert" class="overlay cert-screen" hidden>
+        <div class="cert enter">
+          <div class="cert-inner">
+            <p class="cert-kicker">Certificate of flight</p>
+            <h2 id="cert-title">First Light</h2>
+            <p id="cert-sub" class="cert-sub"></p>
+            <div class="cert-body">
+              <canvas id="cert-map" width="560" height="560" aria-label="Your route over the valley"></canvas>
+              <ol id="cert-lines" class="lines"></ol>
+            </div>
+            <div id="cert-photos" class="prints"></div>
+            <p id="cert-blessing" class="blessing"></p>
+            <p id="cert-best" class="cert-best"></p>
+          </div>
+          <div class="cert-actions">
+            <button class="btn primary" data-action="again"><span id="again-label">Fly again</span><kbd>Enter</kbd></button>
+            <button class="btn" data-action="free"><span>Free flight</span></button>
+            <button class="btn" data-action="album"><span>Album</span></button>
+            <button class="btn" data-action="menu"><span>Title</span><kbd>Esc</kbd></button>
+          </div>
+        </div>
+      </section>
+
+      <div id="pause" class="overlay pause-screen" hidden>
+        <div class="panel">
+          <h2>Paused</h2>
+          <p>Your flight is saved. Come back to it any time.</p>
+          <button class="btn primary" data-action="resume"><span>Resume</span><kbd>Enter</kbd></button>
+          <button class="btn" data-action="menu"><span>Title</span></button>
+        </div>
+      </div>
+
+      <dialog id="album" class="sheet" aria-labelledby="album-h">
+        <div class="sheet-head">
+          <h2 id="album-h">Album</h2>
+          <button class="icon close" data-action="close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+        </div>
+        <p id="album-sub" class="sheet-sub"></p>
+        <div id="album-grid" class="album-grid"></div>
+      </dialog>
+
+      <dialog id="help" class="sheet" aria-labelledby="help-h">
+        <div class="sheet-head">
+          <h2 id="help-h">How to fly</h2>
+          <button class="icon close" data-action="close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+        </div>
+        <div class="help-body">
+          <p><b>A balloon cannot steer.</b> It goes where the wind goes, and the wind blows a different way at every height. The ladder on the right shows each layer’s wind as an arrow; up the screen is the way you are looking. Climb or sink into the layer that heads where you want to go.</p>
+          <p><b>Burner:</b> hold to heat the envelope. It answers after a second or two, and keeps climbing a little after you let go, so think ahead. <b>Vent:</b> hold to spill hot air and sink faster.</p>
+          <p><b>Crosses:</b> three are laid out in the fields, each with a beam of light. Within 150 m of one, Drop marker appears. The marker keeps your drift as it falls; the dashed line shows where it would land. Closer scores more: 1000 within 3 m.</p>
+          <p><b>Photos:</b> when a landmark is in view, Photo appears. A well-framed photo scores more, and goes into your album.</p>
+          <p><b>Landing:</b> come down gently on open ground and let the basket settle. Once all three markers are down, leftover propane scores too. If you leave the valley, the flight ends.</p>
+          <p><b>First light:</b> climb above the valley rim at the start to see the sun come up before it reaches the valley floor.</p>
+          <p><b>Looking around:</b> drag the view. The camera turns back to your drift after a few seconds, and faces a cross when you are in range of it.</p>
+          <ul class="keys">
+            <li><kbd>Space</kbd> or <kbd>↑</kbd> burner</li>
+            <li><kbd>↓</kbd> or <kbd>V</kbd> vent</li>
+            <li><kbd>D</kbd> drop a marker</li>
+            <li><kbd>P</kbd> take a photo</li>
+            <li><kbd>←</kbd> <kbd>→</kbd> look around</li>
+            <li><kbd>M</kbd> sound, <kbd>N</kbd> music</li>
+          </ul>
+        </div>
+      </dialog>
+    </div>
+  </body>
+</html>

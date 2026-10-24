@@ -99,5 +99,26 @@ window.GAMES = [
     "color": "#2f8b96",
     "emoji": "🦦",
     "draft": false
+  },
+  {
+    "slug": "first-light",
+    "href": "games/first-light/",
+    "thumb": "games/first-light/thumb.jpg",
+    "title": "First Light",
+    "tagline": "Fly a hot-air balloon at dawn: each height has its own wind, so you steer by climbing and sinking.",
+    "number": 6,
+    "created": "2026-10-23",
+    "type": "exploration-3d",
+    "genres": [
+      "3D",
+      "Exploration",
+      "Flight",
+      "Daily"
+    ],
+    "color": "#f2a65a",
+    "emoji": "🎈",
+    "controls": "Hold Burner (Space) to climb, Vent (↓) to sink, Drop (D) near a cross, Photo (P); drag to look around.",
+    "draft": false,
+    "pitch": "Dawn over the fairy chimneys of Cappadocia. A balloon can't steer, but every height has its own wind: climb and sink to ride the one you want, drop markers on crosses in the fields, photograph the landmarks for your album, and land gently before the propane runs out. Climb above the rim early and you'll see first light."
   }
 ];

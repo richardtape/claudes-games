@@ -185,8 +185,12 @@ export default async function smoke(page, { log, shot, audit, phone }) {
 }
 
 /** Two players: Pebble hosts, Kelp joins with the code, and they play a night together. */
-export async function duo([host, guest], { base, url, log, shot, audit }) {
-  await host.goto(`${url}?net=local&token=host-token`);
+export async function duo([host, guest], { url, log, shot, audit, live = false }) {
+  // npm run check joins two tabs over BroadcastChannel; verify-live runs this again with { live: true }
+  // in two browsers through the public relays, where connecting takes longer.
+  const T = live ? 45000 : 8000;
+  const at = (token, hash = '') => (live ? `${url}${hash}` : `${url}?net=local&token=${token}${hash}`);
+  await host.goto(at('host-token'));
   await ready(host);
   await host.evaluate(() => {
     localStorage.clear();
@@ -199,38 +203,38 @@ export async function duo([host, guest], { base, url, log, shot, audit }) {
   await shot('host-lobby', host);
   await audit('host-lobby', host);
 
-  await guest.goto(`${url}?net=local&token=guest-token#join=${code}`);
+  await guest.goto(at('guest-token', `#join=${code}`));
   await ready(guest);
   await guest.evaluate(() => window.__game.skipAnimations(true));
-  await guest.waitForFunction(() => window.__game.game.net?.status === 'welcome', null, { timeout: 8000 });
-  await host.waitForSelector('[data-action=startWeek]:not([disabled])');
+  await guest.waitForFunction(() => window.__game.game.net?.status === 'welcome', null, { timeout: T });
+  await host.waitForSelector('[data-action=startWeek]:not([disabled])', { timeout: T });
   await shot('guest-lobby', guest);
   await host.click('[data-action=startWeek]');
-  await screenIs(host, 'morning');
-  await screenIs(guest, 'morning');
+  await screenIs(host, 'morning', T);
+  await screenIs(guest, 'morning', T);
   await settle(guest);
   await shot('guest-morning', guest);
   await audit('guest-morning', guest);
 
   // Both must press: the host alone waits.
   await host.click('#panel [data-action=ready]');
-  await host.waitForSelector('#panel .btn.waiting');
+  await host.waitForSelector('#panel .btn.waiting', { timeout: T });
   if ((await host.evaluate(() => window.__game.state.phase)) !== 'morning') throw new Error('the night opened before Kelp was ready');
   await guest.click('#panel [data-action=ready]');
-  await screenIs(host, 'service');
-  await screenIs(guest, 'service');
+  await screenIs(host, 'service', T);
+  await screenIs(guest, 'service', T);
   log('both players readied up and the night opened on both phones');
 
   // Kelp taps the plates and the rice cooker on the guest's own canvas; the host's engine moves Kelp.
-  await guest.waitForFunction(() => window.__game.state?.svc, null, { timeout: 5000 });
+  await guest.waitForFunction(() => window.__game.state?.svc, null, { timeout: T });
   await clickStation(guest, 'plates');
   await host.waitForFunction(() => {
     const o = window.__game.state.svc.otters[1];
     return o.queue.length || o.goal || o.path.length || o.hold;
-  }, null, { timeout: 5000 });
+  }, null, { timeout: T });
   await clickStation(guest, 'cooker');
-  await host.waitForFunction(() => window.__game.state.svc.otters[1].hold?.parts?.includes('rice'), null, { timeout: 8000 });
-  await guest.waitForFunction(() => window.__game.state.svc.otters[1].hold?.parts?.includes('rice'), null, { timeout: 5000 });
+  await host.waitForFunction(() => window.__game.state.svc.otters[1].hold?.parts?.includes('rice'), null, { timeout: T });
+  await guest.waitForFunction(() => window.__game.state.svc.otters[1].hold?.parts?.includes('rice'), null, { timeout: T });
   // Pebble's otter never moved for Kelp's taps.
   if (await host.evaluate(() => window.__game.state.events.some((e) => e.type === 'tap' && e.o === 0))) throw new Error('a guest tap moved Pebble');
   await shot('host-service', host);
@@ -240,18 +244,18 @@ export async function duo([host, guest], { base, url, log, shot, audit }) {
 
   // Kelp hides the tab: the night pauses for both.
   await guest.evaluate(() => window.__game.game.net.session.hidden(true));
-  await host.waitForSelector('#pause:not([hidden])');
+  await host.waitForSelector('#pause:not([hidden])', { timeout: T });
   const t0 = await host.evaluate(() => window.__game.state.svc.t);
   await host.waitForTimeout(400);
   if ((await host.evaluate(() => window.__game.state.svc.t)) !== t0) throw new Error('the night ran on while Kelp was away');
   await guest.evaluate(() => window.__game.game.net.session.hidden(false));
-  await host.waitForSelector('#pause', { state: 'hidden' });
+  await host.waitForSelector('#pause', { state: 'hidden', timeout: T });
 
   // Kelp reloads mid-night and gets Kelp back.
   await guest.reload();
   await ready(guest);
-  await guest.waitForFunction(() => window.__game.game.net?.status === 'welcome' && window.__game.game.me === 1, null, { timeout: 8000 });
-  await screenIs(guest, 'service');
+  await guest.waitForFunction(() => window.__game.game.net?.status === 'welcome' && window.__game.game.me === 1, null, { timeout: T });
+  await screenIs(guest, 'service', T);
   log('a guest reload got Kelp back');
 
   // Closing time on both (with rent covered); both ready for the morning.
@@ -259,15 +263,15 @@ export async function duo([host, guest], { base, url, log, shot, audit }) {
     window.__game.state.purse = 100;
     window.__game.closeNow();
   });
-  await screenIs(host, 'closed');
-  await screenIs(guest, 'closed');
+  await screenIs(host, 'closed', T);
+  await screenIs(guest, 'closed', T);
   await settle(guest);
   await shot('guest-closing', guest);
   await audit('guest-closing', guest);
   await guest.click('#panel [data-action=ready]');
   await host.click('#panel [data-action=ready]');
-  await screenIs(host, 'morning');
-  await screenIs(guest, 'morning');
+  await screenIs(host, 'morning', T);
+  await screenIs(guest, 'morning', T);
   log('closing time and the next morning reached both phones');
   await host.evaluate(() => localStorage.clear());
 }
