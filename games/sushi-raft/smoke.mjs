@@ -100,6 +100,41 @@ export default async function smoke(page, { log, shot, audit, phone }) {
   await advance(page, 0.2);
   await shot('busy-night');
   await audit('busy-night');
+
+  // The reading aids: the menu board (wide screens only), the glow on where Pebble's salmon goes,
+  // a tick for a plate already sailing to someone, and a tapped bubble showing its recipe.
+  await page.evaluate(() => {
+    const g = window.__game;
+    g.botPlay(false);
+    const st = g.state;
+    const svc = st.svc;
+    st.sel = 0;
+    Object.assign(svc.otters[0], { hold: { k: 'salmon' }, queue: [], goal: null, act: null, path: [] });
+    for (const t of svc.grid) if (t.k === 'board') t.item = null;
+    let cu = svc.customers.find((c) => c.phase === 'wait' && c.seat >= 0);
+    if (!cu) {
+      cu = { id: svc.nextId++, sp: 'seal', seat: svc.seats.indexOf(null), phase: 'wait', t: 0, order: [], ate: [], pat: 60, patMax: 60, huff: false };
+      svc.seats[cu.seat] = cu.id;
+      svc.customers.push(cu);
+    }
+    cu.order.push('salmon_nigiri');
+    cu.pat = cu.patMax;
+    Object.assign(svc.rafts.find((r) => !r.plate), { plate: { plate: true, parts: ['rice', 'salmon_s'] }, laps: 0 });
+  });
+  await advance(page, 1 / 60);
+  const aids = await page.evaluate(() => window.__game.aids());
+  if (aids.board !== !phone) throw new Error(`the menu board should ${phone ? 'not ' : ''}show (${JSON.stringify(aids)})`);
+  if (aids.glow < 1) throw new Error(`nothing glows for raw salmon in Pebble's paws (${JSON.stringify(aids)})`);
+  if (aids.ticks < 1 || aids.bubbles < 1) throw new Error(`no tick for the sailing salmon nigiri (${JSON.stringify(aids)})`);
+  const bubble = await page.evaluate(() => window.__game.bubblePoint(0));
+  await page.mouse.click(bubble.x, bubble.y);
+  await advance(page, 1 / 60);
+  const recipe = await page.evaluate(() => window.__game.aids().recipe);
+  if (recipe !== bubble.dish) throw new Error(`tapping the ${bubble.dish} bubble showed ${recipe}`);
+  await page.waitForTimeout(400); // the tap ripples fade; the recipe slip stays 2.8 s
+  await shot('reading-aids');
+  await audit('reading-aids');
+  log(`reading aids: ${phone ? 'no board on a phone' : 'menu board'}, ${aids.glow} glowing, ${aids.ticks} ticked, a tapped bubble showed its recipe`);
   // Enough in the purse that rent is paid and the week goes on.
   await page.evaluate(() => {
     window.__game.state.purse = 200;

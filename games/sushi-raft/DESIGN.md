@@ -60,6 +60,24 @@ and a lot of "can you pass me the salmon?". Five evenings make a week, and rent 
 - **Keyboard:** arrow keys move a cursor around the kitchen and Space or Enter queues the tile.
   Tab switches otter, P pauses, M mutes.
 
+## Reading aids (added 2026-10-24)
+Three small helps that keep the kitchen readable mid-evening, the same solo and online:
+- **The glow:** once your otter is idle with something in its paws, the stations where a tap
+  moves it toward a dish light up (lantern light on the top, a ring and halo in the otter's
+  colour): the board for raw fish, the plate stack or a waiting plate for a slice, whatever a plate
+  still needs, the dock for a finished dish, the bin for burnt food. In the split kitchen, when the
+  next step is on the other side, the empty pass counters glow. `nextStops()` in the engine uses the
+  same tests as the otter's own actions, and a test taps every glowing station on random bot nights
+  to check that each one moves the dish on. Off during Monday's coached dish.
+- **The ticks:** a dish already sailing to a customer (or waiting at the dock) fades in their
+  bubble, with a canal-teal tick. `onTheWay()` walks the rafts along the far lane in order and
+  knows that a customer who is walking in or eating can't grab (a test plays on with no new plates
+  and checks that every tick comes true; gulls are left out of the prediction).
+- **The recipes:** a hinoki menu board on two posts in the harbour, left of the pier, wherever the
+  screen has room: each dish on its rim-coloured plate, its name and its parts, with a vermilion
+  count of how many the bar is still waiting for. On a phone (no room) you tap a bubble and the
+  recipe shows on a paper slip for about three seconds; a hint says so once.
+
 ## Online
 The host's browser is authoritative (`js/net-play.js`): it sends a snapshot of the state about
 15 times a second, and the guest sends taps. A guest that reloads gets their otter back by token.

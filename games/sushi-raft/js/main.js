@@ -106,6 +106,7 @@ function setScreen() {
     game.screen = s;
     app.dataset.screen = s;
     renderPanel();
+    R.recipe = null; // a recipe slip belongs to the evening it was asked for
     if (s !== 'service') {
       bannerEl.classList.remove('show');
       // Tips and the coach belong to the night.
@@ -540,6 +541,11 @@ function onEvent(e, st) {
     }
     case 'arrive':
       profile.seen[e.sp] = true;
+      // Narrow screens have no menu board: say once how to look a recipe up.
+      if (!R.boardShown && !game.recipeHinted && !(game.coach && game.coach.step < COACH.length)) {
+        game.recipeHinted = true;
+        hint('recipe', 'Tap an order bubble to see what goes in that dish.', 3200);
+      }
       break;
     case 'grab': {
       audio.nom(e.sp);
@@ -1209,9 +1215,19 @@ const loop = createLoop({
       }
     }
     game.shake = Math.max(0, game.shake - (dt || 0) * 10);
-    R.draw(st, game.t, { me: game.me, solo: soloBoth() || game.mode === 'title', coach: coachTile(), shake: reducedMotion() ? 0 : game.shake, guest: isGuest(), morning: screen() === 'morning' });
+    const playing = game.mode !== 'title' && !!game.st;
+    R.draw(st, game.t, { me: game.me, solo: soloBoth() || game.mode === 'title', coach: coachTile(), shake: reducedMotion() ? 0 : game.shake, guest: isGuest(), morning: screen() === 'morning', board: playing, glow: playing ? glowOtter() : null, still: reducedMotion() });
   },
 });
+
+/** Whose next stops light up: my otter (the selected one when running both), once it's idle with something in its paws. Not during the coached first dish. */
+function glowOtter() {
+  const svc = game.st?.svc;
+  if (screen() !== 'service' || !svc || (game.coach && game.coach.step < COACH.length)) return null;
+  const oi = soloBoth() ? game.st.sel : game.me;
+  const o = svc.otters[oi];
+  return o?.hold && !o.queue.length && !o.goal ? oi : null;
+}
 
 /** Screens change the canvas's box (the panel comes and goes): match it before drawing or hit-testing. */
 function syncSize() {
@@ -1242,6 +1258,12 @@ stage.addEventListener('pointerdown', (ev) => {
   const p = R.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
   const hit = R.hit(game.st, p.x, p.y);
   if (!hit) return;
+  if (hit.kind === 'bubble') {
+    // Only for the reader: what goes in that dish.
+    R.showRecipe(hit.dish, hit);
+    audio.click();
+    return;
+  }
   if (game.paused || (isGuest() && game.snapPaused)) return;
   if (hit.kind === 'gull') act('shoo', { id: hit.id });
   else if (hit.kind === 'otter') {
@@ -1449,6 +1471,7 @@ function helpHTML() {
         <li><canvas class="ico small" data-up="lanterns" width="40" height="40"></canvas><span><b>Send it out from the dock.</b> A raft carries it round the canal and whoever wants it grabs it. Five plates in a row light the lanterns: a Lantern Rush, when plates count double.</span></li>
         <li><canvas class="ico small" data-sp="puffer" data-mood="cross" width="40" height="40"></canvas><span><b>Mind their patience.</b> The bar under each bubble runs down. Fed quickly, they tip. Left too long, they leave in a huff, and the lanterns go out.</span></li>
       </ul>
+      <p><b>Help on the pier:</b> when your otter is holding something, the stations it can go to next light up in your otter’s colour. A tick in a customer’s bubble means that dish is already sailing to them. The menu board beside the pier shows what goes in every dish, and on a phone you can tap a bubble to see a dish’s recipe.</p>
       <p><b>Rent is due every night.</b> Takings go in the purse, rent comes out after closing. In the morning, spend on new dishes (dearer plates) or kitchen upgrades, or keep it for rent. Survive five nights, up to Friday’s Lantern Festival.</p>
       <p><b>Together:</b> each phone runs one otter. Some nights the kitchen is split down the middle, so you pass things to each other over the counter. <b>Solo:</b> a computer Kelp helps you, or you run both otters yourself: then a tap goes to whichever otter can reach it, or the selected one (tap an otter, or press Tab).</p>
       <p class="fine">Keyboard: arrow keys and Space queue a station, Tab switches otter, Esc clears, P pauses, M mutes.</p>
@@ -1573,6 +1596,20 @@ markReady({
     game.bot = on ? createBot({ otters: isSolo() ? [0, 1] : [game.me], skill, seed: 9 }) : null;
   },
   coachStep: () => game.coach?.step ?? null,
+  /** What the reading aids show right now: the board, the glow, the open recipe slip, the ticks. */
+  aids() {
+    const ways = game.st?.svc ? E.onTheWay(game.st) : {};
+    return { board: R.boardShown, glow: R.glowN, recipe: R.recipe?.dish ?? null, bubbles: R.bubbleHits.length, ticks: Object.values(ways).flat().length };
+  },
+  /** Where order bubble `i` (as last drawn) shows its first dish, in client px, for tapping like a player. */
+  bubblePoint(i = 0) {
+    syncSize();
+    const b = R.bubbleHits[i];
+    if (!b) return null;
+    const rect = stage.getBoundingClientRect();
+    const p = R.toScreen(b.dishes[0].x, b.y + b.h / 2);
+    return { x: rect.left + p.x, y: rect.top + p.y, dish: b.dishes[0].d };
+  },
   /** Where tile (c, r) is on screen (client px), for clicking the canvas like a player. */
   tilePoint(c, r) {
     syncSize();

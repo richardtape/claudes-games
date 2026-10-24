@@ -990,5 +990,93 @@ export function demand(st) {
   return want;
 }
 
+/** Does tapping tile `t` with `H` in paws move it toward a dish? (The same tests as interact().) */
+function takes(st, H, t) {
+  const C = t.item;
+  if (!H.plate) {
+    if (H.k.endsWith('_b')) return t.k === 'bin';
+    const prep = PREP[H.k];
+    if (prep) return t.k === prep.at && !C;
+    if (t.k === 'plates') return canAdd(st, { parts: [] }, H.k);
+    return t.k === 'counter' && !!C?.plate && canAdd(st, C, H.k);
+  }
+  if (dishOf(st, H)) return t.k === 'dock' && !C;
+  if (t.k === 'crate') return canAdd(st, H, t.ing);
+  if (t.k === 'cooker') return t.servings > 0 && !(t.cook > 0) && canAdd(st, H, 'rice');
+  if (t.k === 'board' || t.k === 'pan' || t.k === 'fryer' || t.k === 'counter') return !!C && !C.plate && !PREP[C.k] && canAdd(st, H, C.k);
+  return false;
+}
+
+/**
+ * Where the thing otter `oi` holds goes next: the tiles where a tap moves it toward a dish (a
+ * board or pan for raw food, the plate stack or a plate on a counter for a part, whatever a plate
+ * still needs, the dock for a finished dish, the bin for burnt food). When every such tile is on
+ * the far side of a split kitchen, the empty counters both otters reach (the pass) instead.
+ */
+export function nextStops(st, oi) {
+  const svc = st.svc;
+  const H = svc?.otters[oi]?.hold;
+  if (!H) return [];
+  const all = [];
+  const pass = [];
+  svc.grid.forEach((t, i) => {
+    const c = i % COLS;
+    const r = Math.floor(i / COLS);
+    if (takes(st, H, t)) all.push({ c, r });
+    else if (t.k === 'counter' && !t.item && canReach(svc, 0, c, r) && canReach(svc, 1, c, r)) pass.push({ c, r });
+  });
+  const mine = all.filter((p) => canReach(svc, oi, p.c, p.r));
+  return mine.length || !all.length ? mine : pass;
+}
+
+/**
+ * Which customer will grab each finished plate on the canal or waiting at a dock:
+ * { [customer id]: [dish, ...] }. Rafts meet the seats in turn along the far lane; a customer
+ * grabs only while waiting (not walking in or eating), before their patience runs out, and a plate
+ * goes soggy after CANAL.laps laps. Gulls aren't foreseen.
+ */
+export function onTheWay(st) {
+  const svc = st.svc;
+  if (!svc) return {};
+  const v = CANAL.speed * svc.P.canal;
+  const plates = [];
+  svc.rafts.forEach((raft, i) => {
+    const dish = raft.plate && dishOf(st, raft.plate);
+    const s = raftS(svc, i);
+    if (dish) plates.push({ dish, s, wait: 0, left: CANAL_LENGTH - s + (CANAL.laps - 1 - raft.laps) * CANAL_LENGTH });
+  });
+  svc.grid.forEach((t, i) => {
+    const dish = t.k === 'dock' && t.item && dishOf(st, t.item);
+    const s = sNear((i % COLS) + 0.5);
+    if (dish) plates.push({ dish, s, wait: RAFT_GAP / 2 / v, left: CANAL_LENGTH - s + (CANAL.laps - 1) * CANAL_LENGTH });
+  });
+  const who = new Map();
+  const meets = [];
+  for (const cu of svc.customers) {
+    if (cu.seat < 0 || !['wait', 'walk', 'eat'].includes(cu.phase)) continue;
+    who.set(cu, { ready: cu.phase === 'wait' ? 0 : cu.t, pat: cu.pat, want: cu.order.slice() });
+    const seat = sFar(seatX(cu.seat));
+    plates.forEach((p, pi) => {
+      if (!cu.order.includes(p.dish)) return;
+      for (let d = (seat - p.s + CANAL_LENGTH) % CANAL_LENGTH; d < p.left; d += CANAL_LENGTH) meets.push({ pi, cu, at: p.wait + d / v });
+    });
+  }
+  meets.sort((a, b) => a.at - b.at);
+  const taken = new Set();
+  const out = {};
+  for (const m of meets) {
+    const c = who.get(m.cu);
+    const dish = plates[m.pi].dish;
+    const k = c.want.indexOf(dish);
+    if (taken.has(m.pi) || k < 0 || m.at < c.ready || c.pat - (m.at - c.ready) <= 0) continue;
+    taken.add(m.pi);
+    c.want.splice(k, 1);
+    c.pat = Math.min(m.cu.patMax, c.pat - (m.at - c.ready) + m.cu.patMax * TIMES.patienceBack);
+    c.ready = m.at + TIMES.eat;
+    (out[m.cu.id] ||= []).push(dish);
+  }
+  return out;
+}
+
 /** The week's score so far (coins taken). */
 export const score = (st) => st.earned + (st.phase === 'service' ? st.svc.takings : 0);

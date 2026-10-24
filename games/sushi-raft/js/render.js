@@ -10,6 +10,7 @@ const VIEW = { x0: -0.85 * T, x1: 6.85 * T, y0: -4.55 * T, y1: 6.2 * T };
 export const VIEW_W = VIEW.x1 - VIEW.x0;
 export const VIEW_H = VIEW.y1 - VIEW.y0;
 const FONT = '"Mochiy Pop One", "Zen Maru Gothic", system-ui, sans-serif';
+const BODY = '"Zen Maru Gothic", system-ui, sans-serif';
 
 const COL = {
   wood: '#e8c896',
@@ -64,6 +65,12 @@ export function createRenderer(canvas) {
     cursor: null,
     kitchenCache: null,
     kitchenKey: '',
+    boardCache: null,
+    boardKey: '',
+    boardShown: false, // the recipe board fits beside the pier (wide screens)
+    bubbleHits: [], // order bubbles as last drawn, for taps: { x, y, w, h, cx, dishes: [{ d, x }] }
+    recipe: null, // a recipe card on show after a bubble tap: { dish, x, top, t0 }
+    glowN: 0, // stations glowing this frame (tests)
   };
 
   R.resize = function () {
@@ -93,6 +100,11 @@ export function createRenderer(canvas) {
     const svc = st?.svc;
     if (!svc) return null;
     for (const g of svc.gulls) if (g.state === 'fly' && Math.hypot(g.x * T - x, g.y * T - y) < 0.75 * T) return { kind: 'gull', id: g.id };
+    for (const b of R.bubbleHits) {
+      if (x < b.x - 4 || x > b.x + b.w + 4 || y < b.y - 4 || y > b.y + b.h + 8) continue;
+      const near = b.dishes.reduce((best, d) => (Math.abs(d.x - x) < Math.abs(best.x - x) ? d : best));
+      return { kind: 'bubble', dish: near.d, x: b.cx, top: b.y };
+    }
     for (const o of svc.otters) if (Math.hypot((o.drawX ?? o.x) * T - x, (o.drawY ?? o.y) * T - 6 - y) < 0.36 * T) return { kind: 'otter', i: o.i };
     const c = Math.floor(x / T);
     const r = Math.floor(y / T);
@@ -925,6 +937,9 @@ export function createRenderer(canvas) {
 
   function bubbles(st, t) {
     const svc = st.svc;
+    // Dishes already sailing to someone fade in their bubble, with a tick.
+    const ways = E.onTheWay(st);
+    R.bubbleHits = [];
     for (const cu of svc.customers) {
       if (cu.seat < 0 || cu.phase === 'leave' || cu.phase === 'walk' || !cu.order.length) continue;
       const { x } = customerPos(cu, svc);
@@ -955,17 +970,27 @@ export function createRenderer(canvas) {
       ctx.lineTo(x + 4, by + h - 0.5);
       ctx.fillStyle = urgent ? '#fff1ea' : '#fffdf6';
       ctx.fill();
+      const coming = (ways[cu.id] || []).slice();
+      const hit = { x: bx, y: by, w, h, cx: x, dishes: [] };
       cu.order.forEach((d, j) => {
         const col = j % per;
         const row = Math.floor(j / per);
         const dx = bx + 4 + col * (s + 3) + (s + 3) / 2;
         const dy = by + 5 + row * (s * 0.8 + 3) + s * 0.4;
+        const k = coming.indexOf(d);
+        if (k >= 0) coming.splice(k, 1);
+        ctx.save();
+        if (k >= 0) ctx.globalAlpha = 0.4;
         ctx.fillStyle = rimOf(d);
         ctx.beginPath();
         ctx.ellipse(dx, dy + s * 0.18, s * 0.5, s * 0.22, 0, 0, Math.PI * 2);
         ctx.fill();
         drawDish(ctx, d, dx, dy, s);
+        ctx.restore();
+        if (k >= 0) tick(dx + s * 0.34, dy + s * 0.2, Math.max(4.6, s * 0.24));
+        hit.dishes.push({ d, x: dx });
       });
+      R.bubbleHits.push(hit);
       // patience: a bar along the bubble's foot
       ctx.fillStyle = 'rgba(42,34,51,.15)';
       rr(ctx, bx + 5, by + h - 5, w - 10, 3, 1.5);
@@ -1086,9 +1111,209 @@ export function createRenderer(canvas) {
     ctx.setLineDash([]);
   }
 
-  /** Draw a frame. `opts`: { me (seat), solo, coach: {c, r} | null, demo } */
+  // ── reading aids: the station glow, the ticks, the recipes ──
+
+  /** A canal-teal disc with a white tick: this dish is already on its way to them. */
+  function tick(x, y, r) {
+    ctx.save();
+    ctx.fillStyle = COL.teal;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.lineWidth = Math.max(1.5, r * 0.34);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.45, y + r * 0.02);
+    ctx.lineTo(x - r * 0.1, y + r * 0.38);
+    ctx.lineTo(x + r * 0.5, y - r * 0.36);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Where the thing in otter `oi`'s paws goes next: those stations' tops washed in its colour. */
+  function stopGlow(st, t, oi, still) {
+    const stops = E.nextStops(st, oi);
+    R.glowN = stops.length;
+    if (!stops.length) return;
+    const [lr, lg, lb] = hexToRgb(OTTERS[oi].light);
+    const pulse = still ? 1 : 0.75 + 0.25 * Math.sin(t * 4);
+    ctx.save();
+    for (const p of stops) {
+      const x = p.c * T;
+      const y = p.r * T;
+      // Lantern light on the station's top, ringed in the otter's colour with a soft halo.
+      ctx.fillStyle = `rgba(255,246,214,${0.55 * pulse})`;
+      rr(ctx, x + 2, y + 2, T - 4, T - 14, 7);
+      ctx.fill();
+      ctx.shadowColor = `rgba(${lr},${lg},${lb},${0.9 * pulse})`;
+      ctx.shadowBlur = 10 * R.scale * R.dpr;
+      ctx.strokeStyle = `rgba(${lr},${lg},${lb},${0.95 * pulse})`;
+      ctx.lineWidth = 3;
+      rr(ctx, x + 1.5, y + 1.5, T - 3, T - 5, 8);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+    }
+    ctx.restore();
+  }
+
+  // A recipe row: the dish on its rim-coloured plate, its name, then its parts in a row.
+  const ROW_H = 38;
+  const PART_DX = 20;
+  const NAME_FONT = `700 10.5px ${BODY}`;
+  function rowWidth(dish) {
+    ctx.font = NAME_FONT;
+    return Math.max(42 + ctx.measureText(DISHES[dish].name).width, 51 + (DISHES[dish].parts.length - 1) * PART_DX + 9);
+  }
+  function recipeRow(g, dish, x, y) {
+    const parts = DISHES[dish].parts;
+    drawPlateWithFood(g, x + 18, y + 3, 32, { plate: true, parts: parts.slice() }, 1, [dish]);
+    g.font = NAME_FONT;
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    g.fillStyle = INK;
+    g.fillText(DISHES[dish].name, x + 42, y - 8);
+    parts.forEach((part, i) => {
+      const px = x + 51 + i * PART_DX;
+      const py = y + 9;
+      g.fillStyle = 'rgba(251,246,234,.95)';
+      g.strokeStyle = 'rgba(120,80,40,.35)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.arc(px, py, 8.5, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+      drawIngredient(g, part, px, py, 15);
+    });
+  }
+
+  /** The menu board on its posts in the harbour, left of the pier, wherever the screen has room. */
+  function menuBoard(st, k, wants) {
+    const menu = st.menu;
+    const w = Math.max(...menu.map(rowWidth)) + 46;
+    const h = 34 + menu.length * ROW_H + 8;
+    const x1 = -0.45 * T;
+    const x0 = x1 - w;
+    const y0 = 0.35 * T;
+    R.boardShown = menu.length > 0 && x0 >= R.world.x0 + 10;
+    if (!R.boardShown) return;
+    // posts down into the water
+    ctx.fillStyle = mix('#5a3d2a', '#2d2333', k * 0.5);
+    for (const px of [x0 + 20, x1 - 27]) ctx.fillRect(px, y0 + h - 6, 7, 30);
+    ctx.strokeStyle = `rgba(255,255,255,${0.22 - k * 0.08})`;
+    ctx.lineWidth = 1.2;
+    for (const px of [x0 + 23.5, x1 - 23.5]) {
+      ctx.beginPath();
+      ctx.ellipse(px, y0 + h + 24, 9, 2.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const key = `${menu.join()}|${R.scale}|${R.dpr}`;
+    const pad = 6;
+    const s = R.scale * R.dpr;
+    if (R.boardKey !== key || !R.boardCache) {
+      const off = R.boardCache || document.createElement('canvas');
+      off.width = Math.ceil((w + pad * 2) * s);
+      off.height = Math.ceil((h + pad * 2) * s);
+      const g = off.getContext('2d');
+      g.setTransform(s, 0, 0, s, pad * s, pad * s);
+      g.clearRect(-pad, -pad, w + pad * 2, h + pad * 2);
+      g.fillStyle = 'rgba(40,20,10,.28)';
+      rr(g, 3, 5, w, h, 10);
+      g.fill();
+      g.fillStyle = COL.woodFront;
+      rr(g, 0, 0, w, h, 10);
+      g.fill();
+      g.fillStyle = COL.wood;
+      rr(g, 5, 5, w - 10, h - 10, 7);
+      g.fill();
+      g.strokeStyle = COL.woodLine;
+      g.lineWidth = 1;
+      for (let yy = 14; yy < h - 8; yy += 11) {
+        g.beginPath();
+        g.moveTo(9, yy);
+        g.lineTo(w - 9, yy + ((yy * 7) % 3) - 1);
+        g.stroke();
+      }
+      g.font = `15px ${FONT}`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = COL.indigo;
+      g.fillText('Menu', w / 2, 20);
+      g.strokeStyle = 'rgba(120,80,40,.3)';
+      g.lineWidth = 1.2;
+      g.beginPath();
+      g.moveTo(14, 33);
+      g.lineTo(w - 14, 33);
+      g.stroke();
+      menu.forEach((d, i) => recipeRow(g, d, 12, 34 + i * ROW_H + ROW_H / 2));
+      R.boardCache = off;
+      R.boardKey = key;
+    }
+    ctx.drawImage(R.boardCache, x0 - pad, y0 - pad, R.boardCache.width / s, R.boardCache.height / s);
+    if (k > 0.02) {
+      ctx.fillStyle = `rgba(29,35,80,${k * 0.3})`;
+      rr(ctx, x0, y0, w, h, 10);
+      ctx.fill();
+    }
+    // How many of each dish the bar is still waiting for (beyond what's already sailing).
+    menu.forEach((d, i) => {
+      const n = wants[d] || 0;
+      if (n <= 0) return;
+      const y = y0 + 34 + i * ROW_H + ROW_H / 2;
+      ctx.fillStyle = COL.vermilion;
+      rr(ctx, x1 - 31, y - 9, 24, 18, 9);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = `11px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`×${n}`, x1 - 19, y + 0.5);
+    });
+  }
+
+  /** A tapped order bubble shows that dish's recipe on a slip for a moment. */
+  R.showRecipe = (dish, at) => (R.recipe = { dish, x: at.x, top: at.top, t0: performance.now() / 1000 });
+  const RECIPE_SECS = 2.8;
+  function recipeCard(now) {
+    const c = R.recipe;
+    if (!c) return;
+    const age = now - c.t0;
+    if (age > RECIPE_SECS) {
+      R.recipe = null;
+      return;
+    }
+    const w = rowWidth(c.dish) + 22;
+    const h = 46;
+    const W0 = R.world;
+    const x = clamp(c.x - w / 2, W0.x0 + 4, W0.x1 - w - 4);
+    let y = c.top - h - 10;
+    if (y < W0.y0 + 4) y = BAR.bottom + 6;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, age / 0.12, (RECIPE_SECS - age) / 0.4));
+    ctx.fillStyle = 'rgba(42,34,51,.25)';
+    rr(ctx, x + 1, y + 3, w, h, 10);
+    ctx.fill();
+    ctx.fillStyle = '#fffdf6';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.4;
+    rr(ctx, x, y, w, h, 10);
+    ctx.fill();
+    ctx.stroke();
+    recipeRow(ctx, c.dish, x + 11, y + h / 2);
+    ctx.restore();
+  }
+
+  /**
+   * Draw a frame. `opts`: { me (seat), solo, coach: {c, r} | null, morning, board (show the menu
+   * board if it fits), glow (an otter whose next stops light up, or null), still (reduced motion) }
+   */
   R.draw = function (st, t, opts = {}) {
     const now = performance.now() / 1000;
+    R.glowN = 0;
     ctx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
     ctx.clearRect(0, 0, R.cssW, R.cssH);
     ctx.fillStyle = '#1b2440';
@@ -1104,11 +1329,14 @@ export function createRenderer(canvas) {
     customers(st || {}, t, night);
     bar(st, t, night);
     water(svc, t, night);
+    if (opts.board && st?.menu) menuBoard(st, night, svc && !opts.morning ? E.demand(st) : {});
+    else R.boardShown = false;
     if (svc) {
       rafts(st, t);
       const base = kitchenBase(svc);
       const pad = R.kitchenPad;
       ctx.drawImage(base, -pad, -pad, base.width / k, base.height / k);
+      if (opts.glow != null) stopGlow(st, t, opts.glow, opts.still);
       stations(st, t);
       if (opts.coach) coachRing(opts.coach, t);
       pins(st, opts.me);
@@ -1119,6 +1347,7 @@ export function createRenderer(canvas) {
       if (svc.rush > 0) rushGlow(t, svc.rush);
     }
     effects(now);
+    recipeCard(now);
     ctx.restore();
   };
 
@@ -1137,7 +1366,9 @@ export function createRenderer(canvas) {
     g.addColorStop(0, `rgba(255,170,80,0)`);
     g.addColorStop(1, `rgba(255,140,60,${a})`);
     ctx.fillStyle = g;
-    ctx.fillRect(VIEW.x0, VIEW.y0, VIEW_W, VIEW_H);
+    // The whole visible harbour, not just the scene's box (wide screens showed its edges).
+    const W0 = R.world;
+    ctx.fillRect(W0.x0 - 4, W0.y0 - 4, W0.x1 - W0.x0 + 8, W0.y1 - W0.y0 + 8);
     ctx.restore();
   }
 

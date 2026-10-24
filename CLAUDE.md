@@ -847,6 +847,19 @@ and new files.
   checks never bought anything. Rich found it by playing (2026-10-24). An engine test now asserts that
   event ids rise by exactly one through a bot-played week with purchases; give any event or message
   stream that invariant test.
+- Test a prediction by letting it come true: Sushi Raft's `onTheWay()` (which customer each sailing
+  plate reaches) is checked by copying bot-night states, playing on with no new input and comparing
+  the grabs with the ticks. Turn off in the copy what the prediction deliberately ignores (gulls
+  stole the plates and only 112 of 245 ticks came true; without them all did). A hint like the
+  station glow is tested the same way: tap every glowing tile in a copy and check that the dish
+  moved on. The random nights still never sent two plates of one dish to one customer inside their
+  2.2 s of eating, so a planted bug there passed until a directed test covered it.
+- Short-lived canvas UI that runs on real time (Sushi Raft's 2.8 s recipe slip) outlives a smoke
+  test that skips animations, and showed on the next morning's screen. Clear transient UI when the
+  screen changes, then read the next screens' shots.
+- Overlays drawn to the scene's design box show its edges on wide screens: the Lantern Rush's orange
+  wash stopped at the box and left a light band over the harbour, unnoticed until the menu board sat
+  across it. Fill the visible world (`R.world`) instead.
 
 ## Games so far
 
