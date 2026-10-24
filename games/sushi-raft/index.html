@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sushi Raft</title>
+    <meta name="description" content="Two sea otters, one sushi canal: a co-op cooking game for two phones (or one)." />
+    <meta name="theme-color" content="#1b2440" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232f8b96'/><rect x='14' y='52' width='72' height='22' rx='6' fill='%23d8c27c'/><ellipse cx='50' cy='50' rx='30' ry='10' fill='%23fbf6ea' stroke='%23de4b3a' stroke-width='5'/><rect x='34' y='34' width='32' height='14' rx='7' fill='%23fbf6ea'/><path d='M30 38 Q50 22 70 38 L66 44 Q50 34 34 44 Z' fill='%23f4896b'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="app" data-screen="title">
+      <header id="bar">
+        <div id="home-slot"></div>
+        <div id="hud" hidden></div>
+        <div class="bar-buttons">
+          <button class="icon-btn" data-action="help" aria-label="How to play" title="How to play (?)">?</button>
+          <button class="icon-btn" id="btn-mute" data-action="mute" aria-label="Mute sound" aria-pressed="false" title="Sound (M)"><span class="spk" aria-hidden="true"></span></button>
+          <button class="icon-btn pause-btn" data-action="pause" aria-label="Pause" title="Pause (P)"><span class="bars" aria-hidden="true"></span></button>
+        </div>
+      </header>
+      <main id="main">
+        <div id="wrap">
+          <canvas id="stage" aria-label="The sushi bar. Tap a station to send your otter to it."></canvas>
+          <div id="coach" class="coach" role="status" hidden></div>
+          <div id="banner" class="banner" role="status"></div>
+          <div id="pause" class="pause" hidden></div>
+        </div>
+        <aside id="panel"></aside>
+      </main>
+      <footer id="foot" hidden></footer>
+    </div>
+    <div id="modal-root"></div>
+  </body>
+</html>

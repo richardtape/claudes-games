@@ -333,6 +333,9 @@ body[data-screen='title'] .mark {
 /* ── title ──────────────────────────────────────────────────────────────── */
 .title-screen {
   flex: 1;
+  /* The spy and the poster's bars bleed past the edge on phones: clip them there rather than let
+     the browser zoom the whole page out to fit (found by check.mjs once it measured the real viewport). */
+  overflow-x: clip;
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(280px, 380px);
   gap: 32px;

@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sushi Raft art preview</title>
+    <meta name="description" content="Every drawing in js/art.js, at game sizes, on the game's backgrounds." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦦</text></svg>" />
+    <style>
+      body { margin: 0; background: #1b1f2e; color: #eee; font: 13px system-ui, sans-serif; }
+      p { margin: 8px 12px; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <p>Sushi Raft art preview. <code>?t=1.3</code> sets the clock, <code>?anim=1</code> animates.</p>
+    <canvas id="c"></canvas>
+    <script type="module">
+      import {
+        drawOtter, drawFloatingOtters, drawCustomer, drawGull, drawIngredient, drawDish, drawPlate,
+        SPECIES, INGREDIENTS, DISHES, INK,
+      } from '../js/art.js';
+
+      const params = new URLSearchParams(location.search);
+      const T0 = Number(params.get('t') || 1.3);
+      const ANIM = params.get('anim') === '1';
+      const W = 1400;
+      const H = 2750;
+      const cv = document.getElementById('c');
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = W * dpr;
+      cv.height = H * dpr;
+      cv.style.width = W + 'px';
+      cv.style.height = H + 'px';
+      const ctx = cv.getContext('2d');
+
+      const WOOD = '#e8c896';
+      const DUSK = '#2c3f66';
+      const SEA = '#1d3a55';
+      const MOODS = ['wait', 'eager', 'eating', 'happy', 'love', 'cross', 'leaving'];
+
+      function label(text, x, y, col = INK, size = 11) {
+        ctx.save();
+        ctx.fillStyle = col;
+        ctx.font = `${size}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+      function heading(text, x, y, col) {
+        ctx.save();
+        ctx.fillStyle = col;
+        ctx.font = 'bold 14px system-ui, sans-serif';
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+      function band(y, h, col) {
+        ctx.fillStyle = col;
+        ctx.fillRect(0, y, W, h);
+      }
+      function counter(x, y, w) {
+        ctx.fillStyle = '#e8c896';
+        ctx.fillRect(x, y, w, 14);
+        ctx.fillStyle = '#c9a26a';
+        ctx.fillRect(x, y + 14, w, 4);
+      }
+
+      const OTTER_STATES = [
+        ['idle', {}],
+        ['walk a', { walk: 1, tOff: 0.1 }],
+        ['walk b', { walk: 1, tOff: 0.25 }],
+        ['chop', { work: 'chop' }],
+        ['stir', { work: 'stir' }],
+        ['hold plate', { holding: 'plate' }],
+        ['hold salmon', { holding: 'salmon' }],
+        ['happy', { mood: 'happy' }],
+        ['oops', { mood: 'oops' }],
+        ['wave', { mood: 'wave' }],
+        ['selected', { selected: true }],
+        ['facing -1', { facing: -1, walk: 1, tOff: 0.18 }],
+        ['wave -1', { facing: -1, mood: 'wave' }],
+      ];
+
+      function draw(t) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        let y = 0;
+
+        // Otters on the kitchen wood.
+        band(y, 520, WOOD);
+        heading('Otters s=56', 12, y + 20, INK);
+        for (const [row, who] of [[0, 'pebble'], [1, 'kelp']]) {
+          for (let i = 0; i < OTTER_STATES.length; i++) {
+            const [name, st] = OTTER_STATES[i];
+            const x = 70 + i * 100;
+            const fy = y + 105 + row * 115;
+            const o = { who, t: t + (st.tOff ?? i * 0.37), facing: st.facing ?? 1, walk: st.walk || false,
+              work: st.work || null, holding: !!st.holding, mood: st.mood || 'idle', selected: !!st.selected };
+            const h = drawOtter(ctx, x, fy, 56, o);
+            if (st.holding === 'plate') {
+              drawPlate(ctx, h.hx, h.hy, 56 * 0.55, '#de4b3a');
+              drawDish(ctx, 'salmon_nigiri', h.hx, h.hy - 3, 56 * 0.42);
+            } else if (st.holding) {
+              drawIngredient(ctx, 'salmon', h.hx, h.hy, 56 * 0.55);
+            }
+            label(name, x, fy + 16);
+          }
+        }
+        heading('Otters s=40', 12, y + 270, INK);
+        for (const [row, who] of [[0, 'pebble'], [1, 'kelp']]) {
+          for (let i = 0; i < OTTER_STATES.length; i++) {
+            const [name, st] = OTTER_STATES[i];
+            const x = 60 + i * 75;
+            const fy = y + 340 + row * 85;
+            const o = { who, t: t + (st.tOff ?? i * 0.37), facing: st.facing ?? 1, walk: st.walk || false,
+              work: st.work || null, holding: !!st.holding, mood: st.mood || 'idle', selected: !!st.selected };
+            const h = drawOtter(ctx, x, fy, 40, o);
+            if (st.holding === 'plate') {
+              drawPlate(ctx, h.hx, h.hy, 40 * 0.55, '#2f8b96');
+              drawDish(ctx, 'kappa_maki', h.hx, h.hy - 2, 40 * 0.42);
+            } else if (st.holding) {
+              drawIngredient(ctx, 'egg_c', h.hx, h.hy, 40 * 0.55);
+            }
+            label(name, x, fy + 14, INK, 10);
+          }
+        }
+        // A pair side by side at real size for "can I tell them apart?"
+        heading('Pair', 1010, y + 270, INK);
+        drawOtter(ctx, 1060, y + 340, 40, { who: 'pebble', t, mood: 'idle' });
+        drawOtter(ctx, 1110, y + 340, 40, { who: 'kelp', t: t + 1, mood: 'idle', facing: -1 });
+        drawOtter(ctx, 1180, y + 340, 28, { who: 'pebble', t, mood: 'happy' });
+        drawOtter(ctx, 1215, y + 340, 28, { who: 'kelp', t: t + 1, mood: 'happy' });
+        // Big ones for detail.
+        drawOtter(ctx, 1150, y + 500, 140, { who: 'pebble', t, mood: 'idle' });
+        drawOtter(ctx, 1300, y + 500, 140, { who: 'kelp', t: t + 0.5, mood: 'wave' });
+        y += 520;
+
+        // Floating otters.
+        band(y, 260, SEA);
+        heading('Closing time: floating otters (s=56, s=100)', 12, y + 20, '#fff');
+        ctx.fillStyle = '#f6edc8';
+        ctx.beginPath();
+        ctx.arc(1300, y + 60, 34, 0, Math.PI * 2);
+        ctx.fill();
+        drawFloatingOtters(ctx, 200, y + 140, 56, t);
+        drawFloatingOtters(ctx, 650, y + 140, 100, t + 0.7);
+        drawFloatingOtters(ctx, 1100, y + 180, 70, t + 2.1);
+        y += 260;
+
+        // Customers.
+        band(y, 760, DUSK);
+        heading('Customers s=52', 12, y + 20, '#fff');
+        heading('s=36', 760, y + 20, '#fff');
+        for (let m = 0; m < MOODS.length; m++) {
+          label(MOODS[m], 130 + m * 84, y + 40, '#dfe6ff');
+          label(MOODS[m], 820 + m * 64, y + 40, '#dfe6ff', 10);
+        }
+        for (let i = 0; i < SPECIES.length; i++) {
+          const sp = SPECIES[i];
+          const by = y + 108 + i * 84;
+          const sz = sp === 'walrus' ? 62 : 52;
+          label(sp, 40, by - 20, '#dfe6ff');
+          for (let m = 0; m < MOODS.length; m++) {
+            const x = 130 + m * 84;
+            drawCustomer(ctx, x, by, sz, { species: sp, t: t + m * 0.31 + i * 0.17, mood: MOODS[m], puff: 0.4 });
+          }
+          counter(80, by, 600);
+          const by2 = y + 90 + i * 84;
+          for (let m = 0; m < MOODS.length; m++) {
+            const x = 820 + m * 64;
+            drawCustomer(ctx, x, by2, sp === 'walrus' ? 44 : 36, { species: sp, t: t + m * 0.31 + i * 0.17, mood: MOODS[m], puff: 0.4 });
+          }
+          counter(790, by2, 450);
+        }
+        y += 760;
+
+        // Puffer puff levels and gulls.
+        band(y, 200, DUSK);
+        heading('Puffer puff 0 / 0.5 / 1 (wait, cross)', 12, y + 20, '#fff');
+        let px = 60;
+        for (const mood of ['wait', 'cross']) {
+          for (const puff of [0, 0.5, 1]) {
+            drawCustomer(ctx, px, y + 140, 52, { species: 'puffer', t: t + puff, mood, puff });
+            label(`${mood} ${puff}`, px, y + 165, '#dfe6ff');
+            px += 80;
+          }
+        }
+        counter(20, y + 140, px - 40);
+        heading('Gulls s=64 and s=40', 560, y + 20, '#fff');
+        let gx = 600;
+        for (const state of ['fly', 'grab', 'flee']) {
+          drawGull(ctx, gx, y + 95, 64, { t: t + gx * 0.01, state });
+          if (state === 'grab') {
+            drawPlate(ctx, gx, y + 95 + 64 * 0.44, 40, '#de4b3a');
+            drawDish(ctx, 'tuna_nigiri', gx, y + 95 + 64 * 0.42, 30);
+          }
+          label(state, gx, y + 185, '#dfe6ff');
+          gx += 110;
+        }
+        for (const state of ['fly', 'grab', 'flee']) {
+          drawGull(ctx, gx, y + 100, 40, { t: t + gx * 0.01, state });
+          label(state, gx, y + 185, '#dfe6ff');
+          gx += 70;
+        }
+        // Big customers for detail.
+        y += 200;
+        band(y, 250, DUSK);
+        heading('Detail s=110', 12, y + 20, '#fff');
+        for (let i = 0; i < SPECIES.length; i++) {
+          const x = 80 + i * 160;
+          drawCustomer(ctx, x, y + 225, 110, { species: SPECIES[i], t: t + i, mood: i % 2 ? 'wait' : 'eager', puff: 0.6 });
+        }
+        counter(0, y + 225, W);
+        y += 250;
+
+        // Ingredients.
+        band(y, 240, WOOD);
+        heading('Ingredients s=36 and s=26', 12, y + 20, INK);
+        for (let i = 0; i < INGREDIENTS.length; i++) {
+          const x = 45 + i * 82;
+          drawIngredient(ctx, INGREDIENTS[i], x, y + 65, 36);
+          label(INGREDIENTS[i], x, y + 100, INK, 10);
+          drawIngredient(ctx, INGREDIENTS[i], x, y + 135, 26);
+          drawIngredient(ctx, INGREDIENTS[i], x, y + 195, 60);
+        }
+        y += 240;
+
+        // Dishes on plates.
+        band(y, 320, WOOD);
+        heading('Dishes on plates: s=44 and s=24 (plate 1.3x), and big', 12, y + 20, INK);
+        const rims = ['#de4b3a', '#2f8b96', '#f6cf4a', '#24335a', '#7a4fb0', '#3f7d4a', '#111111', '#c08a2a'];
+        for (let i = 0; i < DISHES.length; i++) {
+          const x = 60 + i * 165;
+          drawPlate(ctx, x, y + 75, 58, rims[i]);
+          drawDish(ctx, DISHES[i], x, y + 68, 44);
+          label(DISHES[i], x, y + 112, INK, 10);
+          drawPlate(ctx, x, y + 140, 32, rims[i]);
+          drawDish(ctx, DISHES[i], x, y + 136, 24);
+          drawPlate(ctx, x, y + 245, 120, rims[i]);
+          drawDish(ctx, DISHES[i], x, y + 230, 96);
+        }
+        y += 320;
+
+        // Blinks: the same hash as art.js finds the moment each character's eyes close.
+        band(y, 150, WOOD);
+        heading('Blinks (eyes half shut, shut) and odd inputs', 12, y + 20, INK);
+        const blinkAt = (seed, k, frac) => {
+          const hash = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+          return k * 3.7 + 0.3 + hash(k * 7.13 + seed) * 3.1 + frac * 0.18 - seed * 1.91;
+        };
+        let bx = 50;
+        for (const [who, seed] of [['pebble', 0], ['kelp', 1.7]]) {
+          for (const frac of [0.25, 0.5]) {
+            drawOtter(ctx, bx, y + 120, 56, { who, t: blinkAt(seed, 3, frac) });
+            label(`${who} ${frac}`, bx, y + 138, INK, 10);
+            bx += 80;
+          }
+        }
+        ctx.fillStyle = DUSK;
+        ctx.fillRect(bx - 30, y + 30, 520, 115);
+        for (const [sp, seed] of [['seal', 0.3], ['cat', 0.6], ['penguin', 1.1]]) {
+          for (const frac of [0.25, 0.5]) {
+            drawCustomer(ctx, bx + 10, y + 125, 52, { species: sp, t: blinkAt(seed, 4, frac) });
+            bx += 80;
+          }
+        }
+        // Unknown names must draw a fallback, never throw.
+        drawCustomer(ctx, bx + 40, y + 125, 40, { species: 'yeti', mood: 'nonsense' });
+        drawIngredient(ctx, 'mystery', bx + 100, y + 90, 30);
+        drawDish(ctx, 'mystery', bx + 150, y + 90, 30);
+        drawOtter(ctx, bx + 210, y + 120, 40, { who: 'nobody', mood: '?', work: '?' });
+        y += 150;
+      }
+
+      // State leak check: every export must leave the context exactly as it found it.
+      function snapshot() {
+        const m = ctx.getTransform();
+        return JSON.stringify({
+          m: [m.a, m.b, m.c, m.d, m.e, m.f], alpha: ctx.globalAlpha, comp: ctx.globalCompositeOperation,
+          fill: ctx.fillStyle, stroke: ctx.strokeStyle, lw: ctx.lineWidth, cap: ctx.lineCap, join: ctx.lineJoin,
+          dash: ctx.getLineDash(), blur: ctx.shadowBlur, shadow: ctx.shadowColor, font: ctx.font,
+          filter: ctx.filter, align: ctx.textAlign,
+        });
+      }
+      function leakCheck() {
+        ctx.setTransform(1.5, 0, 0.1, 1.5, 7, 9);
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#123456';
+        ctx.strokeStyle = '#654321';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'miter';
+        ctx.setLineDash([4, 2]);
+        const before = snapshot();
+        const leaks = [];
+        const calls = [
+          ['drawOtter', () => drawOtter(ctx, 50, 50, 56, { who: 'kelp', t: 2, walk: 1, work: 'chop', holding: true, mood: 'oops', selected: true })],
+          ['drawOtter wave', () => drawOtter(ctx, 50, 50, 56, { who: 'pebble', t: 2, mood: 'wave', facing: -1 })],
+          ['drawFloatingOtters', () => drawFloatingOtters(ctx, 50, 50, 56, 3)],
+          ['drawGull', () => ['fly', 'grab', 'flee'].forEach((state) => drawGull(ctx, 50, 50, 40, { t: 1, state }))],
+          ['drawPlate', () => drawPlate(ctx, 50, 50, 40, 'hsl(10 70% 50%)')],
+          ...SPECIES.flatMap((sp) => MOODS.map((mood) => [`drawCustomer ${sp} ${mood}`, () => drawCustomer(ctx, 50, 50, 52, { species: sp, t: 1.7, mood, puff: 0.7 })])),
+          ...INGREDIENTS.map((k) => [`drawIngredient ${k}`, () => drawIngredient(ctx, k, 50, 50, 30)]),
+          ...DISHES.map((k) => [`drawDish ${k}`, () => drawDish(ctx, k, 50, 50, 30)]),
+        ];
+        for (const [name, fn] of calls) {
+          fn();
+          const after = snapshot();
+          if (after !== before) leaks.push(`${name}: ${after} vs ${before}`);
+        }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+        return leaks;
+      }
+
+      // Frame cost: a busy evening's worth of drawing, repeated.
+      function bench(frames = 240) {
+        const off = document.createElement('canvas');
+        off.width = 780;
+        off.height = 1688;
+        const c = off.getContext('2d');
+        const t0 = performance.now();
+        for (let f = 0; f < frames; f++) {
+          const t = f / 60;
+          c.setTransform(2, 0, 0, 2, 0, 0);
+          c.clearRect(0, 0, 390, 844);
+          for (let i = 0; i < 12; i++) drawCustomer(c, 20 + i * 30, 120, 36, { species: SPECIES[i % 8], t: t + i, mood: MOODS[i % 7], puff: 0.5 });
+          for (let i = 0; i < 20; i++) {
+            drawPlate(c, 20 + (i % 10) * 36, 200 + Math.floor(i / 10) * 40, 34, '#de4b3a');
+            drawDish(c, DISHES[i % 8], 20 + (i % 10) * 36, 198 + Math.floor(i / 10) * 40, 26);
+          }
+          for (let i = 0; i < 8; i++) drawIngredient(c, INGREDIENTS[i * 2], 30 + i * 40, 400, 30);
+          drawOtter(c, 120, 600, 56, { who: 'pebble', t, walk: 1, holding: true });
+          drawOtter(c, 260, 600, 56, { who: 'kelp', t, work: 'chop', selected: true });
+          drawGull(c, 200, 300, 40, { t, state: 'fly' });
+        }
+        return (performance.now() - t0) / frames;
+      }
+      window.__artLeaks = leakCheck;
+      window.__artBench = bench;
+
+      function frame(now) {
+        draw(T0 + (ANIM ? now / 1000 : 0));
+        if (ANIM) requestAnimationFrame(frame);
+      }
+      try {
+        frame(0);
+        window.__artDone = true;
+      } catch (e) {
+        window.__artError = String(e && e.stack || e);
+        throw e;
+      }
+    </script>
+  </body>
+</html>

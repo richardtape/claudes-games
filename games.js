@@ -78,5 +78,26 @@ window.GAMES = [
     "color": "#2c3a6b",
     "emoji": "☄️",
     "draft": false
+  },
+  {
+    "slug": "sushi-raft",
+    "href": "games/sushi-raft/",
+    "thumb": "games/sushi-raft/thumb.jpg",
+    "title": "Sushi Raft",
+    "tagline": "Two sea otters, one sushi canal: cook together on two phones.",
+    "pitch": "Pebble and Kelp run a tiny sushi bar on a harbour pier, sending plates out on bamboo rafts to a seal, a crab who claps and a pufferfish who puffs up when kept waiting. Each of you runs one otter on your own phone: tap stations to slice, plate and launch, and shout for the salmon when the kitchen splits down the middle. Rent is due every night for five nights, up to Friday's Lantern Festival.",
+    "controls": "Tap a station and your otter runs to it (up to four in a row); tap your otter to clear. Online: one phone opens the pier, the other scans the code. Solo: with a computer Kelp, or run both.",
+    "number": 5,
+    "created": "2026-10-23",
+    "type": "management",
+    "genres": [
+      "co-op",
+      "kitchen",
+      "two phones",
+      "cozy chaos"
+    ],
+    "color": "#2f8b96",
+    "emoji": "🦦",
+    "draft": false
   }
 ];

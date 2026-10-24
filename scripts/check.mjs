@@ -142,7 +142,11 @@ const AUDIT_INIT = () => {
  * wider than the viewport. Returns a list of human-readable findings.
  */
 async function audit(page) {
-  return page.evaluate(() => {
+  // Compare against the configured viewport, not innerWidth: an isMobile page zooms out to fit
+  // overflowing content, so its innerWidth grows with the overflow and hides it (Sushi Raft's
+  // phone HUD pushed the whole grid to 754px and innerWidth followed).
+  const vw = page.viewportSize()?.width ?? null;
+  return page.evaluate((vw) => {
     const out = [];
     const nested = document.querySelectorAll('button button, button a[href], a[href] button, a[href] a[href], button input, button select');
     if (nested.length) out.push(`${nested.length} interactive element(s) nested inside a button/link, e.g. ${nested[0].outerHTML.slice(0, 90)}`);
@@ -153,10 +157,10 @@ async function audit(page) {
       (b) => !b.textContent.trim() && !b.getAttribute('aria-label') && !b.getAttribute('title') && b.offsetParent,
     );
     if (unlabeled.length) out.push(`${unlabeled.length} button(s) with no text or aria-label, e.g. ${unlabeled[0].outerHTML.slice(0, 90)}`);
-    const over = document.documentElement.scrollWidth - window.innerWidth;
-    if (over > 1) out.push(`page is ${over}px wider than the viewport (horizontal scroll)`);
+    const over = document.documentElement.scrollWidth - (vw ?? window.innerWidth);
+    if (over > 1) out.push(`page is ${over}px wider than the viewport (horizontal scroll, or a phone zoomed out to fit)`);
     return out;
-  });
+  }, vw);
 }
 
 async function checkGame(game) {

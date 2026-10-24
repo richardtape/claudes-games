@@ -240,6 +240,12 @@ document it here rather than burying it in the game.
     pinned version rather than older examples.
   - Simultaneous-turn games need a turn where nobody can act to resolve itself (Dead Drop
     hung when both seats auto-passed). Test "no one can move" states.
+  - Real-time co-op works too when input is tap-to-queue rather than twitch (Sushi Raft,
+    2026-10-23): the host runs the engine and streams the whole state at 15 Hz (~5 KB,
+    `js/net-play.js`), the guest sends taps, answers its own taps at once (sound and ripple) and
+    glides its otters toward each snapshot. Pause online play on `visibilitychange` only:
+    `onHidden` also fires on window blur, so a click in the other window would pause the night
+    for both. Solo gets a computer partner (the sim's bot) rather than a switch-characters mode.
 
 ## Testing
 
@@ -248,6 +254,8 @@ document it here rather than burying it in the game.
 - **`npm run check`** catches what errors don't: the DOM audit flags `<button>` or `<a>`
   nested in another (the HTML parser silently splits these and wrecks layout), unlabeled
   buttons and horizontal overflow, and anything requested outside `/claudes-games/` fails.
+  Overflow is measured against the configured viewport: an `isMobile` page zooms out to fit, so
+  its `innerWidth` grows with the overflow (until 2026-10-23 the phone audit could never fire).
   It runs `smoke.mjs` twice, at desktop and at phone size (`ctx.phone` is true the second
   time), so every screen the smoke visits gets a phone screenshot and audit. Read the
   screenshots in `.tmp/check/` (`<slug>-NN-*` desktop, `<slug>-phone-NN-*` phone).
@@ -423,6 +431,36 @@ document it here rather than burying it in the game.
   got-away (`tools/gotaway.mjs`, B46) exists after 84% of lost flip rounds at two seats, 62% at three
   and 50% at four (fewer turns are yours to change, and a fold blocks the line), at 12 ms p95 a round
   at four seats.
+
+## Big jobs across several sessions
+
+Dead Drop's expansion (2026-10-18 to 10-20, six phases) ran as a team of sessions, and it
+worked well enough to reuse:
+
+- **Coordinator, planners and builders.** One coordinator session owns the spec and decisions
+  and does no building. Each phase gets a planner (`superpowers:writing-plans`) and a fresh
+  builder (`superpowers:subagent-driven-development`). The builder can ask its planner
+  questions.
+- **One charter, one relay log.** The charter (`docs/superpowers/dead-drop-team.md`) is read
+  first by every session. It says "this is not a new game", sets the order and names the
+  coordinator. The append-only relay log (`docs/superpowers/dead-drop-relay.md`) passes
+  lessons from each phase to the next. `docs/` is never deployed.
+- **Builds strictly one at a time; plans drafted ahead.** One working folder, one dev server,
+  one Chrome and one shared Mac. The next planner drafts read-only while the current phase
+  builds (code read as committed, only its plan file committed) and finalises once that phase
+  lands. That saved most of the wait between phases.
+- **Pre-approve a decision ladder** for anything a sim might decide while nobody is watching
+  (the Microfilm's reel, the Blackmailer's rule), with a stop-and-ask rung, so builds don't
+  stall overnight.
+- **Session names change after a restart** (the coordinator went from `claudes-games-fc` to
+  `claudes-games-5f`). Keep the name in the charter and tell every session.
+- **Messages can stall silently.** At 04:12 every session stopped reading messages at once,
+  with no delivery notice. An idle session mid-phase that hasn't reported needs a poke in its
+  own window. A builder can finalise a stalled planner's draft (twice here).
+- **Pausing for a closed lid or a restart:** the coordinator tells the active builder to stop
+  its sims (they resume) and subagents, and to leave half-done code uncommitted. The builder
+  writes a PAUSED note with the resume step into the relay log. The coordinator checks that
+  nothing is running and that git is clean before giving the all-clear.
 
 ## Deploying
 
@@ -724,6 +762,40 @@ and new files.
   never loads a second copy. A "wiring only" rule for a 4,500-line `main.js` still let it grow by 500
   lines in one phase: split the screens out before the next feature, not after.
 
+- When verify-live's online runs fail, test the relays before the game: a bare Trystero room between two headless
+  pages (import the pinned build on any https page, `joinRoom`, wait for `onPeerJoin`). On 2026-10-20 two public
+  relays refused every handshake (502, 522) and even the bare room never joined, so the Phase 4 deploy's live duo and
+  table failed twice, then passed ten minutes later with no change. Log each page's WebSockets
+  (`page.on('websocket')`) to see which relays answer.
+
+- A phone page whose content is wider than the screen doesn't scroll sideways: the browser zooms the
+  whole page out, `innerWidth` grows to match, and an audit of `scrollWidth - innerWidth` stays 0. Sushi
+  Raft's HUD ("rent 55 (purse 58)") pushed an `auto` grid column to 754px and the phone saw a cropped
+  game. Give app grids `grid-template-columns: minmax(0, 1fr)` and let HUD rows shrink (`min-width: 0`,
+  `overflow: hidden`). The fixed audit then found Dead Drop's phone title bleeding 35px (its spy and
+  poster bars; now `overflow-x: clip` on `.title-screen`), which also cleared the 15–17px it reported
+  on the reel card and got-away result, both drawn over that screen.
+- A canvas whose box changes with the screen (a side panel that comes and goes) must be resized
+  before it is drawn or hit-tested, not in a later `requestAnimationFrame`: the resize cleared the
+  frame just drawn (a blank screenshot) and a guest's first tap after the morning landed on the wrong
+  tile. Sushi Raft's `syncSize()` compares `clientWidth`/`clientHeight` at the top of every render, in
+  the pointer handler and in the debug `tilePoint()`.
+- A computer partner needs play-testing that a sim can't do. Sushi Raft's bot made good numbers, but as
+  solo's computer Kelp it cooked the coached first dish before the player had tapped, took the only
+  board and left the player's queue failing. The partner now waits until the coached dish sails, never
+  heads for a station the player has queued (`claimed` in `js/bot.js`), and has no deliberate fumbles
+  (they read as wandering to empty counters).
+- Kitchen-sim bots: count intentions as supply (an otter already walking to the salmon crate), or two
+  otters fetch the same salmon and clog the boards; pick jobs that can be made now, or an otter waits
+  on cucumber nobody is bringing while tuna sits on the pass. That one change took the perfect bot
+  from 51% to 94% of weeks, so retune the economy after every bot fix.
+- A perfect bot that survives less often than a good one is usually spending, not cooking: in one night
+  Sushi Raft's skill 1 was best, but a richer bot bought every complex dish at the market. Report
+  per-night and per-week numbers separately, and weight orders toward simple dishes as a menu grows.
+- Show a tip at the moment a rule changes, in the reader's own role: on a split-kitchen night Sushi
+  Raft's computer Kelp stood still (correctly: it waits for fish over the pass), which looked broken
+  until the night opened with "you have the fish and the boards: set things on the middle counter".
+
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
@@ -732,3 +804,4 @@ and new files.
 | 2 | night-stitch | drawing | Real-time lasso arcade: steer a needle, cross your own thread to loop moths; 8-hour night with bosses, notions, daily pattern, specimen case | Embroidery by lamplight: indigo night, linen in a beech hoop, DMC floss, cross-stitch numerals and title; IM Fell English | Canvas + shared/loop.js; human-ish bot for sim and title demo; the run stitches a sampler (end screen, PNG save); embroidery fades during play |
 | 3 | dead-drop | card-duel | Spy card duel for two: both drop an agent in secret each turn and flip together; three cities with rule twists, escalate/fold stakes, first to 10 | 1960s spy-film titles: mustard field, ink city panels with skylines, paper cards with cut-paper silhouettes, red vs teal; League Gothic (jittered) + Courier Prime | First multiplayer game: online via shared/net.js (Trystero, host-authoritative masked views), pass and play, five Monte Carlo rivals; duo check + live duo in verify-live. Phase 1 (2026-10-18): the final turn at night ("Final drop" card, spotlights, ×2 stamp); an arranged surf-spy score as data (`js/music.js`) that follows the round, with city flourishes and the spy chord; worker sim harness and 20,000-round baseline (`tools/SIMLOG.md`); online rematch and leaving fixed (match ids, goodbye). Phase 2b-ii (2026-10-19): 20 agents and 20 cities in Classic or Mixed rosters of 12; the ladder's packs and announced twists; a story in cables, dossiers, remarks and an epilogue; unlocks into a network, with free play; card counting (the unseen strip). Classic is byte-identical to 2b-i, checked against a frozen copy of the 2b-i engine. Phase 3 part A (2026-10-20): tables of two to four online (lobby with seats, timer and roster, Start by the host, bots in empty seats, stand-ins after 30 s quiet, up to four spectators, PROTOCOL 4), a solo Table at 3–4 seats and pass and play 2–4; the tag bar, rival lanes, city and tag sheets, seat colours with patterns; answers revealed together, folds mid-round; a 128-bit deal RNG for real tables; the Blackmailer can be refused; targets and pace tuned per seat count (B34–B45); the multi-page `table` check locally and live. Part B (2026-10-20): the turn timer (Off, 30 s, Blitz) on the host's clock with a fuse across the hand and auto-Next; six emotes as paper slips; four tags at 320px, bottom sheets, night at four seats; spectators neutral. Phase 4 (2026-10-20): the return loop: today's operation (one match a day dealt the same for everyone,  Classic plus two featured agents and a city, its own save, the best margin on the title); "the one that  got away" after a lost round, private to its seat, at two to four seats (an action-log replay, B46); the  case file as a manila folder with evidence slips and a PNG poster; a scripted briefing against Agent Wren  with C's coach; four illustrated lines for a friend in the lobby |
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |
+| 5 | sushi-raft | management | Co-op kitchen for two phones: tap stations to queue your otter, plate sushi onto rafts round a canal; a week of five nights with rent, a morning market (dishes, upgrades) and announced twists, the split kitchen passing over the counter | A harbour pier at dusk: hinoki counters, indigo noren, vermilion lanterns, teal canal, bamboo rafts, cute harbour animals; Mochiy Pop One + Zen Maru Gothic | Real-time co-op over shared/net.js with 15 Hz host snapshots; solo with a computer Kelp (the sim's bot); characters and food drawn by a subagent to a signature contract (`js/art.js`); closing time stacks the night's plates by rim colour, stamps the rent and floats the otters home holding paws |
