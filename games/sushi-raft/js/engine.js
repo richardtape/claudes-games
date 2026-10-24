@@ -66,7 +66,8 @@ function weighted(st, items, w) {
 }
 
 function ev(st, type, data = {}) {
-  st.events.push({ id: ++st.eventSeq, type, t: st.svc ? st.svc.t : 0, ...data });
+  // The sequence id goes last: a payload's own id (a customer's, a dish's) must never replace it.
+  st.events.push({ type, t: st.svc ? st.svc.t : 0, ...data, id: ++st.eventSeq });
   if (st.events.length > EVENTS_KEPT) st.events.splice(0, st.events.length - EVENTS_KEPT);
 }
 
@@ -137,7 +138,7 @@ export function buy(st, i) {
   o.bought = true;
   if (o.kind === 'dish') st.menu.push(o.id);
   else st.up[o.id] = true;
-  ev(st, 'buy', { kind: o.kind, id: o.id });
+  ev(st, 'buy', { kind: o.kind, item: o.id });
   return true;
 }
 
@@ -706,7 +707,7 @@ function arrive(st, a) {
     return;
   }
   svc.customers.push(cu);
-  ev(st, 'arrive', { id: cu.id, sp: a.sp, seat: cu.seat, order: cu.order });
+  ev(st, 'arrive', { cu: cu.id, sp: a.sp, seat: cu.seat, order: cu.order });
 }
 
 function settle(st, cu, { tip = true } = {}) {
@@ -718,7 +719,7 @@ function settle(st, cu, { tip = true } = {}) {
   svc.takings += amount;
   svc.tips += tipAmt;
   if (cu.ate.length) svc.served++;
-  ev(st, 'pay', { id: cu.id, seat: cu.seat, sp: cu.sp, amount, base, tip: tipAmt, plates: cu.ate.length });
+  ev(st, 'pay', { cu: cu.id, seat: cu.seat, sp: cu.sp, amount, base, tip: tipAmt, plates: cu.ate.length });
   return amount;
 }
 
@@ -731,7 +732,7 @@ function huff(st, cu) {
   const svc = st.svc;
   cu.huff = true;
   svc.huffs++;
-  ev(st, 'huff', { id: cu.id, seat: cu.seat, sp: cu.sp });
+  ev(st, 'huff', { cu: cu.id, seat: cu.seat, sp: cu.sp });
   if (svc.lanterns > 0) ev(st, 'lanternsOut', {});
   svc.lanterns = 0;
   settle(st, cu, { tip: false });
@@ -746,7 +747,7 @@ function stepCustomers(st, dt) {
       if (cu.pat <= 0) {
         cu.phase = 'gone';
         svc.away++;
-        ev(st, 'gaveUp', { id: cu.id, sp: cu.sp });
+        ev(st, 'gaveUp', { cu: cu.id, sp: cu.sp });
       }
     } else if (cu.phase === 'walk') {
       if ((cu.t -= dt) <= 0) cu.phase = 'wait';
@@ -783,7 +784,7 @@ function stepCustomers(st, dt) {
     const next = svc.customers.find((c) => c.phase === 'line');
     if (!next) break;
     seatCustomer(st, next, s);
-    ev(st, 'seated', { id: next.id, seat: s });
+    ev(st, 'seated', { cu: next.id, seat: s });
   }
 }
 
@@ -800,7 +801,7 @@ function grab(st, cu, raft, dish) {
   cu.pat = Math.min(cu.patMax, cu.pat + cu.patMax * TIMES.patienceBack);
   raft.plate = null;
   if (fav) svc.hearts.push(cu.sp);
-  ev(st, 'grab', { id: cu.id, seat: cu.seat, sp: cu.sp, dish, price, fav, rush: svc.rush > 0 });
+  ev(st, 'grab', { cu: cu.id, seat: cu.seat, sp: cu.sp, dish, price, fav, rush: svc.rush > 0 });
   if (svc.rush <= 0) {
     svc.lanterns++;
     ev(st, 'lantern', { n: svc.lanterns, of: svc.P.lanterns });

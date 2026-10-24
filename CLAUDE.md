@@ -837,6 +837,16 @@ and new files.
 - Title demos read better already under way: First Light pre-flies its demo balloon 30 s with the bot
   before showing the title, and keeps the demo's sun below the ridge so the real flight's sunrise
   stays a surprise.
+- Put an envelope's own fields after the payload spread: `{ id: ++seq, type, ...data }` let a
+  payload's `id` replace the sequence number. Sushi Raft's `buy` carried a dish id and its arrivals
+  a customer id, and the page's "skip ids at or below the last one" check (`'tuna_nigiri' <= 333` is
+  false) then replayed every later event on every frame: from the second night on, each tap drew 60
+  ripples a second (a blue haze over the item), its sounds played 60 times over, and the night's
+  banner restarted each frame so it showed only once the bad event scrolled out of the 80 kept,
+  about 30 s in. The first night was clean because nothing is bought before it, and the headless
+  checks never bought anything. Rich found it by playing (2026-10-24). An engine test now asserts that
+  event ids rise by exactly one through a bot-played week with purchases; give any event or message
+  stream that invariant test.
 
 ## Games so far
 

@@ -264,6 +264,44 @@ test('the market sells what the purse can afford, once', () => {
   assert.ok(st.menu.includes(st.offers[i].id));
 });
 
+test('event ids rise by one through a whole week, whatever an event carries (purchases, customers)', async () => {
+  // The page replays any event whose id isn't above the last it saw: a buy's dish id or an
+  // arrival's customer id in place of the sequence number replayed the next night's taps, sounds
+  // and banner every frame until it scrolled out of the list.
+  const { createBot } = await import('../js/bot.js');
+  const st = E.newWeek({ seed: 'ids' });
+  const bot = createBot({ otters: [0, 1], skill: 0.9, seed: 3, fumbles: false });
+  let last = 0;
+  const checked = new WeakSet();
+  const check = () => {
+    for (const e of st.events) {
+      if (checked.has(e)) continue;
+      checked.add(e);
+      assert.equal(e.id, last + 1, `${e.type} event after id ${last} has id ${JSON.stringify(e.id)}`);
+      last = e.id;
+    }
+  };
+  const seen = new Set();
+  while (st.phase !== 'over') {
+    if (st.phase === 'morning') {
+      st.purse += 100;
+      st.offers.forEach((o, i) => E.buy(st, i));
+      check();
+      E.openNight(st);
+    }
+    while (st.phase === 'service') {
+      bot.tick(st, 1 / 30);
+      E.step(st, 1 / 30);
+      for (const e of st.events) seen.add(e.type);
+      check();
+    }
+    E.toMorning(st);
+    check();
+  }
+  for (const type of ['buy', 'arrive', 'seated', 'grab', 'pay']) assert.ok(seen.has(type), `the week had a ${type} event`);
+  assert.equal(last, st.eventSeq);
+});
+
 test('random tapping through a whole night never breaks the kitchen, and the night always closes', () => {
   for (let s = 0; s < 6; s++) {
     const st = E.newWeek({ seed: `rand${s}` });
