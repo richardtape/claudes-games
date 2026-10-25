@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Play a game by hand from the terminal: one headless Chrome page kept open, driven over HTTP.
 //
-//   npm run drive -- <slug> [--phone] [--port 8650]      (run it in the background)
+//   npm run drive -- <slug> [--phone] [--port 8650]      (run it in the background; if 8650 is
+//                                                        taken it tries 8651… and prints the port)
 //   curl -s 127.0.0.1:8650 -d "__game.state.screen"      evaluate JS in the page, get JSON back
 //   curl -s 127.0.0.1:8650 -d reload                     reload the page (picks up code edits)
 //
@@ -32,7 +33,7 @@ page.on('pageerror', (e) => errors.push(`uncaught: ${e.message}`));
 const ready = () => page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 15000 });
 await page.goto(`http://localhost:8642/games/${slug}/`, { waitUntil: 'load' });
 await ready();
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   let body = '';
   for await (const c of req) body += c;
   let out;
@@ -48,5 +49,16 @@ createServer(async (req, res) => {
     out = `ERR ${e.message.split('\n')[0]}`;
   }
   res.end(JSON.stringify({ out, errors: errors.splice(0) }) + '\n');
-}).listen(port, () => console.log(`driving ${slug}${phone ? ' (phone)' : ''} on http://127.0.0.1:${port}/`));
+});
+// Another session may already be driving on 8650: without an explicit --port, take the next free
+// port (it is printed; curl that one) rather than failing.
+const explicitPort = args.includes('--port');
+let listenPort = port;
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE' && !explicitPort && listenPort < port + 9) return server.listen(++listenPort);
+  console.error(`drive: ${e.message}`);
+  browser.close().then(() => process.exit(1));
+});
+server.on('listening', () => console.log(`driving ${slug}${phone ? ' (phone)' : ''} on http://127.0.0.1:${listenPort}/`));
+server.listen(listenPort);
 process.on('SIGTERM', () => browser.close().then(() => process.exit(0)));

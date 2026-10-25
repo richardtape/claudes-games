@@ -120,5 +120,26 @@ window.GAMES = [
     "controls": "Hold Burner (Space) to climb, Vent (↓) to sink, Drop (D) near a cross, Photo (P); drag to look around.",
     "draft": false,
     "pitch": "Dawn over the fairy chimneys of Cappadocia. A balloon can't steer, but every height has its own wind: climb and sink to ride the one you want, drop markers on crosses in the fields, photograph the landmarks for your album, and land gently before the propane runs out. Climb above the rim early and you'll see first light."
+  },
+  {
+    "slug": "penny-a-mile",
+    "href": "games/penny-a-mile/",
+    "thumb": "games/penny-a-mile/thumb.jpg",
+    "title": "Penny a Mile",
+    "tagline": "A pocket railway tycoon: drag a line, lay the track, run steam, and grow the shire from 1900 to 1920.",
+    "number": 7,
+    "created": "2026-10-24",
+    "type": "network",
+    "genres": [
+      "Tycoon",
+      "Trains",
+      "Strategy",
+      "Daily"
+    ],
+    "color": "#1d4a37",
+    "emoji": "🚂",
+    "controls": "Build (B): drag from one spot to another to lay a line; Look (L) to pan and inspect; wheel or pinch to zoom; Space pauses.",
+    "draft": false,
+    "pitch": "Transport Tycoon on a model railway. Drag a line from a colliery to the power station and the track lays itself round the river, two stations appear and a little tank engine puffs off with the coal. Add trains as the cargo piles up, feed the sawmills and mills that make goods for the towns, chase the Board of Trade's subsidies, and keep the Board happy every five years until 1920."
   }
 ];

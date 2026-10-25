@@ -179,6 +179,13 @@
       .facts .best {
         font-weight: 700;
       }
+      /* Dark shells (Comet Cup's navy, Penny a Mile's green) take light text outside the chips. */
+      .dark-shell .facts {
+        color: rgba(255, 250, 238, 0.92);
+      }
+      .dark-shell .facts .chip {
+        color: rgba(23, 19, 46, 0.85);
+      }
 
       /* newest game gets the big slot */
       .feature {
@@ -325,12 +332,18 @@
           }
         };
 
+        // Relative lightness of a #rrggbb shell, 0 (black) to 1 (white).
+        const light = (hex) => {
+          const n = parseInt(String(hex || '#8d8a96').slice(1), 16);
+          return (0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+        };
+
         function cart(g, { tag = 'a' } = {}) {
           const s = stats(g.slug);
           const art = g.thumb ? `<img src="${esc(g.thumb)}" alt="" loading="lazy">` : `<span aria-hidden="true">${esc(g.emoji || '🎮')}</span>`;
           const best = s?.bestLabel ? `<span class="best">Your best: ${esc(s.bestLabel)}</span>` : '';
           const plays = s?.plays ? `<span>Played ${s.plays}×</span>` : '<span>Not played yet</span>';
-          return `<${tag} class="cart" href="${esc(g.href)}" style="--shell:${esc(g.color || '#8d8a96')}" aria-label="Play ${esc(g.title)}">
+          return `<${tag} class="cart${light(g.color) < 0.4 ? ' dark-shell' : ''}" href="${esc(g.href)}" style="--shell:${esc(g.color || '#8d8a96')}" aria-label="Play ${esc(g.title)}">
             <div class="label">
               <div class="art">${art}</div>
               <div class="text"><span class="no">${no(g.number)}, made ${esc(made(g.created))}</span><h2>${esc(g.title)}</h2><p>${esc(g.tagline)}</p></div>

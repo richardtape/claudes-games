@@ -207,6 +207,15 @@ document it here rather than burying it in the game.
   with `touch-action: none` on the canvas, virtual buttons on touch. Paint static scenery
   once into its own canvas behind the play canvas instead of copying it every frame (Night
   Stitch: room, lamp and linen), and shake the wrapper so the layers move together.
+- **Isometric tile worlds** (Penny a Mile, `games/penny-a-mile/js/render.js`): tile (x, y) maps to
+  screen ((x − y)·32, (x + y)·16), so fractional tile coords place anything (trains on curves). Draw
+  everything flat (ground, water, roads, track, platforms) into one viewport-sized layer that is
+  re-rendered only when the camera or the world changes, then each frame draw the things with height
+  (trees, houses, industries, station buildings, train cars) sorted by x + y on top. Pre-render each
+  building as a sprite per zoom level (`sprites.js`) and keep zoom to a few fixed steps, TT-style,
+  so sprites stay crisp. 112 trains on a 40×40 map drew in about 4 ms a frame (6 ms while panning).
+  Track as pieces joining tile edges (a bitmask of 6 per tile) makes junctions, crossings and
+  pathfinding over (tile, entry edge) states simple.
 - **Persistent drawing that accumulates** (trails, paint, embroidery): draw it into an
   offscreen layer incrementally from a history list in the state, so it can be redrawn at
   any size (resize, end-screen poster).
@@ -861,6 +870,30 @@ and new files.
   wash stopped at the box and left a light band over the harbour, unnoticed until the menu board sat
   across it. Fill the visible world (`R.world`) instead.
 
+- `npm run drive` listens on port 8650 by default, and another session may already hold it (Penny
+  a Mile, 2026-10-24). It now moves to the next free port and prints it; never stop a process you
+  didn't start to free a port.
+- When a mouse previews on hover, the second click acts at once, so a touch flow's confirm button
+  never appears on desktop. Drive each input its own way in the smoke (`page.mouse.move` then click
+  on desktop, `page.touchscreen.tap` on the phone pass), or the smoke tests neither honestly.
+- Phone overlays fight for the same space: Penny a Mile's coach tip covered first the plan card's
+  Build button, then the tile the player had to tap next. Measure the bottom sheet and seat tips
+  above it (`refreshCards` sets the coach's `bottom`), hide tips while the map needs the room
+  (planning a line), and let the phone smoke tap through the real flow: it caught both.
+- Measure how long the first reward takes. Penny a Mile's first train left the colliery before any
+  coal existed, so the first coin came three months (ten seconds) in. Trains now wait for a third
+  of a load and output arrives every ten days. That one rule moved every bot's value by 70%, so
+  re-run the sim after any rule that changes flow, not only after number changes.
+- Name things for their role in the action that made them. Stations named after the nearest
+  industry produced "Fenwick Colliery to Bradstead Colliery" for a coal line to a power station;
+  `lineRoles()` names each new station after what it sends to or takes from the far end.
+- Renderer effects (smoke, floating sums) belong to one world: the title demo's frozen steam was
+  drawn over the new shire until `renderer.reset()` ran on every world change.
+- An SVG arc's large-arc flag comes from the angle it sweeps, not the fraction of the scale: the
+  Board's gauge (240° of dial) drew its red zone the long way round at 0.67 of the scale.
+- Dark cartridge shells made the shelf's "Not played yet" unreadable (Comet Cup's navy, Penny a
+  Mile's green): `index.html` now gives shells darker than 0.4 lightness a `dark-shell` class.
+
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
@@ -871,3 +904,4 @@ and new files.
 | 4 | comet-cup | trajectory | Orbit golf: pull back and launch a comet past planets into a cup; nine plates a course, daily course, par from bots, ace line shown after each hole | Trouvelot astronomical pastels on blue-black paper, engraved plate frame and ticks, gold leaf for the goal; Bodoni Moda + Old Standard TT | Offline hole bank (generator + ace solver + noisy bots for par, `tools/bank.mjs`), deterministic physics, music of the spheres (each planet rings a note), gilded nine-plate sheet with PNG save |
 | 5 | sushi-raft | management | Co-op kitchen for two phones: tap stations to queue your otter, plate sushi onto rafts round a canal; a week of five nights with rent, a morning market (dishes, upgrades) and announced twists, the split kitchen passing over the counter | A harbour pier at dusk: hinoki counters, indigo noren, vermilion lanterns, teal canal, bamboo rafts, cute harbour animals; Mochiy Pop One + Zen Maru Gothic | Real-time co-op over shared/net.js with 15 Hz host snapshots; solo with a computer Kelp (the sim's bot); characters and food drawn by a subagent to a signature contract (`js/art.js`); closing time stacks the night's plates by rim colour, stamps the rent and floats the otters home holding paws |
 | 6 | first-light | exploration-3d | Hot-air balloon at dawn: steer by height through five veering wind layers; drop markers on three crosses, photograph landmarks, land before the propane runs out; daily flight | Dawn over Cappadocia: low-poly tuff strata (cream, apricot, rose), basalt-capped fairy chimneys, red river, Erciyes on the horizon, striped envelopes; Marcellus + Atkinson Hyperlegible Next | First three.js game (0.170.0, ~20 draw calls); pure engine with node tests; the sunrise turns gold when you climb above the rim and the camera swings to face it; basket photos fill a 12-page album; flight certificate with route map; bot pilot for demo and sim; `npm run drive` for hand play; made for Rich's phone on holiday |
+| 7 | penny-a-mile | network | Pocket railway tycoon (Transport Tycoon on a model railway): drag a line and the track lays itself; coal, wood, grain, goods and passengers; subsidies; Board targets in 1905/1910/1915, final value in 1920; daily shire | A model railway layout in TT's isometric view: flock grass, lichen trees, card-kit houses, a plywood baseboard before a painted sky; Brunswick green enamel and brass, Edmondson-ticket cards; Cabin + Cabin Condensed | Canvas iso renderer (cached flat layer + depth-sorted sprites); pure engine with node tests; route planning over (tile, edge) states that reuses owned track; bot for sim and title demo; the Board meeting as a ledger with a steam-gauge needle and a stamp; company system map at the end; ragtime loop on `seq.js` |

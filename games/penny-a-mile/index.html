@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Penny a Mile</title>
+    <meta name="description" content="A pocket railway tycoon: lay track, run steam, haul coal and goods, and grow the shire from 1900." />
+    <meta name="theme-color" content="#1d4a37" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚂</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cabin+Condensed:wght@500;600;700&family=Cabin:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="app" class="app" data-screen="title">
+      <div class="backscene" aria-hidden="true"></div>
+      <canvas id="layout" class="layout" aria-label="The railway layout"></canvas>
+
+      <header class="bar" id="bar">
+        <div class="bar-home" id="bar-home"></div>
+        <div class="clock">
+          <span class="date" id="date">January 1900</span>
+          <div class="speeds" role="group" aria-label="Speed">
+            <button class="speed" data-action="pause" aria-label="Pause" title="Pause (Space)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2.5" width="3.4" height="11" rx="1" /><rect x="9.6" y="2.5" width="3.4" height="11" rx="1" /></svg></button>
+            <button class="speed" data-action="speed" data-speed="1" aria-label="Normal speed" title="Normal speed (1)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" /></svg></button>
+            <button class="speed" data-action="speed" data-speed="2" aria-label="Fast" title="Fast (2)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3v10l6.5-5zM8 3v10l6.5-5z" /></svg></button>
+            <button class="speed" data-action="speed" data-speed="4" aria-label="Fastest" title="Fastest (3)"><svg viewBox="0 0 20 16" aria-hidden="true"><path d="M0.5 3v10l5-5zM6.5 3v10l5-5zM12.5 3v10l5-5z" /></svg></button>
+          </div>
+        </div>
+        <button class="cash" data-action="ledger" title="The company's books (Y)">
+          <span class="cash-sum" id="cash">£60,000</span>
+          <span class="cash-loan" id="loan">no loan</span>
+        </button>
+        <button class="target" data-action="ledger" id="target" title="What the Board expects">
+          <span class="target-text" id="target-text">The Board wants £120,000 by 1905</span>
+          <span class="target-bar"><i id="target-fill"></i><b id="target-mark"></b></span>
+          <span class="target-value" id="target-value">Worth £60,000</span>
+        </button>
+      </header>
+
+      <aside class="subsidies" id="subsidies" aria-label="Subsidies"></aside>
+
+      <nav class="tools" id="tools" aria-label="Tools">
+        <button class="tool" data-action="tool" data-tool="look" aria-label="Look" title="Look (L)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1V4a1.5 1.5 0 0 1 3 0v6m0-4.5a1.5 1.5 0 0 1 3 0V12m0-3.5a1.5 1.5 0 0 1 3 0V15a7 7 0 0 1-7 7h-1a6.5 6.5 0 0 1-5.4-2.9L3.6 15a1.6 1.6 0 0 1 2.6-1.9L8.5 15V11" /></svg>
+          <span class="tool-name">Look</span><kbd>L</kbd>
+        </button>
+        <button class="tool" data-action="tool" data-tool="build" aria-label="Build a route" title="Build: drag from one spot to another (B)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2 4 22M17 2l3 20M5.6 7h12.8M5 12h14M4.3 17h15.4" /></svg>
+          <span class="tool-name">Build</span><kbd>B</kbd>
+        </button>
+        <button class="tool" data-action="tool" data-tool="bulldoze" aria-label="Bulldoze" title="Bulldoze track or a station (D)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16h11l3-5h3v7H3zM6 16V9h6l2 3M6.5 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm9 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM20 11l2-3" /></svg>
+          <span class="tool-name">Clear</span><kbd>D</kbd>
+        </button>
+        <span class="tools-gap" aria-hidden="true"></span>
+        <button class="tool tool-small" data-action="services" aria-label="Services" title="Every service (S)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+          <span class="tool-name">Services</span><kbd>S</kbd>
+        </button>
+        <button class="tool tool-small" data-action="ledger" aria-label="Books" title="The company's books (Y)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM8 8h8M8 12h8M8 16h5" /></svg>
+          <span class="tool-name">Books</span><kbd>Y</kbd>
+        </button>
+        <button class="tool tool-small" data-action="menu" aria-label="Menu" title="Menu (Esc)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" /></svg>
+          <span class="tool-name">Menu</span>
+        </button>
+      </nav>
+
+      <section class="cards" id="cards" aria-live="off"></section>
+      <div class="news" id="news" role="status"></div>
+      <div class="coach" id="coach" hidden></div>
+      <div class="zoom" id="zoom" role="group" aria-label="Zoom">
+        <button data-action="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        <button data-action="zoom-out" aria-label="Zoom out" title="Zoom out (−)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="2" rx="1" /></svg></button>
+      </div>
+
+      <section class="title-screen" id="title" aria-labelledby="title-name">
+        <div class="title-card">
+          <svg class="nameplate" viewBox="0 34 450 138" role="img" aria-labelledby="title-name">
+            <title id="title-name">Penny a Mile</title>
+            <defs>
+              <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#f6e2a2" />
+                <stop offset="0.45" stop-color="#d2ab55" />
+                <stop offset="1" stop-color="#8a6a26" />
+              </linearGradient>
+              <path id="plate-arc" d="M51.1 162 A222 222 0 0 1 398.9 162" />
+            </defs>
+            <path d="M4.6 162 A260 260 0 0 1 445.4 162 L373.9 162 A203 203 0 0 0 76.1 162 Z" fill="url(#brass)" />
+            <path d="M11.8 162 A254 254 0 0 1 438.2 162 L382.0 162 A209 209 0 0 0 68.0 162 Z" fill="#8f1f22" />
+            <rect x="2" y="160" width="446" height="9" rx="2" fill="url(#brass)" />
+            <text class="nameplate-text"><textPath href="#plate-arc" startOffset="50%" text-anchor="middle">PENNY A MILE</textPath></text>
+          </svg>
+          <p class="title-sub">A pocket railway tycoon. Lay track across the shire, run steam, haul coal and goods, and keep the Board happy from 1900 to 1920.</p>
+          <div class="title-actions" id="title-actions"></div>
+          <p class="title-best" id="title-best"></p>
+        </div>
+      </section>
+
+      <div class="board-room" id="board-room" hidden></div>
+      <div class="end" id="end" hidden></div>
+
+      <dialog class="sheet" id="help" aria-labelledby="help-title"></dialog>
+      <dialog class="sheet" id="services" aria-labelledby="services-title"></dialog>
+      <dialog class="sheet" id="ledger" aria-labelledby="ledger-title"></dialog>
+      <dialog class="sheet" id="menu" aria-labelledby="menu-title"></dialog>
+      <dialog class="sheet small" id="confirm" aria-labelledby="confirm-title"></dialog>
+    </div>
+  </body>
+</html>
