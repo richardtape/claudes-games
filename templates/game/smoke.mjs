@@ -3,6 +3,8 @@
 // and call shot()/audit() on every distinct screen (start, play, pause, game over...).
 // Throw an Error to fail the check.
 export default async function smoke(page, { log, shot, audit }) {
+  // If this smoke plays a daily seed, pin the date so it can't drift (see CLAUDE.md, Testing):
+  // await page.clock.setFixedTime(new Date('2026-10-24T12:00:00'));
   await shot('start');
   await audit('start');
 

@@ -2,6 +2,9 @@
 // size. Drives the real pointer, keys and buttons; window.__game settles flights on the game
 // clock so nothing depends on real time.
 export default async function smoke(page, { log, shot, audit, phone }) {
+  // Today's flight/course changes with the date, and this script's set-ups (where the camera
+  // frames Castle Rock, which shot holes out) only hold for one. Pin the date so it never drifts.
+  await page.clock.setFixedTime(new Date('2026-10-24T12:00:00'));
   const game = (fn, arg) => page.evaluate(fn, arg);
   const fail = (msg) => {
     throw new Error(msg);

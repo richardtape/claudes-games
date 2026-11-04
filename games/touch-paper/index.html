@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Touch Paper</title>
+    <meta name="description" content="A patience game for fireworks night: chain cards up and down to load a volley, then light it." />
+    <meta name="theme-color" content="#0b1222" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎆</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Shrikhand&display=swap"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <canvas id="scenery" aria-hidden="true"></canvas>
+    <canvas id="sky" aria-hidden="true"></canvas>
+    <div id="glow" aria-hidden="true"></div>
+    <div id="app">
+      <header class="top" id="top"></header>
+      <section class="stage" id="stage">
+        <div class="sky-area" id="skyArea">
+          <div class="bonfire" aria-hidden="true"><span class="flame f1"></span><span class="flame f2"></span><span class="flame f3"></span><span class="logs"></span></div>
+        </div>
+        <div class="patio" id="patio">
+          <div class="tableau" id="tableau" role="group" aria-label="Layout"></div>
+        </div>
+        <div class="bench" id="bench"></div>
+      </section>
+    </div>
+    <div class="screen-layer" id="screen"></div>
+    <div class="modal-layer" id="modal"></div>
+    <div class="say" id="say" role="status" aria-live="polite"></div>
+  </body>
+</html>

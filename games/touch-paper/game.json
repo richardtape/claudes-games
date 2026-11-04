@@ -1,0 +1,18 @@
+{
+  "title": "Touch Paper",
+  "tagline": "A patience game for Bonfire Night: chain cards up and down to load a volley, then light it.",
+  "number": 8,
+  "created": "2026-11-03",
+  "type": "solitaire",
+  "genres": [
+    "Patience",
+    "Cards",
+    "Fireworks",
+    "Daily"
+  ],
+  "color": "#f5c42c",
+  "emoji": "🎆",
+  "controls": "Tap a glowing card to load it. Tap a hand card to add it (if it follows) or to light the volley. Keys 1–9 and Z X C; Enter hurries the show.",
+  "draft": false,
+  "pitch": "A back garden on Bonfire Night. Chain cards one rank up or down from the fuse to load a rack of shells, then strike a card from your hand and the volley goes up over the rooftops, shell by shell. Three of one colour blooms a Peony, four falling makes a Willow, all four colours a Crossette: twelve named shells to find, five acts to keep the crowd happy, and a programme of the night to take home."
+}

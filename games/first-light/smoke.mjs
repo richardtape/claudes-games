@@ -4,6 +4,9 @@
 // resume, the landing and certificate, the album with a photo, and resuming a saved flight after a
 // reload. Time runs on the manual clock (__game.advance), so nothing depends on wall-clock speed.
 export default async function smoke(page, { log, shot, audit, phone }) {
+  // Today's flight/course changes with the date, and this script's set-ups (where the camera
+  // frames Castle Rock, which shot holes out) only hold for one. Pin the date so it never drifts.
+  await page.clock.setFixedTime(new Date('2026-10-24T12:00:00'));
   const until = (fn, arg, timeout = 8000) => page.waitForFunction(fn, arg, { timeout });
   const settle = () => page.waitForTimeout(450);
   const g = (fn, arg) => page.evaluate(fn, arg);

@@ -304,6 +304,12 @@ document it here rather than burying it in the game.
   load). Make helpers start from a clean state (it now ties off the thread after the walk),
   and find the root cause by logging state from inside the failing check, not a lookalike
   harness.
+- **Smoke tests must not depend on the date.** A smoke that plays the daily seed passes on the
+  day it was written and breaks weeks later with no change to the game: on 2026-11-03 First
+  Light's photo step and Comet Cup's keyboard launch failed every run because today's winds and
+  course had moved on. Pin the clock at the top of the smoke,
+  `await page.clock.setFixedTime(new Date('2026-10-24T12:00:00'))` (Date only; timers keep
+  running), or play a fixed seed after clicking the daily button.
 - **Smoke tests must not depend on timing.** Emulated phones move the mouse slowly, so
   freeze anything the step is not testing (Night Stitch's smoke freezes the moth it loops;
   Dead Drop's smoke makes the rival lock in at once with `__game.rivalLocks()` and freezes
@@ -344,6 +350,15 @@ document it here rather than burying it in the game.
 
 ## Balancing
 
+- Measure agency before building the UI (Touch Paper, 2026-11-03): log the share of moves with a
+  real choice and the gap between random play and the best bot. Plain TriPeaks rules gave 22% and
+  59 against 69 points, so luck decided everything; three face-up box cards to strike from made it
+  62 against 105. Then count how often the named patterns fire (the first thresholds bloomed in 2–5%
+  of volleys, so the hook would never have shown) and how long the chains run, and change rules
+  until both read right. Two hours of sim saved a game built on the wrong rules.
+- A score that grows as length cubed (position base × a lift that grows with length) swings acts
+  tenfold. Cap it with a physical limit that becomes a moment of its own (Touch Paper's ten-tube
+  rack fires when full and the chain carries on).
 - Simulate before tuning by feel. Press Run's `tools/sim.mjs` scores single rounds for fixed
   builds; `tools/runsim.mjs` plays whole runs, shop included, with bots of different
   vocabulary sizes standing in for skill.
@@ -891,8 +906,28 @@ and new files.
   drawn over the new shire until `renderer.reset()` ran on every world change.
 - An SVG arc's large-arc flag comes from the angle it sweeps, not the fraction of the scale: the
   Board's gauge (240° of dial) drew its red zone the long way round at 0.67 of the scale.
+- Pin the seed for whatever a smoke checks. Penny a Mile's smoke opened a random shire, whose first
+  line ran anywhere from 2 to 26 tiles, so "income within two months" and "the map shows track"
+  each flaked once a few runs; it now clicks "A new shire" and then plays a fixed one. And a
+  thin antialiased line has almost no pixels of its exact colour: count "reddish", not company red.
 - Dark cartridge shells made the shelf's "Not played yet" unreadable (Comet Cup's navy, Penny a
   Mile's green): `index.html` now gives shells darker than 0.4 lightness a `dark-shell` class.
+
+- `shared/loop.js` calls `render()` every frame even when the clock is manual or paused. A renderer
+  that accumulates (trails faded with `destination-out`, additive `lighter` light) must draw only
+  after the simulation moved: Touch Paper's frozen thumbnail drew the same stars over themselves
+  until they burned out to white. And resize a canvas only when its size really changes, then
+  redraw: a layout pass a frame later cleared the bursts the thumbnail had just set up
+  (`fresh` in `games/touch-paper/js/sky.js`).
+- Let the celebration run behind play rather than block it: Touch Paper's volleys go up on the
+  sky's own clock (`sky.after`) while the player keeps loading the next one, and only the end of
+  an act waits for the sky to empty. Fast-forward is just "run every pending launch now".
+- Deal every opening with a move: Touch Paper's first fuse sometimes had nothing to follow it, so
+  a newcomer's first act was a forced strike. The deal now picks the first box card that some
+  open card follows (and a test checks 200 seeds).
+- Two-colour print on firework-label yellow (`#f5c42c`, ink black, vermilion) carried every panel
+  (title, report, shed, book, the programme) with one `label` class: a vernacular gives a whole
+  UI kit for free.
 
 ## Games so far
 
@@ -905,3 +940,4 @@ and new files.
 | 5 | sushi-raft | management | Co-op kitchen for two phones: tap stations to queue your otter, plate sushi onto rafts round a canal; a week of five nights with rent, a morning market (dishes, upgrades) and announced twists, the split kitchen passing over the counter | A harbour pier at dusk: hinoki counters, indigo noren, vermilion lanterns, teal canal, bamboo rafts, cute harbour animals; Mochiy Pop One + Zen Maru Gothic | Real-time co-op over shared/net.js with 15 Hz host snapshots; solo with a computer Kelp (the sim's bot); characters and food drawn by a subagent to a signature contract (`js/art.js`); closing time stacks the night's plates by rim colour, stamps the rent and floats the otters home holding paws |
 | 6 | first-light | exploration-3d | Hot-air balloon at dawn: steer by height through five veering wind layers; drop markers on three crosses, photograph landmarks, land before the propane runs out; daily flight | Dawn over Cappadocia: low-poly tuff strata (cream, apricot, rose), basalt-capped fairy chimneys, red river, Erciyes on the horizon, striped envelopes; Marcellus + Atkinson Hyperlegible Next | First three.js game (0.170.0, ~20 draw calls); pure engine with node tests; the sunrise turns gold when you climb above the rim and the camera swings to face it; basket photos fill a 12-page album; flight certificate with route map; bot pilot for demo and sim; `npm run drive` for hand play; made for Rich's phone on holiday |
 | 7 | penny-a-mile | network | Pocket railway tycoon (Transport Tycoon on a model railway): drag a line and the track lays itself; coal, wood, grain, goods and passengers; subsidies; Board targets in 1905/1910/1915, final value in 1920; daily shire | A model railway layout in TT's isometric view: flock grass, lichen trees, card-kit houses, a plywood baseboard before a painted sky; Brunswick green enamel and brass, Edmondson-ticket cards; Cabin + Cabin Condensed | Canvas iso renderer (cached flat layer + depth-sorted sprites); pure engine with node tests; route planning over (tile, edge) states that reuses owned track; bot for sim and title demo; the Board meeting as a ledger with a steam-gauge needle and a stamp; company system map at the end; ragtime loop on `seq.js` |
+| 8 | touch-paper | solitaire | Fireworks patience: chain cards one rank up or down from the fuse to load a rack of ten shells, strike a hand card to light the volley; twelve named shells from the chain's shape (colour, rising, falling, zigzag, corner, length); five acts with cumulative crowd targets, announced conditions and a shed of chemistry perks; daily display | Bonfire Night in a back garden: blue-black sky, rooftops and fence in silhouette, a CSS bonfire, wet York-stone patio; a four-colour deck on card stock, backs and every panel printed like a 1960s firework label (sodium yellow, vermilion, ink); Shrikhand + Bricolage Grotesque | Sim-first rules (hand of three face-up box cards, hand plays, ten-tube rack, playable opening); canvas fireworks with streaks, flashes and per-shell kinds that run behind play; named shells bloom with their names lettered in the sky; Pattern Book of long-exposure specimens; the programme poster (every burst of the night + the acts) with PNG save |

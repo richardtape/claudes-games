@@ -720,11 +720,16 @@ export async function caseFileSteps(page, { log, shot, audit, phone }, h) {
     const out = T.state.round.cities[2].sides[1].length === 0;
     g.quickTurns(4);
     for (const seat of [0, 1]) ok.push(T.act(seat, { a: 'next' }));
+    // Round 2 is played at random: from round 1's scores it could reach the target and end the match,
+    // so start it from nothing. (This step still failed about one check run in four on 2026-11-03 with
+    // that change; r2 below logs the table after round 2 so the next failure names its state.)
+    g.state.scores = [0, 0];
     g.quickTurns(6);
+    const r2 = { phase: T.state.phase, turn: T.state.round?.turn, scores: [...g.state.scores], pending: !!T.state.round?.pending, plans: T.state.round?.plans, legal: [0, 1].map((st) => T.view(st).round?.legal?.length) };
     for (const seat of [0, 1]) ok.push(T.act(seat, { a: 'next' }));
     g.state.scores = [9, Math.min(g.state.scores[1], 6)];
     ok.push(g.rivalFolds());
-    return { ok, out };
+    return { ok, out, r2 };
   });
   if (!staged.ok.every(Boolean) || !staged.out) fail(`the staged takedown should play through the table: ${JSON.stringify(staged)}`);
   await toCaseFile(page, h, 'the won match');

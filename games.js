@@ -141,5 +141,26 @@ window.GAMES = [
     "controls": "Build (B): drag from one spot to another to lay a line; Look (L) to pan and inspect; wheel or pinch to zoom; Space pauses.",
     "draft": false,
     "pitch": "Transport Tycoon on a model railway. Drag a line from a colliery to the power station and the track lays itself round the river, two stations appear and a little tank engine puffs off with the coal. Add trains as the cargo piles up, feed the sawmills and mills that make goods for the towns, chase the Board of Trade's subsidies, and keep the Board happy every five years until 1920."
+  },
+  {
+    "slug": "touch-paper",
+    "href": "games/touch-paper/",
+    "thumb": "games/touch-paper/thumb.jpg",
+    "title": "Touch Paper",
+    "tagline": "A patience game for Bonfire Night: chain cards up and down to load a volley, then light it.",
+    "number": 8,
+    "created": "2026-11-03",
+    "type": "solitaire",
+    "genres": [
+      "Patience",
+      "Cards",
+      "Fireworks",
+      "Daily"
+    ],
+    "color": "#f5c42c",
+    "emoji": "🎆",
+    "controls": "Tap a glowing card to load it. Tap a hand card to add it (if it follows) or to light the volley. Keys 1–9 and Z X C; Enter hurries the show.",
+    "draft": false,
+    "pitch": "A back garden on Bonfire Night. Chain cards one rank up or down from the fuse to load a rack of shells, then strike a card from your hand and the volley goes up over the rooftops, shell by shell. Three of one colour blooms a Peony, four falling makes a Willow, all four colours a Crossette: twelve named shells to find, five acts to keep the crowd happy, and a programme of the night to take home."
   }
 ];
