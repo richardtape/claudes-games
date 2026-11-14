@@ -1,0 +1,18 @@
+{
+  "title": "Big Eater",
+  "tagline": "You're a white blood cell. Everything else on the slide is lunch.",
+  "number": 9,
+  "created": "2026-11-13",
+  "type": "shooter",
+  "genres": [
+    "Bullet heaven",
+    "Roguelite",
+    "Action",
+    "Daily"
+  ],
+  "color": "#5b34a8",
+  "emoji": "🦠",
+  "controls": "Swim with WASD or the arrow keys, or drag anywhere. Space (or the Burst button) fires the Burst. 1–3 pick a slide, P pauses.",
+  "draft": false,
+  "pitch": "You are a white blood cell on a microscope slide and the germs keep coming. Your immune arsenal fires by itself and stacks into evolving builds; germs you weaken turn amber, and swimming over them swallows them whole. Read the stain to pick your weapons, survive seven and a half minutes, and eat the Superbug."
+}

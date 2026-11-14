@@ -162,5 +162,26 @@ window.GAMES = [
     "controls": "Tap a glowing card to load it. Tap a hand card to add it (if it follows) or to light the volley. Keys 1–9 and Z X C; Enter hurries the show.",
     "draft": false,
     "pitch": "A back garden on Bonfire Night. Chain cards one rank up or down from the fuse to load a rack of shells, then strike a card from your hand and the volley goes up over the rooftops, shell by shell. Three of one colour blooms a Peony, four falling makes a Willow, all four colours a Crossette: twelve named shells to find, five acts to keep the crowd happy, and a programme of the night to take home."
+  },
+  {
+    "slug": "big-eater",
+    "href": "games/big-eater/",
+    "thumb": "games/big-eater/thumb.jpg",
+    "title": "Big Eater",
+    "tagline": "You're a white blood cell. Everything else on the slide is lunch.",
+    "number": 9,
+    "created": "2026-11-13",
+    "type": "shooter",
+    "genres": [
+      "Bullet heaven",
+      "Roguelite",
+      "Action",
+      "Daily"
+    ],
+    "color": "#5b34a8",
+    "emoji": "🦠",
+    "controls": "Swim with WASD or the arrow keys, or drag anywhere. Space (or the Burst button) fires the Burst. 1–3 pick a slide, P pauses.",
+    "draft": false,
+    "pitch": "You are a white blood cell on a microscope slide and the germs keep coming. Your immune arsenal fires by itself and stacks into evolving builds; germs you weaken turn amber, and swimming over them swallows them whole. Read the stain to pick your weapons, survive seven and a half minutes, and eat the Superbug."
   }
 ];

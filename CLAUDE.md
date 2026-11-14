@@ -117,6 +117,7 @@ families at most. The `frontend-design` skill lists the generic looks to avoid.
 | `npm run drive -- slug [--phone]` | One headless page kept open (run in the background); `curl -s 127.0.0.1:8650 -d "<js>"` evaluates in it and screenshots `.tmp/drive.png`. For playing by hand, one decision at a time |
 | `npm run deploy [-- --dry-run]` | Test + check, stage a clean copy in `.site/`, scan for secrets/personal data, push to GitHub Pages |
 | `npm run verify-live` | After the Pages build finishes, load the live front page and every game in headless Chrome |
+| `npm run relays` | Two headless pages join a bare Trystero room: are the public relays up? Run it first when verify-live's online runs fail |
 
 ## Layout
 
@@ -216,6 +217,13 @@ document it here rather than burying it in the game.
   so sprites stay crisp. 112 trains on a 40×40 map drew in about 4 ms a frame (6 ms while panning).
   Track as pieces joining tile edges (a bitmask of 6 per tile) makes junctions, crossings and
   pathfinding over (tile, entry edge) states simple.
+- **Hordes** (Big Eater, `games/big-eater/js/`): the whole run is one plain JSON object stepped at
+  60 Hz (so a save is `JSON.stringify`), with its RNG state a number inside it. A spatial hash rebuilt
+  each step (72-unit cells) serves every "who is near" query; 400 germs, 30 zones and their
+  separation cost 0.3 ms a step. Germs are pre-rendered sprites (one normal, one white for the hit
+  flash) drawn with `globalCompositeOperation = 'multiply'` and one `setTransform` each, so overlaps
+  darken like stain: 400 took 0.7 ms a frame. The engine pushes events (`kill`, `gulp`, `hurt`…) and
+  the UI drains them into effects and sound, so the simulator and the title demo share the engine.
 - **Persistent drawing that accumulates** (trails, paint, embroidery): draw it into an
   offscreen layer incrementally from a history list in the state, so it can be redrawn at
   any size (resize, end-screen poster).
@@ -475,6 +483,21 @@ document it here rather than burying it in the game.
   got-away (`tools/gotaway.mjs`, B46) exists after 84% of lost flip rounds at two seats, 62% at three
   and 50% at four (fewer turns are yours to change, and a fold blocks the line), at 12 ms p95 a round
   at four seats.
+
+- Horde games: check that running away is not free (Big Eater, 2026-11-13). The first bot survived six
+  minutes at level 2 among 400 germs without one hit, because germs that fall behind a moving
+  player trail it in a line and the cap stops new ones arriving. Germs left 760 units behind now
+  come back round at a fresh spawn point, and 55% of arrivals land ahead of a moving cell; only then
+  did hits, deaths and every later number mean anything. Trace one run a minute at a time (level,
+  health, lowest health, hits, germs alive) before trusting win rates.
+- A cautious bot hides short-range weapons: Big Eater's Complement and Fever did 2–4% of the damage
+  in mixed runs because the bot kept its distance. Probe every weapon alone (`tools/sim.mjs --only
+  complement`) and read kills and level at each boss, not only its share in a mixed build.
+- Compare the starting weapon's kill rate with the first minute's spawn rate: at 2.5 germs a second
+  against about one kill a second, some seeds had 164 germs on the slide at 1:00 and level 4. The
+  rate now starts at 1.6 and the starter fires two antibodies.
+- A simulator with a time cap must not print capped runs as deaths (the first tables listed "10:20"
+  under deaths and read as if nobody could win).
 
 ## Big jobs across several sessions
 
@@ -806,8 +829,12 @@ and new files.
   never loads a second copy. A "wiring only" rule for a 4,500-line `main.js` still let it grow by 500
   lines in one phase: split the screens out before the next feature, not after.
 
-- When verify-live's online runs fail, test the relays before the game: a bare Trystero room between two headless
-  pages (import the pinned build on any https page, `joinRoom`, wait for `onPeerJoin`). On 2026-10-20 two public
+- When verify-live's online runs fail, test the relays before the game: `npm run relays` (since 2026-11-03) puts
+  two headless browsers in a bare Trystero room (the pinned build, on the live front page) and lists which relays
+  answer. On 2026-11-03 five relays answered but the bare pages never met, three runs over twenty minutes, the
+  same failure as Dead Drop's and Sushi Raft's live runs, so nothing pointed at the games. The script was
+  written that day, so its passing path hasn't been seen yet: if it passes while a game's live run fails, look
+  at the game. On 2026-10-20 two public
   relays refused every handshake (502, 522) and even the bare room never joined, so the Phase 4 deploy's live duo and
   table failed twice, then passed ten minutes later with no change. Log each page's WebSockets
   (`page.on('websocket')`) to see which relays answer.
@@ -929,6 +956,17 @@ and new files.
   (title, report, shed, book, the programme) with one `label` class: a vernacular gives a whole
   UI kit for free.
 
+- `prepareThumbnail()` must not write to what is saved. Big Eater's first version marked the coach tips
+  as seen in the saved meta, the smoke ran on the same profile right after, and "the first tip did
+  not show" failed. Page-only flags (`ui.noCoach`) for anything the thumbnail needs switched off.
+- A level-up (or any modal) that the engine opens the moment its condition is met can land on top
+  of the orchestrated moment: engulfing a boss paid enough ATP to open the slide picker on the same
+  frame as the gulp. The engine now holds level-ups for 0.4 s after a boss falls (`s.noLevel`).
+- Test the offers after everything is maxed: seventy forced level-ups found the pool running dry at
+  two fallback offers when three were promised.
+- A `cd` inside one Bash call moved the working directory for the calls after it, again (the dev
+  server and `npm run` then ran from the game folder). Absolute paths in every call.
+
 ## Games so far
 
 | # | Slug | Type | Genre | Look | Notes |
@@ -941,3 +979,4 @@ and new files.
 | 6 | first-light | exploration-3d | Hot-air balloon at dawn: steer by height through five veering wind layers; drop markers on three crosses, photograph landmarks, land before the propane runs out; daily flight | Dawn over Cappadocia: low-poly tuff strata (cream, apricot, rose), basalt-capped fairy chimneys, red river, Erciyes on the horizon, striped envelopes; Marcellus + Atkinson Hyperlegible Next | First three.js game (0.170.0, ~20 draw calls); pure engine with node tests; the sunrise turns gold when you climb above the rim and the camera swings to face it; basket photos fill a 12-page album; flight certificate with route map; bot pilot for demo and sim; `npm run drive` for hand play; made for Rich's phone on holiday |
 | 7 | penny-a-mile | network | Pocket railway tycoon (Transport Tycoon on a model railway): drag a line and the track lays itself; coal, wood, grain, goods and passengers; subsidies; Board targets in 1905/1910/1915, final value in 1920; daily shire | A model railway layout in TT's isometric view: flock grass, lichen trees, card-kit houses, a plywood baseboard before a painted sky; Brunswick green enamel and brass, Edmondson-ticket cards; Cabin + Cabin Condensed | Canvas iso renderer (cached flat layer + depth-sorted sprites); pure engine with node tests; route planning over (tile, edge) states that reuses owned track; bot for sim and title demo; the Board meeting as a ledger with a steam-gauge needle and a stamp; company system map at the end; ragtime loop on `seq.js` |
 | 8 | touch-paper | solitaire | Fireworks patience: chain cards one rank up or down from the fuse to load a rack of ten shells, strike a hand card to light the volley; twelve named shells from the chain's shape (colour, rising, falling, zigzag, corner, length); five acts with cumulative crowd targets, announced conditions and a shed of chemistry perks; daily display | Bonfire Night in a back garden: blue-black sky, rooftops and fence in silhouette, a CSS bonfire, wet York-stone patio; a four-colour deck on card stock, backs and every panel printed like a 1960s firework label (sodium yellow, vermilion, ink); Shrikhand + Bricolage Grotesque | Sim-first rules (hand of three face-up box cards, hand plays, ten-tube rack, playable opening); canvas fireworks with streaks, flashes and per-shell kinds that run behind play; named shells bloom with their names lettered in the sky; Pattern Book of long-exposure specimens; the programme poster (every burst of the night + the acts) with PNG save |
+| 9 | big-eater | shooter | Bullet heaven on a microscope slide: swim a white blood cell while its immune arsenal fires by itself; germs that are weak or antibody-tagged turn amber and can be engulfed by swimming over them (double ATP, health, Burst charge); eight weapons with stain bonuses, eight organelles, eight evolutions; 25-second waves announced ahead; bosses at 2:30, 5:00 and 7:30 that can be swallowed whole under a tenth of their health; four cells, five strains, a daily culture, an atlas | Brightfield microscopy: a cool daylight field with eosin wisps and pale red cells, crystal violet (Gram-positive) and safranin pink (Gram-negative) germs drawn with multiply, malachite spores, iodine amber for anything edible, chartreuse toxin, an eyepiece vignette; panels as glass slides with frosted label ends; DynaPuff + Instrument Sans | Pure JSON engine with node tests and a mid-run save; spatial hash; human-ish bot for the sim, the demo and the thumbnail; the boss gulp (slow motion, the cell swells with the boss dissolving inside); the lab report grows the run as a streak plate with PNG save; groove on `seq.js` that thickens with the culture |

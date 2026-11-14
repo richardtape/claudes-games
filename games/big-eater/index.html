@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>Big Eater</title>
+    <meta name="description" content="You're a white blood cell. Everything else on the slide is lunch." />
+    <meta name="theme-color" content="#e4eef0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦠</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DynaPuff:wght@400..700&family=Instrument+Sans:wght@400..700&display=swap" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="slide" aria-label="The microscope slide"></canvas>
+      <div class="eyepiece" aria-hidden="true"></div>
+      <div id="hurt" aria-hidden="true"></div>
+      <div id="stick" aria-hidden="true"><i></i></div>
+      <div id="hud" hidden>
+        <div class="xp"><i id="xpFill"></i></div>
+        <div class="hud-row">
+          <div class="vitals">
+            <div class="hp" role="img" aria-label="Health"><i id="hpFill"></i><span id="hpText"></span></div>
+            <div class="build" id="build"></div>
+          </div>
+          <div class="clock">
+            <b id="time">0:00</b>
+            <div class="wave" id="wave"></div>
+            <div class="boss" id="boss" hidden><span id="bossName"></span><div class="boss-bar"><i id="bossFill"></i></div></div>
+          </div>
+          <div class="tools">
+            <span class="kills"><b id="kills">0</b> down</span>
+            <span class="lvl" id="lvl">Level 1</span>
+            <button class="round" data-action="pause" aria-label="Pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg></button>
+          </div>
+        </div>
+        <button class="burst" id="burst" data-action="burst" aria-label="Burst">
+          <span class="burst-ring" id="burstRing"></span>
+          <span class="burst-word">Burst</span>
+          <kbd>Space</kbd>
+        </button>
+        <div class="coach" id="coach" role="status"></div>
+      </div>
+      <div id="banner" aria-live="polite"></div>
+      <div id="screen"></div>
+      <div id="modal" hidden></div>
+    </div>
+  </body>
+</html>
